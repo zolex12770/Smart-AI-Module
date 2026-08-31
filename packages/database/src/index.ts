@@ -5,3 +5,6 @@ export * from "./repositories/message-repository.js";
 export * from "./repositories/task-repository.js";
 export * from "./repositories/task-node-repository.js";
 export * from "./repositories/task-transition-repository.js";
+export * from "./repositories/document-repository.js";
+export * from "./repositories/document-chunk-repository.js";
+export * from "./repositories/memory-item-repository.js";

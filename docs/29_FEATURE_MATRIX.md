@@ -12,14 +12,14 @@ Authoritative, honest status per capability from the original project brief. Sta
 | 6 | Long-form video generation | NOT STARTED | 9 | MOCKED first; real duration limits documented in [[06_VIDEO_GENERATION_RESEARCH]] |
 | 7 | Video generation from prompts | NOT STARTED | 9 | |
 | 8 | Video generation >20 min | NOT STARTED | 9 | Requires scene-decomposition pipeline, [[07_LONG_RUNNING_JOB_ARCHITECTURE]] — no provider does this in one call |
-| 9 | File/document understanding | NOT STARTED | 6 | |
-| 10 | PDF/document analysis | NOT STARTED | 6 | Part of RAG |
+| 9 | File/document understanding | MVP DONE | 6 | Plain text/.md ingestion + real pgvector retrieval verified (unit + integration test + live curl); PDF/DOCX not yet parsed |
+| 10 | PDF/document analysis | NOT STARTED | 6 | RAG pipeline is real for text; no PDF parser integrated yet |
 | 11 | Web/information retrieval | NOT STARTED | 4 | Web tool not yet built; only filesystem tools exist so far |
 | 12 | Tool calling | MVP DONE | 4 | Real sandboxed native tools + risk-tiered approval gate, verified incl. path-traversal rejection |
 | 13 | MCP integration | MVP DONE | 4 | Real connection to `@modelcontextprotocol/server-filesystem`; 14 tools discovered, disabled-by-default, one enabled and called end-to-end through the real subprocess |
-| 14 | Agent memory | NOT STARTED | 6 | |
-| 15 | Conversation history | MVP DONE | 1 | Persisted to SQLite, multi-turn continuity verified |
-| 16 | User/project context | NOT STARTED | 1/6 | Basic in Phase 1, full in Phase 6 |
+| 14 | Agent memory | MVP DONE | 6 | Real storage/list/delete for user-visible memory items (FR-032) verified via API; does not yet *generate* summaries via LLM reasoning (ADR-018-style honest gap) |
+| 15 | Conversation history | MVP DONE | 1/6 | Persisted to real PostgreSQL as of Phase 6 (was SQLite in Phase 1); multi-turn continuity verified both times |
+| 16 | User/project context | MVP DONE | 1/6 | Basic in Phase 1; Phase 6 adds real document/memory context, still single-operator (no multi-user auth yet) |
 | 17 | Multi-model orchestration | MVP DONE | 2 | Three real adapters (Anthropic/OpenAI/Google) + mock all registered; conditional on env vars |
 | 18 | Model routing | MVP DONE | 2 | Real fallback-on-failure verified against live (invalid-key) API calls to all three providers, not just mocked |
 | 19 | Background jobs | NOT STARTED | 7 | |
@@ -38,7 +38,7 @@ Authoritative, honest status per capability from the original project brief. Sta
 | 32 | Plugin/tool architecture | MVP DONE | 4 | Native + MCP tools share one registry/permission gate, verified with both origins |
 | 33 | Cloud deployment | NOT STARTED | 14 | Docs/IaC only until authorized, ADR-011 |
 | 34 | Observability | NOT STARTED | 12 | |
-| 35 | Automated testing | IN PROGRESS | 1–13 | Vitest introduced in Phase 2 (9 real fixture-based provider adapter tests, `npm test` works); no coverage yet for agent-core/tools/API — continuous, not a single phase |
+| 35 | Automated testing | IN PROGRESS | 1–13 | 17 real tests across 5 files: provider adapters (fixtures), embeddings (real retrieval-property test), RAG (a genuine end-to-end integration test against real in-memory Postgres — no mocks); no coverage yet for agent-core/tools/API routes — continuous, not a single phase |
 | 36 | Security controls | MVP DONE | 4/11 | Path-traversal protection, risk-tiered approval gating, and MCP disabled-by-default all verified for real in Phase 4; full pass (rate limiting, auth, SSRF, etc.) is Phase 11 |
 | 37 | Extensible architecture for future capabilities | IN PROGRESS | 0 | Provider/tool/adapter patterns are the mechanism — see [[24_PROJECT_STRUCTURE]], [[26_DECISIONS]] |
 
@@ -60,3 +60,5 @@ Authoritative, honest status per capability from the original project brief. Sta
 **Phase 5 (coding agent) exit criteria also met (2026-08-31)**, honestly scoped per ADR-022: given a real repo with a deliberately failing test, the agent ran the real test via a sandboxed, allow-listed terminal tool, parsed the real failure output, applied an exact fix to the actual source file on disk, and re-ran the test to confirm a real pass — end to end, no human editing in between. The "fix" is a deterministic literal-value correction driven by a structured failure signal, not free-form LLM reasoning (no real model key is configured yet — see ADR-018's identical reasoning for the planner).
 
 **Phase 2 (real LLM provider adapters) MVP-complete (2026-08-31)**, per the user's explicit choice to keep building without providing a key yet: all three adapters (Anthropic, OpenAI, Google) are built against the raw documented HTTP/SSE API shapes (ADR-023) with 9 passing fixture-based unit tests, and — going further than fixtures alone — each was verified with a real network call to its actual live endpoint using a deliberately invalid key, confirming genuinely correct request construction via a real (not simulated) authentication error in each provider's documented error format. The router's fallback-to-mock (ADR-024) was verified the same way: a real live-API failure, not a mocked one, triggered a real fallback. What's still open: the success path (an actual completion) needs a real key to verify, which the user has deferred — the platform is fully ready for one to be dropped in with zero code changes. First automated test suite in the project (Vitest) also landed this phase.
+
+**Phase 6 (memory & RAG) MVP-complete (2026-08-31)**, per the user's choice to proceed without pausing for Docker/hosted-Postgres setup: the whole platform migrated to real PostgreSQL via PGlite (an actual WASM-compiled Postgres, not a mock or a compatibility shim — ADR-025), with real pgvector cosine-distance search. Document ingestion, chunking, embedding, and retrieval all work end-to-end, verified two independent ways: a real automated integration test (genuine in-memory Postgres, real migrations, real ranked retrieval, zero external services) and a live curl session where changing the query topic correctly flipped which chunk ranked first. Embeddings are a real deterministic feature-hashed vector rather than a learned semantic one (ADR-026) — a local ML model was evaluated and rejected specifically because it carried real, currently-unpatched high-severity vulnerabilities with no clean fix, a bad trade for a "no API key needed" convenience. Memory storage/retrieval/deletion (FR-032) is real; memory *generation* via summarization is not — same honest constraint as the planner and coding agent. PDF parsing is not yet implemented; only plain text/Markdown documents ingest today.

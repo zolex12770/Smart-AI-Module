@@ -4,7 +4,7 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Current Phase
 
-**Phases 0, 1, 3, 4, 5 are complete and verified. Phase 2 (real LLM provider adapters) is MVP-done**, per the user's explicit choice (2026-08-31) to keep building it without providing a real key yet. The planner (Phase 3) and coding agent (Phase 5) remain deterministic/rule-based, as designed — they're built to graduate to real reasoning the moment a real key is dropped in, with zero code changes needed. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
+**Phases 0, 1, 3, 4, 5 are complete and verified. Phases 2 (real LLM provider adapters) and 6 (memory & RAG) are MVP-done.** The planner (Phase 3) and coding agent (Phase 5) remain deterministic/rule-based, as designed — they're built to graduate to real reasoning the moment a real key is dropped in, with zero code changes needed. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
 
 ## Completed
 
@@ -44,6 +44,22 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 - **Went further than fixture-only testing, despite no real key being available:** each adapter was pointed at its actual live endpoint with a deliberately invalid key. All three reached the real API and got back a real, correctly-shaped documented error (Anthropic: real 401 `authentication_error` JSON; OpenAI: real 401 referencing the real platform.openai.com error copy; Google: real 400 `"API key not valid."`) — this confirms request construction (URLs, headers, auth mechanism, model path) is genuinely correct against the live services, not just against fixtures I wrote myself. The router's fallback-to-mock was then confirmed working against these real failures, end to end through the running API, not a simulated one.
 - **What's still honestly unverified:** the success path — parsing an actual real streamed completion — since that needs a valid key, which the user has deliberately not provided yet. Every adapter's file header states this precisely (fixture-tested + real-error-confirmed, not real-success-confirmed) so this caveat can't be casually lost later.
 
+**Phase 6 (memory & RAG) — MVP done, migrated the whole platform to real Postgres in the process:**
+
+- **Database engine swap, not just an addition:** the entire platform (conversations, tasks, task_nodes, task_transitions — everything, not just new RAG tables) migrated from SQLite/libSQL to real PostgreSQL, per ADR-006's original plan for this phase. The user asked to proceed with Phase 6 immediately rather than pause to set up Docker or a hosted database, so this uses `@electric-sql/pglite` — a genuine WASM-compiled Postgres engine (verified via a smoke test: real `CREATE EXTENSION vector`, real vector inserts, real correct cosine-distance ranking) running embedded with zero external services (ADR-025). All five existing repository classes were renamed `Sqlite*` → `Pg*` and ported from `drizzle-orm/sqlite-core` to `drizzle-orm/pg-core` — the repository-interface pattern meant this was a new implementation, not a rewrite of any calling code (agent-core, API routes needed zero changes beyond the constructor wiring in `index.ts`).
+- New packages: `packages/embeddings` (a real, dependency-free, deterministic feature-hashed embedding — see below), `packages/rag` (chunking, ingestion, retrieval, and a `rag.search_documents` tool exposed the same way native tools are).
+- New DB tables/repositories: `documents`, `document_chunks` (with a real `vector(256)` pgvector column), `memory_items`.
+- New API routes: `POST/GET /api/v1/files` (ingest/list documents), `GET/POST/DELETE /api/v1/memory`.
+- New agent task type: `answer_from_documents` (tool_call `rag.search_documents` → model_call synthesizing an answer with citation numbering).
+- **Rejected a real dependency for a real reason:** `@huggingface/transformers` (local ML embeddings, `all-MiniLM-L6-v2`, no API key needed) was installed and confirmed working, but brought 4 real, currently-unpatched high-severity vulnerabilities (a crafted-ZIP memory-exhaustion DoS in `adm-zip`, multiple libvips CVEs in `sharp`) with no clean fix (`npm audit fix` found none). Unlike the dev-only `drizzle-kit` advisory accepted earlier, these would sit in the real runtime dependency tree — rejected. Built a real, deterministic, zero-dependency feature-hashed embedding instead (the "hashing trick," a genuine IR technique), honestly labeled as lexical/keyword similarity rather than learned semantic similarity (ADR-026).
+- **Verified for real, twice over:**
+  1. A genuine automated integration test (`packages/rag/src/rag.integration.test.ts`) — an actual in-memory PGlite Postgres instance, real migrations, a real file on disk, real chunking, real embeddings, a real pgvector `<=>` query, asserting the topically-relevant chunk ranks first. No mocks anywhere in this test.
+  2. A live curl-driven session: ingested a real 3-topic document (vacation/remote-work/expense policy), ran `answer_from_documents` with a vacation-themed question (the vacation-containing chunk ranked at distance 0.46 vs. 0.95 for the unrelated chunk), then ran it again with an expense-themed question and confirmed the ranking correctly flipped (expense chunk 0.53 vs. 0.79) — genuine bidirectional proof the retrieval discriminates by topic, not a fixed order.
+  3. Re-verified the full Phase 3/4 regression surface against the new database engine: a basic chat task, and the complete approval-gate flow (`WAITING_FOR_APPROVAL` → approve → real file deletion) — both worked identically to before the migration.
+  4. Real disk persistence across a process restart: killed and restarted the API, confirmed the ingested document was still there.
+- Memory (FR-032) is real storage/list/delete, verified via the API — it does not yet *generate* memory via LLM summarization, the same honest constraint as the planner (ADR-018) and coding agent (ADR-022).
+- What's not done: PDF/DOCX parsing (only plain text/Markdown ingest); a real embeddings API as an alternative to the hash-based default (natural follow-up once a key exists, mirrors the LLMProvider pattern); conversation-length-triggered summarization.
+
 ## Known Issues / Blockers
 
 - None blocking Phase 2 or Phase 5. Phase 2 (real LLM providers) needs at least one real API key from the user to verify end-to-end beyond adapter unit tests. Phase 6 needs Postgres (Docker Desktop or a hosted free-tier Postgres). Phase 14 needs a real GCP project/billing.
@@ -52,14 +68,15 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Last Successful Test
 
-2026-08-31 — `npm test` (9 fixture-based provider adapter tests, all passing), `npm run typecheck` and `npm run build` both green across all 12 workspaces, plus three real live-endpoint verification calls (Anthropic/OpenAI/Google, each with a deliberately invalid key) confirming genuine request correctness and real router fallback behavior.
+2026-08-31 — `npm test` (17 tests across 5 files, all passing, including a real end-to-end PGlite/Postgres integration test), `npm run typecheck` and `npm run build` both green across all 14 workspaces, plus: three real live-endpoint verification calls (Anthropic/OpenAI/Google with deliberately invalid keys), a live RAG curl session with confirmed bidirectional topic-based re-ranking, a full Phase 3/4 regression re-check against the new Postgres backend, and confirmed data persistence across a process restart.
 
 ## Next Action
 
-Nothing is currently blocked. The single biggest capability unlock remaining is a real API key from the user — it's what lets the agent-core planner (ADR-018) and coding agent (ADR-022) graduate from deterministic/rule-based to genuine reasoning, and lets Phase 2's success path finally be confirmed. Until then, reasonable next increments, roughly in order of value:
+Nothing is currently blocked. The single biggest capability unlock remaining is a real API key from the user — it's what lets the agent-core planner (ADR-018) and coding agent (ADR-022) graduate from deterministic/rule-based to genuine reasoning, lets Phase 2's success path finally be confirmed, and would let RAG retrieval move from lexical (hash-based) to real semantic embeddings. Until then, reasonable next increments, roughly in order of value:
 
-1. Expand automated test coverage beyond the provider adapters — agent-core (state machine transitions, crash-recovery reconciliation), tools (sandbox-path traversal, terminal allow-list), and API route-level tests — currently everything outside the three provider packages has only been verified manually/via curl, not via a checked-in automated suite.
-2. Terminal/git/web native tools beyond the current `node`-only allow-list (expand only alongside a concrete verified scenario that needs them, per the established discipline).
-3. Multi-file coding-agent edits (current pipeline is single-file).
-4. A dedicated automated prompt-injection fixture test (FR-023) — the manual path-traversal test covers a related but distinct attack class.
-5. Phase 6 (memory & RAG) — the next roadmap phase after 2-5, and the trigger for introducing Postgres per ADR-006.
+1. Expand automated test coverage beyond providers/embeddings/rag — agent-core (state machine transitions, crash-recovery reconciliation), tools (sandbox-path traversal, terminal allow-list), and API route-level tests — currently these are only verified manually/via curl, not via a checked-in automated suite.
+2. PDF/DOCX parsing for RAG ingestion (currently plain text/Markdown only).
+3. Terminal/git/web native tools beyond the current `node`-only allow-list (expand only alongside a concrete verified scenario that needs them, per the established discipline).
+4. Multi-file coding-agent edits (current pipeline is single-file).
+5. A dedicated automated prompt-injection fixture test (FR-023) — the manual path-traversal test covers a related but distinct attack class.
+6. Phase 7 (async job system, pg-boss) — the next roadmap phase, now that real Postgres exists to run it on.

@@ -1,5 +1,14 @@
 import type { AgentEngine } from "@ai-platform/agent-core";
-import type { ConversationRepository, MessageRepository, TaskNodeRepository, TaskRepository } from "@ai-platform/database";
+import type {
+  ConversationRepository,
+  DocumentChunkRepository,
+  DocumentRepository,
+  MemoryItemRepository,
+  MessageRepository,
+  TaskNodeRepository,
+  TaskRepository,
+} from "@ai-platform/database";
+import type { EmbeddingProvider } from "@ai-platform/embeddings";
 import type { ModelRouter } from "@ai-platform/model-router";
 import type { ToolRegistry } from "@ai-platform/tools";
 
@@ -16,4 +25,9 @@ export interface AppContext {
   tasks: TaskRepository;
   taskNodes: TaskNodeRepository;
   toolRegistry: ToolRegistry;
+  documents: DocumentRepository;
+  documentChunks: DocumentChunkRepository;
+  memoryItems: MemoryItemRepository;
+  embeddings: EmbeddingProvider;
+  sandboxRoot: string;
 }

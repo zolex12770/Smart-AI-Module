@@ -28,7 +28,7 @@ export interface MessageRepository {
   listByConversation(conversationId: string): Promise<Message[]>;
 }
 
-export class SqliteMessageRepository implements MessageRepository {
+export class PgMessageRepository implements MessageRepository {
   constructor(private readonly db: DrizzleDb) {}
 
   async add(input: AddMessageInput): Promise<Message> {

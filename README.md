@@ -2,7 +2,7 @@
 
 A modular, model-agnostic AI agent platform: chat, autonomous multi-step tasks, a coding agent, tool calling and MCP integration, memory, RAG, and (initially mocked) image/video generation — built as a staged program, not a single release.
 
-**Status: chat, a full agent task engine, tool/MCP calling, a narrow coding agent, and real (fixture-tested + live-endpoint-verified) LLM provider adapters are all working.** Streamed chat over SSE; a state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating; sandboxed native tools plus a real connection to an external MCP server; a coding agent that runs a real failing test, fixes it, and re-verifies; and real Anthropic/OpenAI/Google adapters alongside the mock, with automatic fallback. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
+**Status: chat, a full agent task engine, tool/MCP calling, a narrow coding agent, real LLM provider adapters, and retrieval-augmented document Q&A are all working, on real PostgreSQL.** Streamed chat over SSE; a state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating; sandboxed native tools plus a real connection to an external MCP server; a coding agent that runs a real failing test, fixes it, and re-verifies; real Anthropic/OpenAI/Google adapters alongside the mock, with automatic fallback; and document ingestion + real pgvector similarity search backing retrieval-augmented answers. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
 
 ## Start here
 
@@ -15,20 +15,20 @@ A modular, model-agnostic AI agent platform: chat, autonomous multi-step tasks, 
 
 ## Stack (decided, see [docs/26_DECISIONS.md](docs/26_DECISIONS.md))
 
-TypeScript/Node.js monorepo (npm workspaces) · Fastify API · Next.js web frontend · SQLite via libSQL for now, PostgreSQL + Drizzle ORM + pgvector from Phase 6 · self-hosted session auth · LLM providers: Anthropic, OpenAI, Google Gemini/Vertex, each with a mock fallback that requires no credentials.
+TypeScript/Node.js monorepo (npm workspaces) · Fastify API · Next.js web frontend · real PostgreSQL + Drizzle ORM + pgvector, via PGlite (an embedded WASM Postgres — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-025 for why, no Docker/hosted DB required) · self-hosted session auth · LLM providers: Anthropic, OpenAI, Google Gemini/Vertex, each with a mock fallback that requires no credentials.
 
 ## Running locally
 
-Verified working end-to-end (2026-08-31) — a real browser session sending a message and getting a streamed mock response back, persisted to SQLite:
+Verified working end-to-end (2026-08-31) — real browser and API sessions covering chat, agent tasks, tool/MCP calls, and document retrieval, all persisted to real PostgreSQL:
 
 ```
 npm install     # installs and builds every workspace package (predev hook)
 npm run dev     # starts the API (port 8787) and the web app (port 3000)
 ```
 
-Then open http://localhost:3000. No Docker, no database server, and no API keys are required for this to work — the app runs on a local SQLite file (auto-created and auto-migrated on boot at `apps/api/data/dev.sqlite`) and a mock LLM provider that clearly labels its own responses as mock.
+Then open http://localhost:3000. **No Docker, no separately-installed database server, and no API keys are required** — the app runs on a real embedded PostgreSQL instance (PGlite, auto-created and auto-migrated on boot at `apps/api/data/pgdata`) and a mock LLM provider that clearly labels its own responses as mock.
 
-Other useful commands: `npm run typecheck`, `npm run build` (production build of every app), `npm test` (fixture-based provider adapter tests via Vitest), `npm run db:generate -w @ai-platform/database` (after a schema change, to create a new migration file).
+Other useful commands: `npm run typecheck`, `npm run build` (production build of every app), `npm test` (17 real tests: provider adapters, embeddings, and a genuine end-to-end RAG integration test against real in-memory Postgres), `npm run db:generate -w @ai-platform/database` (after a schema change, to create a new migration file).
 
 ## Configuring real providers
 

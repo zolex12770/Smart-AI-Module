@@ -23,7 +23,7 @@ export interface TaskTransitionRepository {
   listByTask(taskId: string): Promise<TaskTransition[]>;
 }
 
-export class SqliteTaskTransitionRepository implements TaskTransitionRepository {
+export class PgTaskTransitionRepository implements TaskTransitionRepository {
   constructor(private readonly db: DrizzleDb) {}
 
   async append(input: AppendTransitionInput): Promise<TaskTransition> {

@@ -6,6 +6,7 @@ import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerAgentRoutes } from "./routes/v1/agent.js";
 import { registerChatRoute } from "./routes/v1/chat.js";
+import { registerRagRoutes } from "./routes/v1/rag.js";
 
 export async function buildServer(config: AppConfig, ctx: AppContext) {
   const app = Fastify({ logger: true });
@@ -16,6 +17,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext) {
   registerHealthRoute(app);
   registerChatRoute(app, ctx);
   registerAgentRoutes(app, ctx);
+  registerRagRoutes(app, ctx);
 
   return app;
 }

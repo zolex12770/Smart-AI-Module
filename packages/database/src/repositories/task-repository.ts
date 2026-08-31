@@ -23,7 +23,7 @@ export interface TaskRepository {
 
 const TERMINAL_STATES: TaskState[] = ["COMPLETED", "FAILED", "CANCELLED"];
 
-export class SqliteTaskRepository implements TaskRepository {
+export class PgTaskRepository implements TaskRepository {
   constructor(private readonly db: DrizzleDb) {}
 
   async create(input: CreateTaskInput): Promise<Task> {

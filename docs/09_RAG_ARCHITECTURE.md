@@ -4,6 +4,8 @@ This document designs the retrieval-augmented generation (RAG) pipeline for our 
 
 Tags: **PUBLICLY DOCUMENTED** / **INFERRED** / **ASSUMED** / **UNKNOWN** apply to claims about specific commercial products.
 
+**Implementation status (Phase 6, 2026-08-31 — see PROJECT_STATUS.md for full detail):** the pgvector-on-Postgres recommendation below shipped as designed (via PGlite, [[26_DECISIONS]] ADR-025). Parsing/chunking/retrieval work end-to-end for plain text/Markdown, verified by a real automated integration test and a live session showing correct topic-based re-ranking. Not yet built: PDF/DOCX/CSV/code parsing (text/Markdown only so far), reranking, and a real embeddings model — the current embedding is a real deterministic feature-hashed vector (lexical similarity), not a learned semantic one, because the local ML model evaluated for this carried unpatched high-severity vulnerabilities ([[26_DECISIONS]] ADR-026). Treat §2–6 below as the target design for parsing breadth and reranking, not yet the current behavior.
+
 ---
 
 ## 1. Pipeline Overview

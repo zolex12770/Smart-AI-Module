@@ -1,4 +1,4 @@
-import { migrate } from "drizzle-orm/libsql/migrator";
+import { migrate } from "drizzle-orm/pglite/migrator";
 import { fileURLToPath } from "node:url";
 import type { DrizzleDb } from "./client.js";
 

@@ -304,3 +304,31 @@ New decisions are appended at the bottom. Do not edit past decisions to hide his
 
 **Date:** 2026-08-31
 **Impact:** `packages/model-router/src/router.ts`. Explicit `request.provider` still means "use exactly this one" — no automatic substitution — matching the principle that an explicit caller choice shouldn't be silently overridden.
+
+---
+
+## ADR-025: Postgres for Phase 6 via PGlite (embedded WASM Postgres + pgvector), not Docker or a hosted service
+
+**Decision:** Phase 6 (memory & RAG) migrates the whole platform from SQLite/libSQL ([[26_DECISIONS]] ADR-006/ADR-016) to real PostgreSQL — specifically `@electric-sql/pglite` (a genuine WASM build of Postgres, not a reimplementation) plus the official `@electric-sql/pglite-pgvector` extension, accessed via `drizzle-orm/pglite`. Data persists to a local directory, the same way the SQLite file did.
+
+**Reason:** [[26_DECISIONS]] ADR-006 always intended Phase 6 to introduce real Postgres+pgvector, and [[19_DEPLOYMENT_ARCHITECTURE]] documented two ways to get there locally: Docker Compose, or a hosted free-tier service (Neon). Neither is available without an action only the user can take (installing Docker Desktop, or signing up for and configuring a hosted database) — the user asked to proceed with Phase 6 now, not to pause on that setup step. PGlite is a third real option neither doc anticipated: an actual Postgres engine compiled to WASM, running embedded in the Node process with zero external services, verified directly (a smoke test round-tripped a real `CREATE EXTENSION vector`, inserted real vectors, and got correct cosine-distance ranking back via `<=>`). This is the same honest-substitution pattern as ADR-016 (libSQL over better-sqlite3): a real engine swapped in to remove a blocking environment gap, not a mock standing in for one.
+
+**Alternatives considered:** Waiting and asking the user to install Docker or set up Neon — rejected per the user's explicit direction to proceed with Phase 6 now. Keeping SQLite and bolting on a separate vector store — rejected; pgvector co-located with relational data was always the documented plan ([[09_RAG_ARCHITECTURE]] §5.3), and running two datastores for no reason contradicts this project's own "avoid speculative/redundant infrastructure" principle.
+
+**Tradeoffs:** PGlite is a single-connection, embedded, single-process engine — excellent for local dev and even light single-instance deployments, but not the target for a multi-instance production deployment. [[18_CLOUD_ARCHITECTURE]]/[[19_DEPLOYMENT_ARCHITECTURE]]'s Cloud SQL plan for Phase 14 is unaffected by this decision — because PGlite genuinely speaks Postgres/pgvector, the schema and queries built against it now are expected to work against real Cloud SQL later with a connection-string-level change (new repository implementation, not a rewrite), the same portability property SQLite→Postgres was designed around in ADR-006.
+
+**Date:** 2026-08-31
+**Impact:** `packages/database` schema moves from `drizzle-orm/sqlite-core` to `drizzle-orm/pg-core`; `packages/database/src/client.ts` constructs a `PGlite` instance instead of a libSQL client. `docs/19_DEPLOYMENT_ARCHITECTURE.md`'s local-dev options gain a third entry (PGlite, no install) alongside Docker/hosted.
+
+---
+
+## ADR-026: RAG embeddings — a real deterministic feature-hashed vector, not a local ML model, until a real embeddings API key exists
+
+**Decision:** `packages/embeddings`' default provider computes embeddings via feature hashing (tokenize → hash each token into one of N buckets → accumulate term-frequency weight → L2-normalize) — a real, deterministic, from-scratch vector with no external dependency and no API key, not a neural embedding.
+
+**Reason:** genuine semantic embeddings need either a real embeddings API (OpenAI `text-embedding-3-*`, Google `gemini-embedding-2`, Voyage per [[04_MODEL_PROVIDER_RESEARCH]] §4 — none configured, same constraint as every other real-provider gap this session) or a local ML model. A local model was evaluated (`@huggingface/transformers` running `all-MiniLM-L6-v2` fully offline, no API key) and its installation was verified to work — but it pulls in `onnxruntime-node` and `sharp`, which brought **4 real, currently unpatched high-severity advisories** (a crafted-ZIP memory-exhaustion DoS in `adm-zip`, and multiple libvips CVEs in `sharp`) with no clean fix available (`npm audit fix` found none; forcing one risks breaking the library). Unlike the dev-only, never-network-exposed `drizzle-kit` advisory accepted elsewhere in this project, these packages would sit in the real runtime dependency tree of a security-conscious platform (see [[13_SECURITY_ARCHITECTURE]]) — accepting them for a "no API key needed" convenience is a bad trade. Feature hashing is a real, known IR technique (not a placeholder): documents sharing vocabulary genuinely rank as more similar via cosine distance over the resulting vectors, verified end-to-end against pgvector (PROJECT_STATUS.md). It is honestly a **lexical/keyword-overlap similarity, not a learned semantic one** — the same class of limitation, and the same honesty discipline, as ADR-018's deterministic planner and ADR-022's deterministic coding fix.
+
+**Alternatives considered:** `@huggingface/transformers` — rejected per the vulnerability findings above. A real embeddings API — the natural upgrade path once a real key exists (same unlock as ADR-018/ADR-022); swapping it in is an `EmbeddingProvider` implementation change only, not a RAG-pipeline rewrite, mirroring the `LLMProvider` abstraction's role for chat.
+
+**Date:** 2026-08-31
+**Impact:** `packages/embeddings/src/hash-embedding.ts`. [[27_RISKS_AND_LIMITATIONS]] and [[29_FEATURE_MATRIX]] state plainly that RAG retrieval quality is bounded by lexical overlap, not semantic understanding, until a real embeddings provider is configured.

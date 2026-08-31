@@ -17,6 +17,8 @@
     { "path": "../../packages/providers/llm-google" },
     { "path": "../../packages/tools" },
     { "path": "../../packages/mcp" },
+    { "path": "../../packages/embeddings" },
+    { "path": "../../packages/rag" },
     { "path": "../../packages/agent-core" }
   ]
 }

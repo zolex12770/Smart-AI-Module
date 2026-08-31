@@ -5,18 +5,23 @@ import { AgentEngine } from "@ai-platform/agent-core";
 import {
   createDb,
   runMigrations,
-  SqliteConversationRepository,
-  SqliteMessageRepository,
-  SqliteTaskNodeRepository,
-  SqliteTaskRepository,
-  SqliteTaskTransitionRepository,
+  PgConversationRepository,
+  PgMessageRepository,
+  PgTaskNodeRepository,
+  PgTaskRepository,
+  PgTaskTransitionRepository,
+  PgDocumentRepository,
+  PgDocumentChunkRepository,
+  PgMemoryItemRepository,
 } from "@ai-platform/database";
+import { HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { OpenAIProvider } from "@ai-platform/llm-openai";
 import { connectMcpServer } from "@ai-platform/mcp";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
+import { createRagTools } from "@ai-platform/rag";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { loadConfig } from "./config.js";
 import type { AppContext } from "./context.js";
@@ -25,14 +30,15 @@ import { buildServer } from "./server.js";
 async function main() {
   const config = loadConfig();
 
-  const db = createDb(config.DATABASE_FILE);
+  const db = await createDb(config.DATABASE_DIR);
   await runMigrations(db);
 
   const registry = new ModelRegistry();
 
   // Real adapters register only when their API key is present (docs/26_DECISIONS.md
-  // ADR-010); each has been fixture-tested, not live-tested (ADR-023) — the mock
-  // registers unconditionally as both the zero-credential default and a safety net.
+  // ADR-010); each has been fixture-tested and confirmed to reach its live endpoint
+  // correctly, not full-success-tested (ADR-023/024) — the mock registers
+  // unconditionally as both the zero-credential default and a safety net.
   if (config.ANTHROPIC_API_KEY) {
     registry.register(new AnthropicProvider({ apiKey: config.ANTHROPIC_API_KEY }));
   }
@@ -56,10 +62,16 @@ async function main() {
   const sandboxRoot = resolve(config.SANDBOX_ROOT);
   mkdirSync(sandboxRoot, { recursive: true });
   const toolRegistry = new ToolRegistry();
+
+  const documents = new PgDocumentRepository(db);
+  const documentChunks = new PgDocumentChunkRepository(db);
+  const embeddings = new HashEmbeddingProvider();
+
   for (const { definition, handler } of [
     ...createFilesystemTools(sandboxRoot),
     ...createTerminalTools(sandboxRoot),
     ...createCodingTools(sandboxRoot),
+    ...createRagTools({ chunkRepo: documentChunks, embeddings }),
   ]) {
     toolRegistry.register(definition, handler);
   }
@@ -86,9 +98,9 @@ async function main() {
     console.warn("MCP reference server connection failed (continuing without it):", err);
   }
 
-  const tasks = new SqliteTaskRepository(db);
-  const taskNodes = new SqliteTaskNodeRepository(db);
-  const taskTransitions = new SqliteTaskTransitionRepository(db);
+  const tasks = new PgTaskRepository(db);
+  const taskNodes = new PgTaskNodeRepository(db);
+  const taskTransitions = new PgTaskTransitionRepository(db);
   const modelRouter = new ModelRouter(registry);
 
   const engine = new AgentEngine({
@@ -105,13 +117,18 @@ async function main() {
 
   const ctx: AppContext = {
     router: modelRouter,
-    conversations: new SqliteConversationRepository(db),
-    messages: new SqliteMessageRepository(db),
+    conversations: new PgConversationRepository(db),
+    messages: new PgMessageRepository(db),
     corsOrigin: config.CORS_ORIGIN,
     engine,
     tasks,
     taskNodes,
     toolRegistry,
+    documents,
+    documentChunks,
+    memoryItems: new PgMemoryItemRepository(db),
+    embeddings,
+    sandboxRoot,
   };
 
   const app = await buildServer(config, ctx);

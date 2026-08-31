@@ -1,16 +1,16 @@
 import { defineConfig } from "drizzle-kit";
 
 /**
- * SQLite for the Phase 1 milestone only — docs/26_DECISIONS.md ADR-006.
- * Swaps to a Postgres config (separate dialect, separate migrations dir) in Phase 6
- * per docs/14_DATABASE_ARCHITECTURE.md, without changing the repository interfaces
- * application code depends on.
+ * Real PostgreSQL via PGlite (docs/26_DECISIONS.md ADR-025) — dialect is genuinely
+ * "postgresql", not a SQLite compatibility mode. `url` here only matters for drizzle-kit
+ * commands that need a live connection (e.g. `push`); `generate` (what we use) only
+ * needs the schema file.
  */
 export default defineConfig({
-  dialect: "sqlite",
+  dialect: "postgresql",
   schema: "./src/schema/index.ts",
   out: "./migrations",
   dbCredentials: {
-    url: process.env.DATABASE_FILE ?? "./data/dev.sqlite",
+    url: process.env.DATABASE_URL ?? "postgres://postgres:postgres@localhost:5432/postgres",
   },
 });

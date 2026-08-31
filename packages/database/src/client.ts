@@ -1,25 +1,20 @@
-import { createClient } from "@libsql/client";
-import { drizzle, type LibSQLDatabase } from "drizzle-orm/libsql";
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { PGlite } from "@electric-sql/pglite";
+import { vector } from "@electric-sql/pglite-pgvector";
+import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 import * as schema from "./schema/index.js";
 
-export type DrizzleDb = LibSQLDatabase<typeof schema>;
+export type DrizzleDb = PgliteDatabase<typeof schema>;
 
 /**
- * SQLite via libSQL (docs/26_DECISIONS.md ADR-006) — chosen over better-sqlite3 because
- * it ships prebuilt native bindings for Windows/Node 24 with no local C++ toolchain
- * required, which better-sqlite3 currently lacks on this platform (see PROJECT_STATUS.md).
+ * Real PostgreSQL via PGlite (docs/26_DECISIONS.md ADR-025) — an actual WASM-compiled
+ * Postgres engine, not SQLite and not a mock. `dataDir` persists to a local directory the
+ * same way the Phase 1-5 SQLite file did; `:memory:` (used by tests) keeps it in-memory.
  */
-export function createDb(fileOrUrl = process.env.DATABASE_FILE ?? "./data/dev.sqlite"): DrizzleDb {
-  const url = fileOrUrl === ":memory:" ? ":memory:" : toFileUrl(fileOrUrl);
-  if (fileOrUrl !== ":memory:") {
-    mkdirSync(dirname(fileOrUrl), { recursive: true });
-  }
-  const client = createClient({ url });
-  return drizzle(client, { schema });
-}
-
-function toFileUrl(path: string): string {
-  return path.startsWith("file:") ? path : `file:${resolve(path)}`;
+export async function createDb(dataDir = process.env.DATABASE_DIR ?? "./data/pgdata"): Promise<DrizzleDb> {
+  const pglite = await PGlite.create({
+    dataDir: dataDir === ":memory:" ? undefined : dataDir,
+    extensions: { vector },
+  });
+  await pglite.exec("CREATE EXTENSION IF NOT EXISTS vector;");
+  return drizzle(pglite, { schema });
 }

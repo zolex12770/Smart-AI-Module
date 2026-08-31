@@ -23,7 +23,7 @@ export interface TaskNodeRepository {
 
 const IN_FLIGHT_STATUSES: NodeStatus[] = ["waiting_model", "waiting_tool", "verifying", "retrying"];
 
-export class SqliteTaskNodeRepository implements TaskNodeRepository {
+export class PgTaskNodeRepository implements TaskNodeRepository {
   constructor(private readonly db: DrizzleDb) {}
 
   async create(rootTaskId: string, input: CreateTaskNodeInput): Promise<TaskNode> {

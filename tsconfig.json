@@ -10,6 +10,8 @@
     { "path": "packages/database" },
     { "path": "packages/tools" },
     { "path": "packages/mcp" },
+    { "path": "packages/embeddings" },
+    { "path": "packages/rag" },
     { "path": "packages/agent-core" }
   ]
 }

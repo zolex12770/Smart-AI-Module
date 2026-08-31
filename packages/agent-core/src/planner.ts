@@ -54,6 +54,8 @@ export function planTask(
       return planDeleteSandboxFile(input, lookupTool);
     case "fix_failing_test":
       return planFixFailingTest(input, lookupTool);
+    case "answer_from_documents":
+      return planAnswerFromDocuments(input, lookupTool);
   }
 }
 
@@ -139,6 +141,52 @@ function planDeleteSandboxFile(input: Record<string, unknown>, lookupTool: ToolL
       verificationSpec: { requiredKeys: ["path"] },
       approvalRequired: approvalRequiredFor("fs.delete_file", lookupTool),
       retryPolicy: retryPolicyForTool("fs.delete_file", lookupTool),
+    },
+  ];
+}
+
+/**
+ * Real retrieval-augmented Q&A (docs/09_RAG_ARCHITECTURE.md): search real ingested
+ * documents via pgvector, then have the model answer using the retrieved context. The
+ * model is the mock provider unless a real key is configured (ADR-010) — the retrieval
+ * half is genuinely real regardless (real embeddings, real pgvector search).
+ */
+function planAnswerFromDocuments(input: Record<string, unknown>, lookupTool: ToolLookup): CreateTaskNodeInput[] {
+  const question = String(input.question ?? "");
+  const searchNodeId = uuid();
+
+  return [
+    {
+      id: searchNodeId,
+      type: "atomic",
+      kind: "tool_call",
+      dependsOn: [],
+      input: { query: question, topK: 3 },
+      toolId: "rag.search_documents",
+      timeoutMs: 15_000,
+      verificationMethod: "schema_check",
+      verificationSpec: { requiredKeys: ["context"] },
+      approvalRequired: approvalRequiredFor("rag.search_documents", lookupTool),
+      retryPolicy: retryPolicyForTool("rag.search_documents", lookupTool),
+    },
+    {
+      id: uuid(),
+      type: "atomic",
+      kind: "model_call",
+      dependsOn: [searchNodeId],
+      input: {
+        messages: [
+          {
+            role: "user",
+            content: `Answer the question using only the context below, and cite which numbered source you used.\n\nContext:\n{{${searchNodeId}.output.context}}\n\nQuestion: ${question}`,
+          },
+        ],
+      },
+      timeoutMs: 30_000,
+      verificationMethod: "schema_check",
+      verificationSpec: { requiredKeys: ["content"] },
+      approvalRequired: false,
+      retryPolicy: { maxAttempts: 2, backoff: "fixed", classifyFailureAs: null },
     },
   ];
 }

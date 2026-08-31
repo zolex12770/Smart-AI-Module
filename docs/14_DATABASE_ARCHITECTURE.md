@@ -2,6 +2,8 @@
 
 Builds on [[26_DECISIONS]] ADR-005/ADR-006: PostgreSQL + Drizzle ORM + pgvector as the target, SQLite (same Drizzle schema, a subset of features) for the Phase 1 milestone only.
 
+**Update (Phase 6, 2026-08-31):** the Postgres migration happened as planned, but via PGlite — a real WASM-compiled Postgres engine running embedded in the Node process — rather than Docker or a hosted service, since neither was available without an action only the user could take and the user asked to proceed with Phase 6 immediately. See [[26_DECISIONS]] ADR-025 for the full reasoning; the repository-interface pattern below made this a new implementation, not a rewrite, exactly as designed.
+
 ## Repository pattern — why the schema isn't just "the Postgres schema"
 
 Every table below is accessed through a repository interface defined in `packages/database/src/repositories/*.ts` (e.g. `ConversationRepository`, `JobRepository`). Phase 1 registers a SQLite implementation; Phase 6 onward registers the Postgres implementation. Application code (agent-core, API routes) depends only on the interface, never on `drizzle-orm/pg-core` or `drizzle-orm/sqlite-core` directly — this is what makes ADR-006's "SQLite now, Postgres later" swap a config change instead of a rewrite, and is enforced by the same import-boundary convention as ADR's provider isolation (NFR-011 in [[01_REQUIREMENTS]]).

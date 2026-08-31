@@ -19,7 +19,7 @@ export interface ConversationRepository {
   get(id: string): Promise<Conversation | undefined>;
 }
 
-export class SqliteConversationRepository implements ConversationRepository {
+export class PgConversationRepository implements ConversationRepository {
   constructor(private readonly db: DrizzleDb) {}
 
   async create(title?: string): Promise<Conversation> {

@@ -8,7 +8,9 @@ import { z } from "zod";
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(8787),
-  DATABASE_FILE: z.string().default("./data/dev.sqlite"),
+  // Real PostgreSQL via PGlite (docs/26_DECISIONS.md ADR-025) — a directory, not a
+  // single file, since Postgres persists multiple files there.
+  DATABASE_DIR: z.string().default("./data/pgdata"),
   SANDBOX_ROOT: z.string().default("./data/sandbox"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   ANTHROPIC_API_KEY: z.string().optional(),

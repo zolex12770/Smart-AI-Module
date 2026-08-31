@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@ai-platform/agent-core": "*",
-    "@ai-platform/mcp": "*",
     "@ai-platform/database": "*",
+    "@ai-platform/embeddings": "*",
+    "@ai-platform/mcp": "*",
+    "@ai-platform/rag": "*",
     "@ai-platform/llm-anthropic": "*",
     "@ai-platform/llm-google": "*",
     "@ai-platform/llm-mock": "*",
