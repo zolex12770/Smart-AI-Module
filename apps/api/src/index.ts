@@ -14,7 +14,7 @@ import {
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { connectMcpServer } from "@ai-platform/mcp";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
-import { createFilesystemTools, ToolRegistry } from "@ai-platform/tools";
+import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { loadConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { buildServer } from "./server.js";
@@ -33,7 +33,11 @@ async function main() {
   const sandboxRoot = resolve(config.SANDBOX_ROOT);
   mkdirSync(sandboxRoot, { recursive: true });
   const toolRegistry = new ToolRegistry();
-  for (const { definition, handler } of createFilesystemTools(sandboxRoot)) {
+  for (const { definition, handler } of [
+    ...createFilesystemTools(sandboxRoot),
+    ...createTerminalTools(sandboxRoot),
+    ...createCodingTools(sandboxRoot),
+  ]) {
     toolRegistry.register(definition, handler);
   }
 

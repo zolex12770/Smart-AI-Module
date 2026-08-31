@@ -52,6 +52,8 @@ export function planTask(
       return planReadAndSummarize(input, lookupTool, "mcp.reference-filesystem.read_text_file");
     case "delete_sandbox_file":
       return planDeleteSandboxFile(input, lookupTool);
+    case "fix_failing_test":
+      return planFixFailingTest(input, lookupTool);
   }
 }
 
@@ -137,6 +139,81 @@ function planDeleteSandboxFile(input: Record<string, unknown>, lookupTool: ToolL
       verificationSpec: { requiredKeys: ["path"] },
       approvalRequired: approvalRequiredFor("fs.delete_file", lookupTool),
       retryPolicy: retryPolicyForTool("fs.delete_file", lookupTool),
+    },
+  ];
+}
+
+/**
+ * Real, narrow, deterministic "coding agent" pipeline — see the honest scope note in
+ * packages/tools/src/native/coding.ts. Given a directory and a test file that prints a
+ * `FIX_NEEDED path=... find=... replace=...` line on failure, this: runs the test,
+ * parses the failure directive, applies the exact fix, and re-runs the test to confirm
+ * it now passes — four real steps, no simulated ones.
+ */
+function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLookup): CreateTaskNodeInput[] {
+  const testDir = String(input.testDir ?? ".");
+  const testFile = String(input.testFile ?? "");
+
+  const runTest1 = uuid();
+  const parseFix = uuid();
+  const applyFix = uuid();
+
+  return [
+    {
+      id: runTest1,
+      type: "atomic",
+      kind: "tool_call",
+      dependsOn: [],
+      input: { command: "node", args: [testFile], cwd: testDir },
+      toolId: "terminal.run_command",
+      timeoutMs: 30_000,
+      verificationMethod: "schema_check",
+      verificationSpec: { requiredKeys: ["exitCode", "stdout"] },
+      approvalRequired: approvalRequiredFor("terminal.run_command", lookupTool),
+      retryPolicy: retryPolicyForTool("terminal.run_command", lookupTool),
+    },
+    {
+      id: parseFix,
+      type: "atomic",
+      kind: "tool_call",
+      dependsOn: [runTest1],
+      input: { text: `{{${runTest1}.output.stdout}}` },
+      toolId: "code.parse_fix_directive",
+      timeoutMs: 10_000,
+      verificationMethod: "schema_check",
+      verificationSpec: { requiredKeys: ["path", "find", "replace"] },
+      approvalRequired: approvalRequiredFor("code.parse_fix_directive", lookupTool),
+      retryPolicy: retryPolicyForTool("code.parse_fix_directive", lookupTool),
+    },
+    {
+      id: applyFix,
+      type: "atomic",
+      kind: "tool_call",
+      dependsOn: [parseFix],
+      input: {
+        path: `{{${parseFix}.output.path}}`,
+        find: `{{${parseFix}.output.find}}`,
+        replace: `{{${parseFix}.output.replace}}`,
+      },
+      toolId: "code.apply_literal_fix",
+      timeoutMs: 10_000,
+      verificationMethod: "schema_check",
+      verificationSpec: { requiredKeys: ["path"] },
+      approvalRequired: approvalRequiredFor("code.apply_literal_fix", lookupTool),
+      retryPolicy: retryPolicyForTool("code.apply_literal_fix", lookupTool),
+    },
+    {
+      id: uuid(),
+      type: "atomic",
+      kind: "tool_call",
+      dependsOn: [applyFix],
+      input: { command: "node", args: [testFile], cwd: testDir },
+      toolId: "terminal.run_command",
+      timeoutMs: 30_000,
+      verificationMethod: "deterministic_compare",
+      verificationSpec: { field: "exitCode", equals: 0 },
+      approvalRequired: approvalRequiredFor("terminal.run_command", lookupTool),
+      retryPolicy: retryPolicyForTool("terminal.run_command", lookupTool),
     },
   ];
 }

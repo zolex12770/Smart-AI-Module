@@ -140,6 +140,7 @@ export const taskTypeSchema = z.enum([
   "read_and_summarize",
   "delete_sandbox_file",
   "mcp_read_and_summarize",
+  "fix_failing_test",
 ]);
 export type TaskType = z.infer<typeof taskTypeSchema>;
 

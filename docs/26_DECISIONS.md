@@ -259,3 +259,18 @@ New decisions are appended at the bottom. Do not edit past decisions to hide his
 
 **Date:** 2026-08-31
 **Impact:** Tracked in [[27_RISKS_AND_LIMITATIONS]] as a standing item — required before connecting to any MCP server whose trustworthiness isn't fully controlled (the reference filesystem server, running against our own sandbox directory, was chosen specifically because this gap doesn't create real exposure yet).
+
+---
+
+## ADR-022: Coding agent (Phase 5) — deterministic literal-fix pipeline, not LLM-driven bug fixing; `node`-only terminal allow-list
+
+**Decision:** The first coding-agent capability (`fix_failing_test` task type, `terminal.run_command`, `code.parse_fix_directive`, `code.apply_literal_fix`) runs a real sandboxed test command, parses a *structured, self-describing* failure signal the test itself prints (`FIX_NEEDED path=... find=... replace=...`), applies the exact named literal replacement, and re-runs the test to confirm it passes. The terminal tool's command allow-list contains only `node`.
+
+**Reason — deterministic fix, not reasoning:** the same constraint as ADR-018's planner applies here even more directly: genuinely reading arbitrary test/build output and writing a correct code fix requires real reasoning from an LLM, and no real provider key is configured ([[26_DECISIONS]] ADR-010). Building a "coding agent" that feeds arbitrary failure text to the mock provider and calls whatever canned text comes back "a fix" would be exactly the kind of faked functionality this project's own rules (see `docs/00_PROJECT_VISION.md` principle 1) forbid. Instead, this proves the full pipeline mechanics — sandboxed command execution, real failure observation, a real file mutation, real re-verification, full audit trail via the existing transition log — for a genuine, narrow, honestly-scoped automated-fix class. Verified for real: a deliberately-wrong constant (`ANSWER = 41` vs. an assertion expecting `42`) was actually corrected on disk and the re-run test genuinely passed; running the same task again after the fix correctly fails with "nothing to fix" rather than fabricating a result.
+
+**Reason — `node`-only allow-list:** [[13_SECURITY_ARCHITECTURE]]'s command allow/deny-listing requirement means every allowed command must be a deliberate, reviewed decision, not a default-permissive list. `node` is the only command the one verified scenario needs. Adding `npm`/`git` now, unexercised by any real verified scenario, would be untested attack surface for no proven benefit — expand the allow-list when a concrete scenario needs it, the same discipline already applied to native tools.
+
+**Alternatives considered:** Sending real test output to the mock LLM and using its response as "the fix" — rejected outright as fake functionality, not a reasonable simplification. Using `child_process.exec` with a shell string instead of `spawn` with an argument array — rejected: shell string construction is exactly the shell-injection pattern [[13_SECURITY_ARCHITECTURE]] warns against, regardless of how narrow the allow-list is.
+
+**Date:** 2026-08-31
+**Impact:** `packages/tools/src/native/{terminal,coding}.ts`; [[29_FEATURE_MATRIX]] marks "Coding Agent" MVP DONE for this narrow class, not DONE — general LLM-driven code fixing is Phase 2-dependent future work, same as planning (ADR-018).

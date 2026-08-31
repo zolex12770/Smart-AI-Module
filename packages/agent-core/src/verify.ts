@@ -28,12 +28,18 @@ export function verifyNodeOutput(node: TaskNode, output: Record<string, unknown>
 
     case "deterministic_compare": {
       const spec = node.verificationSpec ?? {};
+      const field = (spec.field as string | undefined) ?? "content";
       if (typeof spec.expectedSubstring === "string") {
-        const field = (spec.field as string | undefined) ?? "content";
         const actual = String(output[field] ?? "");
         return actual.includes(spec.expectedSubstring)
           ? { pass: true }
           : { pass: false, reason: `Output field "${field}" did not contain expected substring.` };
+      }
+      if ("equals" in spec) {
+        const actual = output[field];
+        return actual === spec.equals
+          ? { pass: true }
+          : { pass: false, reason: `Output field "${field}" was ${JSON.stringify(actual)}, expected ${JSON.stringify(spec.equals)}.` };
       }
       return { pass: true };
     }

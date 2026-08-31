@@ -4,7 +4,7 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Current Phase
 
-**Phases 0, 1, 3, and 4 are complete and verified.** Phase 2 (real LLM provider adapters) is next, or Phase 5 (coding agent, which builds directly on Phase 3/4's agent-core and tools). See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
+**Phases 0, 1, 3, 4, and 5 are complete and verified.** Phase 2 (real LLM provider adapters) is the natural next step — both the agent-core planner and the coding agent are currently deterministic/rule-based specifically because no real model key exists yet; Phase 2 is what lets them graduate to genuine reasoning. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
 
 ## Completed
 
@@ -28,6 +28,13 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 - Deliberate, documented scope decisions (ADR-018, ADR-019, ADR-021 in [docs/26_DECISIONS.md](docs/26_DECISIONS.md)): planner is rule-based/deterministic, not LLM-driven (mock provider can't reason — building a "real" planner against it would be theater); only `atomic` task-graph nodes are executed (`sequential_group`/`parallel_group`/`conditional`/`loop`/`sub_agent` are reserved in the schema, not yet wired into the dispatcher); the plan-invalidating replan loop isn't wired up (deterministic replanning would just reproduce the same failing graph); MCP tool trust is a name-based heuristic (disabled-by-default is the real safety net, not the heuristic); the spawned MCP subprocess has no OS-level sandboxing yet (tracked as an open risk in docs/27, acceptable for now since it's our own reference server against our own sandbox directory).
 - Full `npm run typecheck` and `npm run build` green across all 9 workspaces (added `agent-core`, `tools`, `mcp` to the original 6) after this work.
 
+**Phase 5 (coding agent) — built on Phase 3/4's agent-core and tools, verified for real:**
+
+- New native tools: `terminal.run_command` (sandboxed, `node`-only allow-list, `child_process.spawn` with `shell: false` and an argument array — no shell-injection surface regardless of allow-list size), `code.parse_fix_directive`, `code.apply_literal_fix`.
+- New task type `fix_failing_test`: run test → parse failure → apply fix → re-run test, four real tool-call nodes chained via the existing template-resolution mechanism.
+- **Honest scope decision (ADR-022), same reasoning as ADR-018's planner:** the mock provider can't actually reason about arbitrary test failures and write a correct fix — that needs a real LLM (Phase 2). Rather than fake that with canned mock-provider text, the "fix" is a deterministic literal-value correction driven by a structured signal the test itself prints (`FIX_NEEDED path=... find=... replace=...`). This is a real, narrow, honestly-scoped automated-fix capability, not a simulation of a smarter one.
+- **Verified against a running server:** set up a real two-file Node project (`math.js` with a wrong constant, `math.test.js` asserting the right one) in the sandbox; confirmed the test genuinely fails standalone; ran the `fix_failing_test` task and confirmed all four steps completed for real — the actual file on disk changed from `ANSWER = 41` to `ANSWER = 42`, and the final re-run genuinely reported `exitCode: 0` / `"PASS"`. Re-ran the same task afterward (test now passing) and confirmed it correctly fails with "nothing to fix" rather than fabricating a result. Directly verified the terminal tool's command allow-list rejects a non-`node` command (`bash -c "echo pwned"` → rejected).
+
 ## Known Issues / Blockers
 
 - None blocking Phase 2 or Phase 5. Phase 2 (real LLM providers) needs at least one real API key from the user to verify end-to-end beyond adapter unit tests. Phase 6 needs Postgres (Docker Desktop or a hosted free-tier Postgres). Phase 14 needs a real GCP project/billing.
@@ -36,13 +43,10 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Last Successful Test
 
-2026-08-31 — full manual, curl-driven, and two real-crash-simulation verification of Phase 3/4 (agent core, tools, MCP), described above. `npm run build` and `npm run typecheck` both green across all 9 workspaces.
+2026-08-31 — full manual, curl-driven verification of Phase 5 (coding agent): a real failing test was genuinely fixed on disk and re-verified passing, plus the honest "nothing to fix" and command-allow-list-rejection paths. `npm run build` and `npm run typecheck` both green across all 9 workspaces.
 
 ## Next Action
 
-Two independent, unblocked options — pick based on what's most valuable next, they don't depend on each other:
+**Phase 2 — real LLM provider adapters** (`llm-anthropic`, `llm-openai`, `llm-google` per docs/04, docs/28) is the clear next step: it's what lets both the agent-core planner (ADR-018) and the coding agent (ADR-022) stop being deterministic/rule-based and start doing genuine reasoning — the single biggest capability unlock available right now. Needs a real API key from the user for end-to-end verification; adapter code + fixture-based unit tests can start without one.
 
-1. **Phase 2 — real LLM provider adapters** (`llm-anthropic`, `llm-openai`, `llm-google` per docs/04, docs/28). Needs a real API key from the user for end-to-end verification; adapter code + fixture-based unit tests can start without one.
-2. **Phase 5 — coding agent**, building directly on the now-complete agent-core + tools: add terminal/git tools (sandboxed, with the same permission-gating pattern already proven for filesystem tools), a `test_suite` verification method (currently throws — this is where it gets implemented), and a coding-specific planner or task type.
-
-Either way: commit the completed Phase 3/4 work as its own checkpoint first (not yet committed as of this writing).
+Also still open, lower priority: terminal/git/web native tools beyond the `node`-only allow-list, multi-file coding-agent edits, a dedicated automated prompt-injection fixture test (FR-023).
