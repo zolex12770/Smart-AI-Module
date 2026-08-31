@@ -8,6 +8,7 @@ import { registerAgentRoutes } from "./routes/v1/agent.js";
 import { registerChatRoute } from "./routes/v1/chat.js";
 import { registerImageRoutes } from "./routes/v1/images.js";
 import { registerRagRoutes } from "./routes/v1/rag.js";
+import { registerVideoRoutes } from "./routes/v1/videos.js";
 
 export async function buildServer(config: AppConfig, ctx: AppContext) {
   const app = Fastify({ logger: true });
@@ -20,6 +21,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext) {
   registerAgentRoutes(app, ctx);
   registerRagRoutes(app, ctx);
   registerImageRoutes(app, ctx);
+  registerVideoRoutes(app, ctx);
 
   return app;
 }

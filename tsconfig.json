@@ -15,6 +15,7 @@
     { "path": "packages/jobs" },
     { "path": "packages/media" },
     { "path": "packages/providers/image-mock" },
+    { "path": "packages/providers/video-mock" },
     { "path": "packages/agent-core" }
   ]
 }

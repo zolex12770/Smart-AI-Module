@@ -1,5 +1,5 @@
 import { PgBoss, fromPglite } from "pg-boss";
-import type { ConstructorOptions, JobWithMetadata, QueuePolicy } from "pg-boss";
+import type { ConstructorOptions, JobWithMetadata, QueuePolicy, WorkOptions } from "pg-boss";
 
 export { fromPglite };
 
@@ -82,13 +82,24 @@ export class JobQueue {
   }
 
   /** Handler runs once per job; a thrown error triggers pg-boss's retry/backoff (per the
-   * queue's retryPolicy) and eventually dead-letters the job once retries are exhausted. */
-  async registerWorker<T>(queueName: string, handler: (payload: T, jobId: string) => Promise<void>): Promise<void> {
-    await this.boss.work<T>(queueName, async (jobs) => {
+   * queue's retryPolicy) and eventually dead-letters the job once retries are exhausted.
+   * `options.localConcurrency` bounds how many jobs this worker processes at once (docs/07
+   * §1.6: "not all 150 [video] scenes fire at once") — omit it for pg-boss's own default. */
+  async registerWorker<T>(
+    queueName: string,
+    handler: (payload: T, jobId: string) => Promise<void>,
+    options?: WorkOptions
+  ): Promise<void> {
+    const run = async (jobs: { data: T; id: string }[]) => {
       for (const job of jobs) {
-        await handler(job.data as T, job.id);
+        await handler(job.data, job.id);
       }
-    });
+    };
+    if (options) {
+      await this.boss.work<T>(queueName, options, run);
+    } else {
+      await this.boss.work<T>(queueName, run);
+    }
   }
 
   async getJob<T = unknown>(queueName: string, jobId: string): Promise<JobWithMetadata<T> | null> {

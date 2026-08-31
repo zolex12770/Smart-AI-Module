@@ -167,3 +167,56 @@ export const imageGenerations = pgTable("image_generations", {
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 });
+
+/**
+ * Long-form video pipeline (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md Part 2), narrowed for
+ * the Phase 9 MVP (docs/26_DECISIONS.md ADR-030): this is a deliberately smaller data model
+ * than docs/07 §2.4's full design (`SceneManifest`/`Timeline`/`AudioTrack`/`SubtitleTrack`/
+ * `RenderJob`). There is no real LLM key to write a script (stage 1) or reference
+ * images/seeds to enforce cross-scene consistency (stage 4), and no `AudioProvider`/
+ * `MusicProvider`/subtitle stage exists yet — so this table folds "timeline" and "render"
+ * concerns directly onto the project row instead of the full separate-table model, and
+ * `video_scenes` carries only what stage 2/3/resumability actually need today. Revisit
+ * this narrowing once a real LLM key and audio/subtitle providers exist.
+ */
+export const videoProjects = pgTable("video_projects", {
+  id: text("id").primaryKey(),
+  prompt: text("prompt").notNull(),
+  targetDurationSeconds: integer("target_duration_seconds").notNull(),
+  sceneClipSeconds: integer("scene_clip_seconds").notNull(),
+  sceneCount: integer("scene_count").notNull(),
+  status: text("status", {
+    enum: ["generating_scenes", "assembling", "succeeded", "partially_succeeded", "failed"],
+  }).notNull(),
+  renderStatus: text("render_status", {
+    enum: ["pending", "processing", "succeeded", "skipped_no_ffmpeg", "failed"],
+  }),
+  renderAssetId: text("render_asset_id"),
+  renderError: text("render_error"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+});
+
+/**
+ * One row per scene (docs/07 §2.2 stages 2/3, §2.3 resumability) — `status` transitions are
+ * checked by the orchestrator *before* (re-)enqueuing a scene's generation job so an
+ * already-`succeeded` scene is never regenerated as a side effect of re-running the project
+ * (docs/07 §2.3 point 3), which is the literal mechanism behind "only scene 37 regenerates".
+ */
+export const videoScenes = pgTable("video_scenes", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => videoProjects.id),
+  sceneIndex: integer("scene_index").notNull(),
+  shotDescription: text("shot_description").notNull(),
+  durationSeconds: integer("duration_seconds").notNull(),
+  status: text("status", { enum: ["pending", "processing", "succeeded", "failed"] }).notNull(),
+  jobId: text("job_id"),
+  assetId: text("asset_id"),
+  retryCount: integer("retry_count").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+});

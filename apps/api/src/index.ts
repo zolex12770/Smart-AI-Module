@@ -15,6 +15,8 @@ import {
   PgMemoryItemRepository,
   PgAssetRepository,
   PgImageGenerationRepository,
+  PgVideoProjectRepository,
+  PgVideoSceneRepository,
 } from "@ai-platform/database";
 import { HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MockImageProvider } from "@ai-platform/image-mock";
@@ -24,10 +26,11 @@ import { GoogleProvider } from "@ai-platform/llm-google";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { OpenAIProvider } from "@ai-platform/llm-openai";
 import { connectMcpServer } from "@ai-platform/mcp";
-import { LocalAssetStore, processImageGeneration } from "@ai-platform/media";
+import { LocalAssetStore, processImageGeneration, processVideoRender, processVideoScene } from "@ai-platform/media";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createRagTools, processDocumentIngestion } from "@ai-platform/rag";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
+import { MockVideoProvider } from "@ai-platform/video-mock";
 import { loadConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { buildServer } from "./server.js";
@@ -111,6 +114,32 @@ async function main() {
     await processImageGeneration({ generationRepo: imageGenerations, assetStore, provider: imageProvider }, generationId);
   });
 
+  // Long-form video pipeline (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md Part 2,
+  // docs/26_DECISIONS.md ADR-030) — mock-only per the same ADR-009 policy as images.
+  // `video.generate_scene` runs with bounded concurrency (docs/07 §1.6: "not all 150
+  // scenes fire at once"); `video.render` shells out to a system ffmpeg if one is present.
+  const videoProjects = new PgVideoProjectRepository(db);
+  const videoScenes = new PgVideoSceneRepository(db);
+  const videoProvider = new MockVideoProvider();
+  await jobQueue.ensureQueue("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
+  await jobQueue.registerWorker<{ sceneId: string }>(
+    "video.generate_scene",
+    async ({ sceneId }) => {
+      await processVideoScene(
+        { projectRepo: videoProjects, sceneRepo: videoScenes, jobQueue, assetStore, provider: videoProvider },
+        sceneId
+      );
+    },
+    { localConcurrency: 3 }
+  );
+  await jobQueue.ensureQueue("video.render", { retryLimit: 1, expireInSeconds: 300 });
+  await jobQueue.registerWorker<{ projectId: string }>("video.render", async ({ projectId }) => {
+    await processVideoRender(
+      { projectRepo: videoProjects, sceneRepo: videoScenes, assetRepo: assets, assetStore, ffmpegPath: config.FFMPEG_PATH },
+      projectId
+    );
+  });
+
   // Real external MCP server connection (docs/10_TOOL_AND_MCP_ARCHITECTURE.md §2/§3.2) —
   // the official reference filesystem server, scoped to the same sandbox root as our
   // native fs tools. Best-effort: if it fails to start, log and continue rather than
@@ -168,6 +197,8 @@ async function main() {
     assets,
     assetsRoot,
     imageGenerations,
+    videoProjects,
+    videoScenes,
   };
 
   const app = await buildServer(config, ctx);

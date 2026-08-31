@@ -1,5 +1,5 @@
 {
-  "name": "@ai-platform/media",
+  "name": "@ai-platform/video-mock",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,13 +17,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ai-platform/database": "*",
-    "@ai-platform/jobs": "*",
-    "@ai-platform/shared": "*",
-    "uuid": "^11.0.4"
+    "@ai-platform/shared": "*"
   },
   "devDependencies": {
-    "@ai-platform/video-mock": "*",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }

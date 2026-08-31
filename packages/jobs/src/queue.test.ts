@@ -45,6 +45,28 @@ describe("JobQueue (real pg-boss on PGlite)", () => {
     expect(received).toEqual(["hello"]);
   });
 
+  it("registerWorker accepts pg-boss WorkOptions (e.g. localConcurrency) and still processes every job", async () => {
+    await queue.ensureQueue("test.concurrency");
+    const received: unknown[] = [];
+    await queue.registerWorker<{ n: number }>(
+      "test.concurrency",
+      async (payload) => {
+        await new Promise((r) => setTimeout(r, 20));
+        received.push(payload.n);
+      },
+      { localConcurrency: 2 }
+    );
+
+    await Promise.all([
+      queue.enqueue("test.concurrency", { n: 1 }),
+      queue.enqueue("test.concurrency", { n: 2 }),
+      queue.enqueue("test.concurrency", { n: 3 }),
+    ]);
+    await waitFor(() => received.length === 3);
+
+    expect(received.sort()).toEqual([1, 2, 3]);
+  });
+
   it("deduplicates via singletonKey — a retry racing the original before it's claimed does not create a second job", async () => {
     // Deliberately no worker registered yet: singletonKey dedupes while the original job
     // is still queued/active (docs/07 §1.2's actual scenario — a retry-after-timeout race

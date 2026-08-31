@@ -9,6 +9,8 @@ import type {
   MessageRepository,
   TaskNodeRepository,
   TaskRepository,
+  VideoProjectRepository,
+  VideoSceneRepository,
 } from "@ai-platform/database";
 import type { EmbeddingProvider } from "@ai-platform/embeddings";
 import type { JobQueue } from "@ai-platform/jobs";
@@ -37,4 +39,6 @@ export interface AppContext {
   assets: AssetRepository;
   assetsRoot: string;
   imageGenerations: ImageGenerationRepository;
+  videoProjects: VideoProjectRepository;
+  videoScenes: VideoSceneRepository;
 }

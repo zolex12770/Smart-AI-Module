@@ -13,6 +13,10 @@ const envSchema = z.object({
   DATABASE_DIR: z.string().default("./data/pgdata"),
   SANDBOX_ROOT: z.string().default("./data/sandbox"),
   ASSETS_ROOT: z.string().default("./data/assets"),
+  // docs/26_DECISIONS.md ADR-030: the long-form video render stage shells out to a system
+  // ffmpeg binary rather than bundling one via npm. Defaults to resolving "ffmpeg" on PATH;
+  // override for an environment where it's installed somewhere non-standard.
+  FFMPEG_PATH: z.string().default("ffmpeg"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
