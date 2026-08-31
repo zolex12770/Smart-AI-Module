@@ -2,7 +2,7 @@
 
 A modular, model-agnostic AI agent platform: chat, autonomous multi-step tasks, a coding agent, tool calling and MCP integration, memory, RAG, and (initially mocked) image/video generation — built as a staged program, not a single release.
 
-**Status: chat, a full agent task engine, tool/MCP calling, a narrow coding agent, real LLM provider adapters, retrieval-augmented document Q&A, and a real async job system are all working, on real PostgreSQL.** Streamed chat over SSE; a state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating; sandboxed native tools plus a real connection to an external MCP server; a coding agent that runs a real failing test, fixes it, and re-verifies; real Anthropic/OpenAI/Google adapters alongside the mock, with automatic fallback; document ingestion (now a real background job, not a blocking request) + pgvector similarity search backing retrieval-augmented answers; and pg-boss-backed jobs with genuine crash recovery. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
+**Status: chat, a full agent task engine, tool/MCP calling, a narrow coding agent, real LLM provider adapters, retrieval-augmented document Q&A, a real async job system, and async image generation (mocked) are all working, on real PostgreSQL.** Streamed chat over SSE; a state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating; sandboxed native tools plus a real connection to an external MCP server; a coding agent that runs a real failing test, fixes it, and re-verifies; real Anthropic/OpenAI/Google adapters alongside the mock, with automatic fallback; document ingestion (a real background job, not a blocking request) + pgvector similarity search backing retrieval-augmented answers; pg-boss-backed jobs with genuine crash recovery; and a provider-agnostic image generation pipeline (submit → async job → real, inspectable output) running on a mock provider until real image credentials are supplied. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
 
 ## Start here
 
@@ -28,7 +28,9 @@ npm run dev     # starts the API (port 8787) and the web app (port 3000)
 
 Then open http://localhost:3000. **No Docker, no separately-installed database server, and no API keys are required** — the app runs on a real embedded PostgreSQL instance (PGlite, auto-created and auto-migrated on boot at `apps/api/data/pgdata`) and a mock LLM provider that clearly labels its own responses as mock.
 
-Other useful commands: `npm run typecheck`, `npm run build` (production build of every app), `npm test` (20 real tests: provider adapters, embeddings, and genuine end-to-end integration tests for RAG and the job queue against real in-memory Postgres/pg-boss — no mocks), `npm run db:generate -w @ai-platform/database` (after a schema change, to create a new migration file).
+Other useful commands: `npm run typecheck`, `npm run build` (production build of every app), `npm test` (24 real tests: provider adapters, embeddings, the mock image provider, and genuine end-to-end integration tests for RAG and the job queue against real in-memory Postgres/pg-boss — no mocks), `npm run db:generate -w @ai-platform/database` (after a schema change, to create a new migration file).
+
+If the API ever fails to boot with a PGlite `RuntimeError: Aborted()`, the local dev database was corrupted by a prior forceful process kill (see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-029) — delete `apps/api/data/pgdata` and restart; it's disposable local data and will re-migrate from scratch.
 
 ## Configuring real providers
 

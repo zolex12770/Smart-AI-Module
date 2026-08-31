@@ -8,3 +8,5 @@ export * from "./repositories/task-transition-repository.js";
 export * from "./repositories/document-repository.js";
 export * from "./repositories/document-chunk-repository.js";
 export * from "./repositories/memory-item-repository.js";
+export * from "./repositories/asset-repository.js";
+export * from "./repositories/image-generation-repository.js";

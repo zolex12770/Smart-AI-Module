@@ -13,6 +13,8 @@
     { "path": "packages/embeddings" },
     { "path": "packages/rag" },
     { "path": "packages/jobs" },
+    { "path": "packages/media" },
+    { "path": "packages/providers/image-mock" },
     { "path": "packages/agent-core" }
   ]
 }

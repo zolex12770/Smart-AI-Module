@@ -13,14 +13,18 @@ import {
   PgDocumentRepository,
   PgDocumentChunkRepository,
   PgMemoryItemRepository,
+  PgAssetRepository,
+  PgImageGenerationRepository,
 } from "@ai-platform/database";
 import { HashEmbeddingProvider } from "@ai-platform/embeddings";
+import { MockImageProvider } from "@ai-platform/image-mock";
 import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { OpenAIProvider } from "@ai-platform/llm-openai";
 import { connectMcpServer } from "@ai-platform/mcp";
+import { LocalAssetStore, processImageGeneration } from "@ai-platform/media";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createRagTools, processDocumentIngestion } from "@ai-platform/rag";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
@@ -62,6 +66,8 @@ async function main() {
 
   const sandboxRoot = resolve(config.SANDBOX_ROOT);
   mkdirSync(sandboxRoot, { recursive: true });
+  const assetsRoot = resolve(config.ASSETS_ROOT);
+  mkdirSync(assetsRoot, { recursive: true });
   const toolRegistry = new ToolRegistry();
 
   const documents = new PgDocumentRepository(db);
@@ -90,6 +96,19 @@ async function main() {
     const document = await documents.get(documentId);
     if (!document) throw new Error(`document.ingest job referenced unknown document "${documentId}".`);
     await processDocumentIngestion({ documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot }, document);
+  });
+
+  // Image generation (docs/05_IMAGE_GENERATION_RESEARCH.md) — mock-only until real
+  // credentials exist (docs/26_DECISIONS.md ADR-009), but genuinely runs through the same
+  // async job system a real (slow) provider would need, per docs/07 §1.6's "mock-provider
+  // parity" directive — never resolved inline.
+  const assets = new PgAssetRepository(db);
+  const assetStore = new LocalAssetStore(assetsRoot, assets);
+  const imageGenerations = new PgImageGenerationRepository(db);
+  const imageProvider = new MockImageProvider();
+  await jobQueue.ensureQueue("image.generate", { retryLimit: 1, expireInSeconds: 60 });
+  await jobQueue.registerWorker<{ generationId: string }>("image.generate", async ({ generationId }) => {
+    await processImageGeneration({ generationRepo: imageGenerations, assetStore, provider: imageProvider }, generationId);
   });
 
   // Real external MCP server connection (docs/10_TOOL_AND_MCP_ARCHITECTURE.md §2/§3.2) —
@@ -146,11 +165,38 @@ async function main() {
     embeddings,
     sandboxRoot,
     jobQueue,
+    assets,
+    assetsRoot,
+    imageGenerations,
   };
 
   const app = await buildServer(config, ctx);
 
   await app.listen({ port: config.PORT, host: "0.0.0.0" });
+
+  // Graceful shutdown — real, not decorative. PGlite (ADR-025) is a single embedded
+  // engine, not a client to a separately-managed server process: an ungraceful exit
+  // (e.g. a forceful `taskkill`/SIGKILL) can leave its on-disk state corrupted in a way
+  // that doesn't surface until a later operation touches the affected structures —
+  // discovered directly during this phase's own testing (PROJECT_STATUS.md), where a
+  // stray abandoned process from an earlier crash silently damaged the dev database and
+  // it only failed loudly once a new migration ran, well after the actual damage. A
+  // normal shutdown signal (SIGINT/SIGTERM, e.g. a plain `taskkill` without `/F`, or
+  // Ctrl+C) now closes the queue and the database cleanly instead of leaving that risk.
+  const shutdown = async (signal: string) => {
+    console.log(`Received ${signal}, shutting down gracefully...`);
+    try {
+      await app.close();
+      await jobQueue.stop();
+      await db.$client.close();
+    } catch (err) {
+      console.error("Error during graceful shutdown:", err);
+    } finally {
+      process.exit(0);
+    }
+  };
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 main().catch((err) => {

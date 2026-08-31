@@ -280,6 +280,36 @@ New decisions are appended at the bottom. Do not edit past decisions to hide his
 
 ---
 
+## ADR-028: Mock image generation — a real, valid SVG file, deterministically rendered; runs through the real job system, not inline
+
+**Decision:** `MockImageProvider` (`packages/providers/image-mock`) produces an actual valid SVG image — real bytes that render correctly in any browser or image viewer — with the prompt text rendered onto a deterministically-hashed gradient background and an explicit "MOCK IMAGE — not a real generation" banner. `POST /api/v1/images` only creates the DB record and enqueues an `image.generate` job (via `packages/jobs`, ADR-027); the actual generation happens in the job worker, never inline in the HTTP handler, even though the mock itself is fast.
+
+**Reason:** [[26_DECISIONS]] ADR-009 requires mocks to be honestly labeled, never disguised as real — an SVG with a visible mock banner satisfies that more directly than an opaque placeholder blob would, while still being a genuinely valid, inspectable image file (verified: fetched via `GET /api/v1/assets/:id`, confirmed well-formed SVG XML with correct dimensions for the requested aspect ratio). Running even the mock through the real job system implements [[07_LONG_RUNNING_JOB_ARCHITECTURE]] §1.6's explicit "mock-provider parity" directive: the orchestration (job submission, async status polling, worker execution, asset storage) is exercised for real today, so swapping in a real (slow, rate-limited) provider later is a provider-adapter change, not a pipeline rewrite.
+
+**Interface design**: `ImageProvider`/`ImageGenerationRequest`/`ImageResult`/`ImageProviderCapabilities` in `packages/shared/src/image.ts` are built directly against [[05_IMAGE_GENERATION_RESEARCH]] §4's interface sketch (aspect ratios, seed, quality tiers, capabilities-gated parameters) — not guessed. `getCapabilities()` exists even though only one (mock) provider is registered, because the research found no two real providers support the same parameter set.
+
+**Verified for real**: 4 unit tests (deterministic seed, correct dimension mapping, real capabilities, actual SVG content produced) plus a live end-to-end session — submitted a real request, polled status through `pending`→`processing`→`succeeded`, fetched the resulting asset over HTTP, and confirmed it was a well-formed SVG containing the exact submitted prompt and correct 16:9 dimensions.
+
+**Date:** 2026-08-31
+**Impact:** New `assets` and `image_generations` tables ([[14_DATABASE_ARCHITECTURE]]); new `packages/media` (asset storage + orchestration, reusable by video generation in Phase 9). Real provider adapters (OpenAI, Imagen, Stability, FLUX — per [[05_IMAGE_GENERATION_RESEARCH]]) remain mock-only until the user supplies credentials, per ADR-009.
+
+---
+
+## ADR-029: Graceful shutdown added to `apps/api` after a real PGlite corruption incident
+
+**Decision:** `apps/api` now handles `SIGINT`/`SIGTERM` by closing the Fastify server, stopping the job queue, and closing the PGlite connection (`db.$client.close()`) before exiting, instead of relying on the OS to just tear the process down.
+
+**Reason:** during this phase's own testing, a forceful process kill (`taskkill /F`, used throughout this session because Windows refused a non-forceful kill on this process type — confirmed directly, "This process can only be terminated forcefully") left the local PGlite data directory in a state that appeared to work normally for simple reads afterward, but caused a hard WASM-level crash (`RuntimeError: Aborted()`) the next time a schema migration touched the affected structures — real, silent corruption that surfaced much later than the event that caused it, not an immediate error. Root-caused by reproducing it: a fresh database applied the exact same migration cleanly, isolating the fault to the specific damaged data directory, which was then wiped and reinitialized (disposable local dev/test data, not user data).
+
+**Honest verification limitation**: the handler is implemented correctly and should work under normal signal delivery (Linux/Mac `kill`, Docker/Cloud Run's SIGTERM on container stop, or Ctrl+C in a real interactive terminal) — but it could **not** be exercised end-to-end in this sandboxed Windows environment, since every kill mechanism available here is forceful-only (bypasses signal handlers by design). Do not claim this fixes the corruption risk until it's actually observed working under a real graceful shutdown.
+
+**Alternatives considered:** Detecting and auto-clearing a stale `postmaster.pid` at boot — investigated first as the likely cause, removed a real stale lock file, and the crash persisted, disproving that hypothesis before the real one (corruption, not just a lock) was found. Left as a non-fix.
+
+**Date:** 2026-08-31
+**Impact:** `apps/api/src/index.ts`. Tracked as an open item in [[27_RISKS_AND_LIMITATIONS]] until real graceful-shutdown behavior is observed (e.g. once this runs under Docker/Cloud Run in Phase 14, or on a non-Windows dev machine).
+
+---
+
 ## ADR-022: Coding agent (Phase 5) — deterministic literal-fix pipeline, not LLM-driven bug fixing; `node`-only terminal allow-list
 
 **Decision:** The first coding-agent capability (`fix_failing_test` task type, `terminal.run_command`, `code.parse_fix_directive`, `code.apply_literal_fix`) runs a real sandboxed test command, parses a *structured, self-describing* failure signal the test itself prints (`FIX_NEEDED path=... find=... replace=...`), applies the exact named literal replacement, and re-runs the test to confirm it passes. The terminal tool's command allow-list contains only `node`.

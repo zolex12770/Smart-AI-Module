@@ -4,7 +4,7 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Current Phase
 
-**Phases 0, 1, 3, 4, 5 are complete and verified. Phases 2 (real LLM provider adapters), 6 (memory & RAG), and 7 (async job system) are MVP-done.** The planner (Phase 3) and coding agent (Phase 5) remain deterministic/rule-based, as designed — they're built to graduate to real reasoning the moment a real key is dropped in, with zero code changes needed. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
+**Phases 0, 1, 3, 4, 5 are complete and verified. Phases 2 (real LLM provider adapters), 6 (memory & RAG), 7 (async job system), and 8 (image generation, mocked) are MVP-done.** The planner (Phase 3) and coding agent (Phase 5) remain deterministic/rule-based, as designed — they're built to graduate to real reasoning the moment a real key is dropped in, with zero code changes needed. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
 
 ## Completed
 
@@ -72,21 +72,32 @@ Read this file first at the start of any session, along with `README.md`, `docs/
   4. Full-process test through the running API: enqueued a real document-ingestion job, `taskkill`ed the API process immediately afterward (before the job could be claimed), then did a clean restart — the job still completed correctly, and the ingested document was confirmed genuinely searchable via RAG afterward.
 - Cancellation is not yet wired into the job system's public surface — no current job type needs it (document ingestion is fast and its own status field already communicates progress).
 
+**Phase 8 (image generation, mocked) — API/pipeline-level MVP done; a real, non-obvious infra bug found and fixed along the way:**
+
+- New packages: `packages/providers/image-mock` (`MockImageProvider`, real SVG output), `packages/media` (`LocalAssetStore` + `ImageGenerationService`, reusable by video generation in Phase 9).
+- New DB tables: `assets` (generic, reusable for any future asset kind), `image_generations`.
+- New API routes: `POST /api/v1/images` (enqueue, returns 202), `GET /api/v1/images`/`:id` (poll), `GET /api/v1/assets/:id` (serves real bytes with the correct content-type).
+- `MockImageProvider` produces an actual valid SVG — not an opaque placeholder — with a visible "MOCK IMAGE — not a real generation" banner and the prompt rendered onto a deterministically-hashed gradient background. The whole flow runs through the real Phase 7 job system rather than resolving inline, per `docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md` §1.6's explicit "mock-provider parity" directive.
+- **Verified live, end to end:** submitted `POST /api/v1/images` with a real prompt and 16:9 aspect ratio, polled through `pending`→`processing`→`succeeded`, fetched the resulting asset over `GET /api/v1/assets/:id`, and confirmed it was well-formed SVG XML at the correct 1024×576 dimensions containing the exact submitted prompt text. Plus 4 real unit tests (determinism, dimension mapping, capabilities, actual SVG content).
+- **Real, valuable bug found by this phase's own testing, not a contrived one:** booting the API crashed hard with a PGlite `RuntimeError: Aborted()` — root-caused by process of elimination (a fresh database applied the same migration cleanly, isolating the fault to this session's specific dev database) to **real on-disk corruption caused by an earlier forceful process kill** (`taskkill /F`, used throughout this session because Windows refuses non-forceful termination on this process type). The corruption was silent — simple reads kept working — until a new schema migration touched the affected structures, days-of-session-time later. Fixed the immediate problem by wiping the (disposable, local-only) corrupted data directory, and added a real mitigation: `apps/api` now handles `SIGINT`/`SIGTERM` with a graceful shutdown that closes PGlite cleanly before exit. **Honestly unverified**: this sandboxed Windows environment has no way to send a non-forceful termination signal to test the fix actually prevents recurrence — it should work under normal signal delivery (Linux/Mac, Docker, Cloud Run) but that path has not been observed working.
+- Not yet built: a web UI screen for image generation (Phase 10's scope, not this phase's).
+
 ## Known Issues / Blockers
 
-- None blocking Phase 2 or Phase 5. Phase 2 (real LLM providers) needs at least one real API key from the user to verify end-to-end beyond adapter unit tests. Phase 6 needs Postgres (Docker Desktop or a hosted free-tier Postgres). Phase 14 needs a real GCP project/billing.
+- None blocking further work. Phase 2 (real LLM providers) needs at least one real API key from the user to verify end-to-end beyond adapter unit tests. Phase 14 needs a real GCP project/billing.
 - Remaining Phase 4 scope not yet done: terminal/git/web native tools, a dedicated automated prompt-injection fixture test (FR-023) — the manual path-traversal test covers a related but distinct attack class.
 - The hydration-mismatch console warning noted after Phase 1 was not seen again during Phase 3/4 testing (all of which was via `curl`, not the browser) — still unconfirmed either way; low priority.
+- **PGlite data-corruption risk (ADR-029):** a forceful process kill can silently corrupt the local dev database, surfacing much later as a `RuntimeError: Aborted()` at boot. A graceful-shutdown handler was added but could not be verified end-to-end in this Windows sandbox (every available kill mechanism here is forceful-only). If this recurs, the fix is to delete `apps/api/data/pgdata` and let it re-migrate fresh — it's disposable local dev data, never a real data-loss concern for an actual deployment.
 
 ## Last Successful Test
 
-2026-08-31 — `npm test` (20 tests across 6 files, all passing, including real end-to-end PGlite/Postgres integration tests for both RAG and the job queue), `npm run typecheck` and `npm run build` both green across all 15 workspaces, plus: three real live-endpoint verification calls (Anthropic/OpenAI/Google with deliberately invalid keys), a live RAG curl session with confirmed bidirectional topic-based re-ranking, a full Phase 3/4 regression re-check against the new Postgres backend, and two real full-process crash-recovery checks (agent tasks in Phase 6's re-check, and a real async job in Phase 7) each confirming state survives a `taskkill` + restart.
+2026-08-31 — `npm test` (24 tests across 7 files, all passing, including real end-to-end PGlite/Postgres integration tests for RAG and the job queue), `npm run typecheck` and `npm run build` both green across all 17 workspaces, plus: three real live-endpoint verification calls (Anthropic/OpenAI/Google with deliberately invalid keys), a live RAG curl session with confirmed bidirectional topic-based re-ranking, a live image-generation session (submit → poll → fetch a real, well-formed SVG asset), a full Phase 3/4 regression re-check against the new Postgres backend, and three real full-process crash-recovery checks (agent tasks in Phase 6's re-check, a real async job in Phase 7, and the corrupted-database root-cause investigation in Phase 8) each confirming behavior against a real `taskkill` + restart.
 
 ## Next Action
 
 Nothing is currently blocked. The single biggest capability unlock remaining is a real API key from the user — it's what lets the agent-core planner (ADR-018) and coding agent (ADR-022) graduate from deterministic/rule-based to genuine reasoning, lets Phase 2's success path finally be confirmed, and would let RAG retrieval move from lexical (hash-based) to real semantic embeddings. Until then, reasonable next increments, roughly in order of value:
 
-1. Expand automated test coverage beyond providers/embeddings/rag/jobs — agent-core (state machine transitions, crash-recovery reconciliation), tools (sandbox-path traversal, terminal allow-list), and API route-level tests — currently these are only verified manually/via curl, not via a checked-in automated suite.
+1. Expand automated test coverage beyond providers/embeddings/rag/jobs/image-mock — agent-core (state machine transitions, crash-recovery reconciliation), tools (sandbox-path traversal, terminal allow-list), and API route-level tests — currently these are only verified manually/via curl, not via a checked-in automated suite.
 2. PDF/DOCX parsing for RAG ingestion (currently plain text/Markdown only).
 3. Terminal/git/web native tools beyond the current `node`-only allow-list (expand only alongside a concrete verified scenario that needs them, per the established discipline).
 4. Multi-file coding-agent edits (current pipeline is single-file).

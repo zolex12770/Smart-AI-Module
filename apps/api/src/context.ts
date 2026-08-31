@@ -1,8 +1,10 @@
 import type { AgentEngine } from "@ai-platform/agent-core";
 import type {
+  AssetRepository,
   ConversationRepository,
   DocumentChunkRepository,
   DocumentRepository,
+  ImageGenerationRepository,
   MemoryItemRepository,
   MessageRepository,
   TaskNodeRepository,
@@ -32,4 +34,7 @@ export interface AppContext {
   embeddings: EmbeddingProvider;
   sandboxRoot: string;
   jobQueue: JobQueue;
+  assets: AssetRepository;
+  assetsRoot: string;
+  imageGenerations: ImageGenerationRepository;
 }

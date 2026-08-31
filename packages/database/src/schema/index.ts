@@ -132,3 +132,38 @@ export const memoryItems = pgTable("memory_items", {
   content: text("content").notNull(),
   createdAt: timestamp("created_at").notNull(),
 });
+
+/**
+ * Generic asset storage record (docs/14_DATABASE_ARCHITECTURE.md's `assets` table, rule
+ * 20 of the original brief). `storagePath` is a local filesystem path today — swapping to
+ * object storage (GCS, docs/19_DEPLOYMENT_ARCHITECTURE.md) later changes how this column
+ * is interpreted and written, not the schema.
+ */
+export const assets = pgTable("assets", {
+  id: text("id").primaryKey(),
+  kind: text("kind", { enum: ["image", "video", "audio", "document", "other"] }).notNull(),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: integer("size_bytes").notNull(),
+  storagePath: text("storage_path").notNull(),
+  checksum: text("checksum").notNull(),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").notNull(),
+});
+
+/**
+ * One row per image generation request (docs/05_IMAGE_GENERATION_RESEARCH.md). Every
+ * call — mock or real — runs through the async job system (docs/07 §1.6 "mock-provider
+ * parity"), so this mirrors `documents`' pending/ready/failed pattern rather than
+ * resolving inline.
+ */
+export const imageGenerations = pgTable("image_generations", {
+  id: text("id").primaryKey(),
+  prompt: text("prompt").notNull(),
+  request: jsonb("request").notNull(),
+  status: text("status", { enum: ["pending", "processing", "succeeded", "failed"] }).notNull(),
+  providerName: text("provider_name"),
+  resultAssetId: text("result_asset_id"),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull(),
+  updatedAt: timestamp("updated_at").notNull(),
+});

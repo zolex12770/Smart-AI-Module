@@ -12,6 +12,7 @@ const envSchema = z.object({
   // single file, since Postgres persists multiple files there.
   DATABASE_DIR: z.string().default("./data/pgdata"),
   SANDBOX_ROOT: z.string().default("./data/sandbox"),
+  ASSETS_ROOT: z.string().default("./data/assets"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),

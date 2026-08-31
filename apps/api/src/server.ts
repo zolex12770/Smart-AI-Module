@@ -6,6 +6,7 @@ import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerAgentRoutes } from "./routes/v1/agent.js";
 import { registerChatRoute } from "./routes/v1/chat.js";
+import { registerImageRoutes } from "./routes/v1/images.js";
 import { registerRagRoutes } from "./routes/v1/rag.js";
 
 export async function buildServer(config: AppConfig, ctx: AppContext) {
@@ -18,6 +19,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext) {
   registerChatRoute(app, ctx);
   registerAgentRoutes(app, ctx);
   registerRagRoutes(app, ctx);
+  registerImageRoutes(app, ctx);
 
   return app;
 }

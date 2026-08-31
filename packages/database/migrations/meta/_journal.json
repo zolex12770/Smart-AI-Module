@@ -8,6 +8,13 @@
       "when": 1788169150562,
       "tag": "0000_empty_annihilus",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788175299580,
+      "tag": "0001_heavy_raza",
+      "breakpoints": true
     }
   ]
 }
