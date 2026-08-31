@@ -15,13 +15,14 @@ import {
   PgMemoryItemRepository,
 } from "@ai-platform/database";
 import { HashEmbeddingProvider } from "@ai-platform/embeddings";
+import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { OpenAIProvider } from "@ai-platform/llm-openai";
 import { connectMcpServer } from "@ai-platform/mcp";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
-import { createRagTools } from "@ai-platform/rag";
+import { createRagTools, processDocumentIngestion } from "@ai-platform/rag";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { loadConfig } from "./config.js";
 import type { AppContext } from "./context.js";
@@ -76,6 +77,21 @@ async function main() {
     toolRegistry.register(definition, handler);
   }
 
+  // Real async job queue (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md, docs/26_DECISIONS.md
+  // ADR-012/ADR-027) — pg-boss against the same PGlite instance via its native `fromPglite`
+  // adapter. The worker runs in-process here rather than in a separate apps/worker process
+  // because PGlite is single-connection/embedded (ADR-025) — a second OS process cannot
+  // open the same database. See ADR-027 for the full reasoning and what changes once a
+  // real standalone Postgres exists.
+  const jobQueue = new JobQueue({ db: fromPglite(db.$client), backend: "pglite" });
+  await jobQueue.start();
+  await jobQueue.ensureQueue("document.ingest", { retryLimit: 2, expireInSeconds: 120 });
+  await jobQueue.registerWorker<{ documentId: string }>("document.ingest", async ({ documentId }) => {
+    const document = await documents.get(documentId);
+    if (!document) throw new Error(`document.ingest job referenced unknown document "${documentId}".`);
+    await processDocumentIngestion({ documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot }, document);
+  });
+
   // Real external MCP server connection (docs/10_TOOL_AND_MCP_ARCHITECTURE.md §2/§3.2) —
   // the official reference filesystem server, scoped to the same sandbox root as our
   // native fs tools. Best-effort: if it fails to start, log and continue rather than
@@ -129,6 +145,7 @@ async function main() {
     memoryItems: new PgMemoryItemRepository(db),
     embeddings,
     sandboxRoot,
+    jobQueue,
   };
 
   const app = await buildServer(config, ctx);

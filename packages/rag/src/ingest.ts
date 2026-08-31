@@ -13,20 +13,31 @@ export interface IngestDeps {
 }
 
 /**
+ * Split into two steps so ingestion can run as an async job (docs/25_IMPLEMENTATION_ROADMAP.md
+ * Phase 7): `createPendingDocument` returns immediately with a real row an API caller can
+ * poll, and `processDocumentIngestion` does the actual (potentially slow, for a large file)
+ * chunk/embed/store work — designed to run inside a job worker, not inline in an HTTP
+ * handler. `ingestDocument` composes both for the synchronous case (used directly by
+ * rag.integration.test.ts without needing job infrastructure in the test).
+ */
+export async function createPendingDocument(
+  documentRepo: DocumentRepository,
+  relativePath: string
+): Promise<Document> {
+  const filename = relativePath.split(/[/\\]/).pop() ?? relativePath;
+  return documentRepo.create({ id: uuid(), filename, sourcePath: relativePath });
+}
+
+/**
  * Real document ingestion (docs/09_RAG_ARCHITECTURE.md) — reads a file from the same
  * sandboxed workspace the native tools use, chunks it, embeds every chunk (real feature-
- * hashed vectors — docs/26_DECISIONS.md ADR-026), and persists both the document record
- * and its chunks. Currently handles plain text (.txt/.md); PDF/DOCX parsing is not yet
- * implemented (PROJECT_STATUS.md) — this ingests whatever text content is in the file
- * verbatim, so a binary file would ingest as garbled text rather than being rejected.
+ * hashed vectors — docs/26_DECISIONS.md ADR-026), and persists the chunks, updating the
+ * given document's status in place. Currently handles plain text (.txt/.md); PDF/DOCX
+ * parsing is not yet implemented (PROJECT_STATUS.md).
  */
-export async function ingestDocument(deps: IngestDeps, relativePath: string): Promise<Document> {
-  const safePath = resolveSandboxedPath(deps.sandboxRoot, relativePath);
-  const filename = relativePath.split(/[/\\]/).pop() ?? relativePath;
-
-  const document = await deps.documentRepo.create({ id: uuid(), filename, sourcePath: relativePath });
-
+export async function processDocumentIngestion(deps: IngestDeps, document: Document): Promise<void> {
   try {
+    const safePath = resolveSandboxedPath(deps.sandboxRoot, document.sourcePath);
     const text = await readFile(safePath, "utf8");
     const chunks = chunkText(text);
     if (chunks.length === 0) {
@@ -45,10 +56,19 @@ export async function ingestDocument(deps: IngestDeps, relativePath: string): Pr
     );
 
     await deps.documentRepo.updateStatus(document.id, "ready");
-    return { ...document, status: "ready" };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await deps.documentRepo.updateStatus(document.id, "failed", message);
-    return { ...document, status: "failed", errorMessage: message };
+    throw err;
+  }
+}
+
+export async function ingestDocument(deps: IngestDeps, relativePath: string): Promise<Document> {
+  const document = await createPendingDocument(deps.documentRepo, relativePath);
+  try {
+    await processDocumentIngestion(deps, document);
+    return { ...document, status: "ready" };
+  } catch (err) {
+    return { ...document, status: "failed", errorMessage: err instanceof Error ? err.message : String(err) };
   }
 }

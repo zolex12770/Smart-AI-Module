@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { NotFoundError, ValidationError } from "@ai-platform/shared";
-import { ingestDocument } from "@ai-platform/rag";
+import { createPendingDocument } from "@ai-platform/rag";
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
 
@@ -14,15 +14,17 @@ import type { AppContext } from "../../context.js";
 const SINGLE_OPERATOR_OWNER_ID = "local-user";
 
 export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
+  // Real async job (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md, docs/25_IMPLEMENTATION_ROADMAP.md
+  // Phase 7) — returns immediately with the document in "ingesting" status; poll
+  // GET /api/v1/files/:id (or watch it complete) to see it flip to "ready"/"failed" once
+  // the job worker (registered in apps/api/src/index.ts) actually processes it.
   app.post<{ Body: { path: string } }>("/api/v1/files", async (request, reply) => {
     const path = request.body?.path;
     if (!path) throw new ValidationError("Body must include a sandbox-relative \"path\".");
 
-    const document = await ingestDocument(
-      { documentRepo: ctx.documents, chunkRepo: ctx.documentChunks, embeddings: ctx.embeddings, sandboxRoot: ctx.sandboxRoot },
-      path
-    );
-    reply.status(document.status === "ready" ? 201 : 422).send({ document });
+    const document = await createPendingDocument(ctx.documents, path);
+    await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id });
+    reply.status(202).send({ document });
   });
 
   app.get("/api/v1/files", async () => ({ documents: await ctx.documents.list() }));

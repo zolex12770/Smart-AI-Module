@@ -3,7 +3,11 @@ import { vector } from "@electric-sql/pglite-pgvector";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 import * as schema from "./schema/index.js";
 
-export type DrizzleDb = PgliteDatabase<typeof schema>;
+// drizzle()'s real return type is an intersection with `$client` (the raw PGlite
+// instance) — packages/jobs needs that to hand pg-boss's `fromPglite` adapter the same
+// underlying connection apps/api already has (docs/26_DECISIONS.md ADR-027), so the type
+// alias must preserve it, not just `PgliteDatabase<...>` alone.
+export type DrizzleDb = PgliteDatabase<typeof schema> & { $client: PGlite };
 
 /**
  * Real PostgreSQL via PGlite (docs/26_DECISIONS.md ADR-025) — an actual WASM-compiled

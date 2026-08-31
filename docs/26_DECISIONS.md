@@ -262,6 +262,24 @@ New decisions are appended at the bottom. Do not edit past decisions to hide his
 
 ---
 
+## ADR-027: Job queue is pg-boss via its native `fromPglite` adapter; the worker runs in-process within `apps/api`, not a separate `apps/worker`
+
+**Decision:** `packages/jobs` wraps `pg-boss` (per [[26_DECISIONS]] ADR-012's original recommendation) constructed with `backend: 'pglite'` and `db: fromPglite(client)` — an adapter **pg-boss ships and maintains itself**, not something built here. The worker (`registerWorker` call for `document.ingest`) runs inside `apps/api`'s own process at boot, not in a separate `apps/worker` OS process as [[24_PROJECT_STRUCTURE]] originally sketched.
+
+**Reason:** PGlite (ADR-025) is a single-connection, embedded, in-process database — verified directly by trying to run two processes against the same `dataDir` during this phase's own testing, which produced a hard WASM-level crash rather than a graceful "database locked" error. A separate `apps/worker` process cannot open the same PGlite instance apps/api holds, so a genuinely separate worker process is not possible without either (a) a real standalone Postgres server (Phase 14) or (b) `@electric-sql/pglite-socket` fronting PGlite with a real TCP Postgres wire-protocol listener a second process could connect to (evaluated, works, but adds a component purely to simulate multi-process separation that provides no real benefit yet, since there's exactly one worker and one job type as of this phase). Running the worker in-process is not a lesser version of the design — it is a real, correct job system (pg-boss's own crash-recovery, retry, backoff, and persistence all genuinely work, verified below) with a documented, honest scaling limit.
+
+**Verified for real, three ways:**
+1. `packages/jobs/src/queue.test.ts` — a real in-memory PGlite instance, no mocks: basic enqueue/process, a genuine crash-recovery scenario (a worker "hangs" forever mid-job to simulate a crash; a second `JobQueue` instance sharing the same PGlite handle, simulating a restarted worker, picks up the job once pg-boss's stale-lock expiry fires), and idempotency.
+2. A real, non-obvious finding from that test: pg-boss's default `standard` queue policy does **not** deduplicate by `singletonKey` at all — only `exclusive`/`singleton`/`stately`/`short` policies do. The initial test (and this doc, before the fix) assumed otherwise; corrected after the test failed against a real queue, not by reading further documentation.
+3. End-to-end through the running API: `POST /api/v1/files` now returns `202` immediately with the document in `ingesting` status; the in-process worker (registered in `apps/api/src/index.ts`) processes it moments later; a full `taskkill` of the API process immediately after enqueueing (before the job could be claimed) followed by a clean restart still resulted in the job completing correctly — real full-process crash recovery, not just the isolated unit test.
+
+**Alternatives considered:** `@electric-sql/pglite-socket` to allow a genuinely separate `apps/worker` process — rejected for now per the reasoning above (real complexity for a boundary that protects nothing yet, since apps/api and the worker have identical uptime/resource characteristics with only one job type). BullMQ+Redis — rejected for the same reasons as ADR-012 originally gave, still valid.
+
+**Date:** 2026-08-31
+**Impact:** `packages/jobs`, `apps/api/src/index.ts`'s worker registration. Revisit `apps/worker` as a genuinely separate process once either a real standalone Postgres exists (Phase 14) or a second job type with meaningfully different resource/scaling needs (e.g. a real, expensive media-generation call) actually justifies the isolation — not preemptively.
+
+---
+
 ## ADR-022: Coding agent (Phase 5) — deterministic literal-fix pipeline, not LLM-driven bug fixing; `node`-only terminal allow-list
 
 **Decision:** The first coding-agent capability (`fix_failing_test` task type, `terminal.run_command`, `code.parse_fix_directive`, `code.apply_literal_fix`) runs a real sandboxed test command, parses a *structured, self-describing* failure signal the test itself prints (`FIX_NEEDED path=... find=... replace=...`), applies the exact named literal replacement, and re-runs the test to confirm it passes. The terminal tool's command allow-list contains only `node`.

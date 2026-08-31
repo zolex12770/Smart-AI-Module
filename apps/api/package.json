@@ -13,6 +13,7 @@
     "@ai-platform/agent-core": "*",
     "@ai-platform/database": "*",
     "@ai-platform/embeddings": "*",
+    "@ai-platform/jobs": "*",
     "@ai-platform/mcp": "*",
     "@ai-platform/rag": "*",
     "@ai-platform/llm-anthropic": "*",

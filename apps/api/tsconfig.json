@@ -19,6 +19,7 @@
     { "path": "../../packages/mcp" },
     { "path": "../../packages/embeddings" },
     { "path": "../../packages/rag" },
+    { "path": "../../packages/jobs" },
     { "path": "../../packages/agent-core" }
   ]
 }

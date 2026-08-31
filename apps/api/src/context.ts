@@ -9,6 +9,7 @@ import type {
   TaskRepository,
 } from "@ai-platform/database";
 import type { EmbeddingProvider } from "@ai-platform/embeddings";
+import type { JobQueue } from "@ai-platform/jobs";
 import type { ModelRouter } from "@ai-platform/model-router";
 import type { ToolRegistry } from "@ai-platform/tools";
 
@@ -30,4 +31,5 @@ export interface AppContext {
   memoryItems: MemoryItemRepository;
   embeddings: EmbeddingProvider;
   sandboxRoot: string;
+  jobQueue: JobQueue;
 }

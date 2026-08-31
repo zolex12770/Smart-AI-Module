@@ -4,7 +4,7 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Current Phase
 
-**Phases 0, 1, 3, 4, 5 are complete and verified. Phases 2 (real LLM provider adapters) and 6 (memory & RAG) are MVP-done.** The planner (Phase 3) and coding agent (Phase 5) remain deterministic/rule-based, as designed — they're built to graduate to real reasoning the moment a real key is dropped in, with zero code changes needed. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
+**Phases 0, 1, 3, 4, 5 are complete and verified. Phases 2 (real LLM provider adapters), 6 (memory & RAG), and 7 (async job system) are MVP-done.** The planner (Phase 3) and coding agent (Phase 5) remain deterministic/rule-based, as designed — they're built to graduate to real reasoning the moment a real key is dropped in, with zero code changes needed. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
 
 ## Completed
 
@@ -60,6 +60,18 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 - Memory (FR-032) is real storage/list/delete, verified via the API — it does not yet *generate* memory via LLM summarization, the same honest constraint as the planner (ADR-018) and coding agent (ADR-022).
 - What's not done: PDF/DOCX parsing (only plain text/Markdown ingest); a real embeddings API as an alternative to the hash-based default (natural follow-up once a key exists, mirrors the LLMProvider pattern); conversation-length-triggered summarization.
 
+**Phase 7 (async job system) — MVP done, real pg-boss on the existing Postgres, no Redis:**
+
+- New package `packages/jobs`: a thin `JobQueue` wrapper around `pg-boss`, using pg-boss's **own, officially-maintained** `fromPglite` adapter (discovered while investigating how to connect pg-boss to an embedded PGlite instance — pg-boss ships first-class PGlite support, not just Redis/standard-Postgres) — confirms ADR-012's original pg-boss recommendation without needing any bridging code.
+- Document ingestion (Phase 6) converted from a synchronous HTTP call to a real async job: `POST /api/v1/files` now returns `202` immediately with the document in `ingesting` status; a worker (registered in-process within `apps/api`) processes it moments later.
+- **Real architectural constraint discovered and documented (ADR-027), not worked around with a fake separation:** a separate `apps/worker` OS process — as originally sketched in `docs/24_PROJECT_STRUCTURE.md` — cannot share the same PGlite database as `apps/api`, because PGlite is single-connection/embedded. Confirmed directly: running two processes against the same `DATABASE_DIR` crashed the WASM engine outright during this phase's own testing, not a graceful lock error. The worker therefore runs in-process within `apps/api` for now — a real, working job system with a documented, honest scaling boundary, not a shortcut. A genuinely separate worker process becomes possible once Phase 14 introduces a real standalone Postgres.
+- **Verified three ways, catching two real, non-obvious findings along the way:**
+  1. `packages/jobs/src/queue.test.ts` — a real in-memory PGlite instance, no mocks: basic enqueue/process; a genuine crash-recovery simulation (a worker handler that hangs forever, then a second `JobQueue` instance sharing the same PGlite handle — simulating a restarted worker — picks up the stale-locked job once pg-boss's own lock-expiry mechanism fires); and idempotency via `singletonKey`.
+  2. **Real finding #1:** pg-boss's default `standard` queue policy does **not** deduplicate by `singletonKey` at all — only `exclusive`/`singleton`/`stately`/`short` policies do. The test initially failed against this wrong assumption; fixed by setting `policy: "exclusive"` on the queue, which is the actually-correct way to get the idempotency guarantee docs/07 describes.
+  3. **Real finding #2:** passing `superviseIntervalSeconds`/`maintenanceIntervalSeconds` as explicit `undefined` (rather than omitting the keys) crashes pg-boss's constructor validation — caught immediately when actually booting `apps/api`, not by inspection; fixed by conditionally spreading only defined options.
+  4. Full-process test through the running API: enqueued a real document-ingestion job, `taskkill`ed the API process immediately afterward (before the job could be claimed), then did a clean restart — the job still completed correctly, and the ingested document was confirmed genuinely searchable via RAG afterward.
+- Cancellation is not yet wired into the job system's public surface — no current job type needs it (document ingestion is fast and its own status field already communicates progress).
+
 ## Known Issues / Blockers
 
 - None blocking Phase 2 or Phase 5. Phase 2 (real LLM providers) needs at least one real API key from the user to verify end-to-end beyond adapter unit tests. Phase 6 needs Postgres (Docker Desktop or a hosted free-tier Postgres). Phase 14 needs a real GCP project/billing.
@@ -68,15 +80,15 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Last Successful Test
 
-2026-08-31 — `npm test` (17 tests across 5 files, all passing, including a real end-to-end PGlite/Postgres integration test), `npm run typecheck` and `npm run build` both green across all 14 workspaces, plus: three real live-endpoint verification calls (Anthropic/OpenAI/Google with deliberately invalid keys), a live RAG curl session with confirmed bidirectional topic-based re-ranking, a full Phase 3/4 regression re-check against the new Postgres backend, and confirmed data persistence across a process restart.
+2026-08-31 — `npm test` (20 tests across 6 files, all passing, including real end-to-end PGlite/Postgres integration tests for both RAG and the job queue), `npm run typecheck` and `npm run build` both green across all 15 workspaces, plus: three real live-endpoint verification calls (Anthropic/OpenAI/Google with deliberately invalid keys), a live RAG curl session with confirmed bidirectional topic-based re-ranking, a full Phase 3/4 regression re-check against the new Postgres backend, and two real full-process crash-recovery checks (agent tasks in Phase 6's re-check, and a real async job in Phase 7) each confirming state survives a `taskkill` + restart.
 
 ## Next Action
 
 Nothing is currently blocked. The single biggest capability unlock remaining is a real API key from the user — it's what lets the agent-core planner (ADR-018) and coding agent (ADR-022) graduate from deterministic/rule-based to genuine reasoning, lets Phase 2's success path finally be confirmed, and would let RAG retrieval move from lexical (hash-based) to real semantic embeddings. Until then, reasonable next increments, roughly in order of value:
 
-1. Expand automated test coverage beyond providers/embeddings/rag — agent-core (state machine transitions, crash-recovery reconciliation), tools (sandbox-path traversal, terminal allow-list), and API route-level tests — currently these are only verified manually/via curl, not via a checked-in automated suite.
+1. Expand automated test coverage beyond providers/embeddings/rag/jobs — agent-core (state machine transitions, crash-recovery reconciliation), tools (sandbox-path traversal, terminal allow-list), and API route-level tests — currently these are only verified manually/via curl, not via a checked-in automated suite.
 2. PDF/DOCX parsing for RAG ingestion (currently plain text/Markdown only).
 3. Terminal/git/web native tools beyond the current `node`-only allow-list (expand only alongside a concrete verified scenario that needs them, per the established discipline).
 4. Multi-file coding-agent edits (current pipeline is single-file).
 5. A dedicated automated prompt-injection fixture test (FR-023) — the manual path-traversal test covers a related but distinct attack class.
-6. Phase 7 (async job system, pg-boss) — the next roadmap phase, now that real Postgres exists to run it on.
+6. Phase 8 (image generation, mocked) — the next roadmap phase, now that a real job system exists to run it on.
