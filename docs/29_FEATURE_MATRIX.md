@@ -20,14 +20,14 @@ Authoritative, honest status per capability from the original project brief. Sta
 | 14 | Agent memory | NOT STARTED | 6 | |
 | 15 | Conversation history | MVP DONE | 1 | Persisted to SQLite, multi-turn continuity verified |
 | 16 | User/project context | NOT STARTED | 1/6 | Basic in Phase 1, full in Phase 6 |
-| 17 | Multi-model orchestration | NOT STARTED | 2 | Registry exists; only one (mock) provider registered so far |
-| 18 | Model routing | NOT STARTED | 2 | Minimal router exists (default-provider only); real routing/fallback logic is Phase 2 |
+| 17 | Multi-model orchestration | MVP DONE | 2 | Three real adapters (Anthropic/OpenAI/Google) + mock all registered; conditional on env vars |
+| 18 | Model routing | MVP DONE | 2 | Real fallback-on-failure verified against live (invalid-key) API calls to all three providers, not just mocked |
 | 19 | Background jobs | NOT STARTED | 7 | |
 | 20 | Queue-based long-running tasks | NOT STARTED | 7 | |
 | 21 | Streaming responses | MVP DONE | 1 | SSE token streaming verified end-to-end (curl + browser) |
 | 22 | Progress reporting | MVP DONE | 3/7 | Live SSE task/node events verified end-to-end; job-level (Phase 7) still pending |
 | 23 | Cancellation/resume of long-running jobs | MVP DONE | 3/7 | Agent-level cancel + crash-restart resume both verified for real (incl. mutating-tool reconciliation path); job-level in Phase 7 |
-| 24 | Retry and failure recovery | MVP DONE | 2/7 | Node-level retry with real classification verified (a genuine path-traversal bug was caught and fixed via this exact testing); provider-level fallback and job-level recovery are Phase 2/7 |
+| 24 | Retry and failure recovery | MVP DONE | 2/7 | Node-level retry verified (caught a real infinite-loop bug); provider-level fallback now verified against real live-endpoint failures too (ADR-024); job-level recovery is Phase 7 |
 | 25 | Authentication and authorization | NOT STARTED | 1 | Self-hosted per ADR-008 |
 | 26 | Usage tracking | NOT STARTED | 11/15 | |
 | 27 | Cost/token/resource tracking | NOT STARTED | 15 | |
@@ -38,7 +38,7 @@ Authoritative, honest status per capability from the original project brief. Sta
 | 32 | Plugin/tool architecture | MVP DONE | 4 | Native + MCP tools share one registry/permission gate, verified with both origins |
 | 33 | Cloud deployment | NOT STARTED | 14 | Docs/IaC only until authorized, ADR-011 |
 | 34 | Observability | NOT STARTED | 12 | |
-| 35 | Automated testing | NOT STARTED | 1–13 | Continuous, not a single phase |
+| 35 | Automated testing | IN PROGRESS | 1–13 | Vitest introduced in Phase 2 (9 real fixture-based provider adapter tests, `npm test` works); no coverage yet for agent-core/tools/API — continuous, not a single phase |
 | 36 | Security controls | MVP DONE | 4/11 | Path-traversal protection, risk-tiered approval gating, and MCP disabled-by-default all verified for real in Phase 4; full pass (rate limiting, auth, SSRF, etc.) is Phase 11 |
 | 37 | Extensible architecture for future capabilities | IN PROGRESS | 0 | Provider/tool/adapter patterns are the mechanism — see [[24_PROJECT_STRUCTURE]], [[26_DECISIONS]] |
 
@@ -57,4 +57,6 @@ Authoritative, honest status per capability from the original project brief. Sta
 
 **Phase 3 and Phase 4 exit criteria also met (2026-08-31, done together since tool-calling is load-bearing for any non-trivial agent task):** the full state machine + task graph + dispatcher + verification + retry + approval gate + crash-recovery reconciliation all work, verified against real scenarios including a deliberately-induced crash mid-tool-call and a path-traversal attack attempt — the latter surfaced and fixed a genuine infinite-loop bug in the dispatcher (see PROJECT_STATUS.md). MCP integration connects to a real external server subprocess, not a stub. Deferred by deliberate, documented scope decision (ADR-018): LLM-driven planning, conditional/loop/sub-agent node types, the plan-invalidating replan loop, and OS-level MCP subprocess sandboxing.
 
-**Phase 5 (coding agent) exit criteria also met (2026-08-31)**, honestly scoped per ADR-022: given a real repo with a deliberately failing test, the agent ran the real test via a sandboxed, allow-listed terminal tool, parsed the real failure output, applied an exact fix to the actual source file on disk, and re-ran the test to confirm a real pass — end to end, no human editing in between. The "fix" is a deterministic literal-value correction driven by a structured failure signal, not free-form LLM reasoning (no real model key is configured yet — see ADR-018's identical reasoning for the planner). Next: Phase 2 (real LLM provider adapters) is the natural next step for both the planner and the coding agent to graduate from deterministic/rule-based to genuinely reasoning.
+**Phase 5 (coding agent) exit criteria also met (2026-08-31)**, honestly scoped per ADR-022: given a real repo with a deliberately failing test, the agent ran the real test via a sandboxed, allow-listed terminal tool, parsed the real failure output, applied an exact fix to the actual source file on disk, and re-ran the test to confirm a real pass — end to end, no human editing in between. The "fix" is a deterministic literal-value correction driven by a structured failure signal, not free-form LLM reasoning (no real model key is configured yet — see ADR-018's identical reasoning for the planner).
+
+**Phase 2 (real LLM provider adapters) MVP-complete (2026-08-31)**, per the user's explicit choice to keep building without providing a key yet: all three adapters (Anthropic, OpenAI, Google) are built against the raw documented HTTP/SSE API shapes (ADR-023) with 9 passing fixture-based unit tests, and — going further than fixtures alone — each was verified with a real network call to its actual live endpoint using a deliberately invalid key, confirming genuinely correct request construction via a real (not simulated) authentication error in each provider's documented error format. The router's fallback-to-mock (ADR-024) was verified the same way: a real live-API failure, not a mocked one, triggered a real fallback. What's still open: the success path (an actual completion) needs a real key to verify, which the user has deferred — the platform is fully ready for one to be dropped in with zero code changes. First automated test suite in the project (Vitest) also landed this phase.

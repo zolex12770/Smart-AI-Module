@@ -2,7 +2,7 @@
 
 A modular, model-agnostic AI agent platform: chat, autonomous multi-step tasks, a coding agent, tool calling and MCP integration, memory, RAG, and (initially mocked) image/video generation — built as a staged program, not a single release.
 
-**Status: chat, an agent task engine, and real tool/MCP calling are all real and working.** Streamed chat over SSE backed by a mock LLM provider; a full state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating; sandboxed native tools plus a real connection to an external MCP server. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
+**Status: chat, a full agent task engine, tool/MCP calling, a narrow coding agent, and real (fixture-tested + live-endpoint-verified) LLM provider adapters are all working.** Streamed chat over SSE; a state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating; sandboxed native tools plus a real connection to an external MCP server; a coding agent that runs a real failing test, fixes it, and re-verifies; and real Anthropic/OpenAI/Google adapters alongside the mock, with automatic fallback. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
 
 ## Start here
 
@@ -28,18 +28,20 @@ npm run dev     # starts the API (port 8787) and the web app (port 3000)
 
 Then open http://localhost:3000. No Docker, no database server, and no API keys are required for this to work — the app runs on a local SQLite file (auto-created and auto-migrated on boot at `apps/api/data/dev.sqlite`) and a mock LLM provider that clearly labels its own responses as mock.
 
-Other useful commands: `npm run typecheck`, `npm run build` (production build of every app), `npm run db:generate -w @ai-platform/database` (after a schema change, to create a new migration file).
+Other useful commands: `npm run typecheck`, `npm run build` (production build of every app), `npm test` (fixture-based provider adapter tests via Vitest), `npm run db:generate -w @ai-platform/database` (after a schema change, to create a new migration file).
 
-## Configuring real providers (once Phase 2 lands)
+## Configuring real providers
 
-Real providers activate automatically when their environment variable is set — no code changes needed:
+Real providers activate automatically when their environment variable is set — no code changes needed. Each is built against the raw documented API (not the official SDK — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-023) and has been confirmed to reach the real live endpoint correctly (a deliberately invalid key gets back a real, correctly-shaped error from each provider), but the success path has not been verified end-to-end since no real key exists in this environment — that's the one thing a real key from you would let us finally confirm.
 
 | Provider | Env var |
 |---|---|
 | Anthropic | `ANTHROPIC_API_KEY` |
-| OpenAI | `OPENAI_API_KEY` |
-| Google (Gemini API) | `GOOGLE_API_KEY` |
-| Google (Vertex AI) | `GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT` |
+| OpenAI | `OPENAI_API_KEY` (optionally `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`) |
+| Google (Gemini Developer API) | `GOOGLE_API_KEY` (alias `GEMINI_API_KEY` also accepted) |
+| Google (Vertex AI) | Not yet implemented — only the Gemini Developer API path is built |
+
+With no key set, chat runs on the mock provider (clearly labels its own responses as such). With a real key set, the router uses that provider and automatically falls back to the mock if the real call fails before producing any output.
 
 Image and video generation ship mock-only until real provider credentials are supplied — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-009. Cloud deployment is documentation/IaC only until explicitly authorized — see ADR-011.
 

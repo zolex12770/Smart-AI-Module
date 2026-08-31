@@ -12,6 +12,9 @@
     { "path": "../../packages/database" },
     { "path": "../../packages/model-router" },
     { "path": "../../packages/providers/llm-mock" },
+    { "path": "../../packages/providers/llm-anthropic" },
+    { "path": "../../packages/providers/llm-openai" },
+    { "path": "../../packages/providers/llm-google" },
     { "path": "../../packages/tools" },
     { "path": "../../packages/mcp" },
     { "path": "../../packages/agent-core" }

@@ -274,3 +274,33 @@ New decisions are appended at the bottom. Do not edit past decisions to hide his
 
 **Date:** 2026-08-31
 **Impact:** `packages/tools/src/native/{terminal,coding}.ts`; [[29_FEATURE_MATRIX]] marks "Coding Agent" MVP DONE for this narrow class, not DONE — general LLM-driven code fixing is Phase 2-dependent future work, same as planning (ADR-018).
+
+---
+
+## ADR-023: Real LLM provider adapters built with raw `fetch`, not the official SDKs
+
+**Decision:** `packages/providers/llm-anthropic`, `llm-openai`, and `llm-google` call each provider's documented HTTP/SSE API directly via `fetch` (with an injectable `fetchImpl` for testing), rather than depending on `@anthropic-ai/sdk`, `openai`, or `@google/genai`.
+
+**Reason:** No real API key exists for any of the three providers in this environment ([[26_DECISIONS]] ADR-010), so nothing here can be exercised against a live endpoint regardless of which HTTP layer is used — the only thing actually verifiable right now is that request construction and SSE response parsing correctly implement the documented shapes in [[04_MODEL_PROVIDER_RESEARCH]]/[[28_API_PROVIDER_MATRIX]]. Hand-rolling that against the raw documented JSON/SSE shapes, with fixture-based unit tests asserting the exact parsing logic, is more honestly verifiable than depending on three additional SDKs whose current major-version APIs cannot be checked against a live call either, and which would add real dependency/security-surface overhead (matching the same `npm audit` discipline applied to every other dependency choice, e.g. ADR-006's version bumps) for no verification benefit in this specific situation. This also keeps every adapter a small, auditable, directly-comparable translation of the same documented request/response shapes, consistent with [[10_TOOL_AND_MCP_ARCHITECTURE]] §1.4's "one canonical schema, thin per-provider adapter" pattern already used for tools.
+
+**Tradeoffs:** Hand-rolled HTTP clients don't get a vendor SDK's automatic handling of retries, edge-case response shapes, or API evolution (e.g. Google's Interactions API migration, OpenAI's Responses-vs-Chat-Completions churn — both noted in [[04_MODEL_PROVIDER_RESEARCH]]). **This is a real, honestly-tracked gap, not a permanent decision**: revisit once a real key exists and live-call testing is possible — at that point, compare the hand-rolled adapter's actual behavior against the official SDK's before deciding whether to keep it or migrate, rather than assuming either is correct without evidence.
+
+**Date:** 2026-08-31
+**Impact:** Zero new runtime dependencies for the three provider packages beyond `@ai-platform/shared`. Each adapter's file header states its verification status explicitly — do not remove or overstate it until a real end-to-end *success* has actually happened.
+
+**Update (same day):** each adapter was additionally exercised with a deliberately invalid key against its real live endpoint (`api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`) through the running API + ADR-024's router fallback. All three reached the real endpoint and received a real, correctly-shaped error response in that provider's documented error format (confirming request construction — URL, headers, auth, model path — is genuinely correct), and the router's fallback-to-mock then worked exactly as designed, verified via a real network round-trip rather than a mocked one. This is real partial verification, not full verification: the success path (parsing an actual streamed completion) still requires a valid key and remains untested.
+
+---
+
+## ADR-024: Model router fallback — commit-on-first-event, no mid-stream provider switching
+
+**Decision:** `ModelRouter.streamChat` tries the default provider first (or the caller's explicitly-named provider, with no fallback substitution if that fails), and falls back through the rest of the registry in order — but only while a candidate provider has not yet produced its first real event. Once a provider yields a first token, the router is committed to it for the rest of that response; a failure after that point ends the stream with a clean `error` event, not a silent retry against a different provider.
+
+**Reason:** falling back mid-stream would mean a user could see a partial response from one model abruptly followed by a full response from a different one for the same turn — more confusing than a clean failure, and semantically wrong (the two providers aren't guaranteed to continue each other's partial text coherently). Committing only after the first successful event keeps fallback invisible and safe (an all-or-nothing swap before any output is shown) while still surfacing a genuine mid-stream failure honestly instead of masking it.
+
+**Verified for real** (not just unit-tested): with a deliberately invalid `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`GOOGLE_API_KEY` set one at a time, each real provider genuinely failed its first call (a real 401/400 from the live API — see ADR-023's update above) and the router transparently fell back to the mock provider, which completed the response normally; a `console.warn` records each fallback for operator visibility.
+
+**Alternatives considered:** Retry the same provider before falling back — deferred; the per-request retry/backoff policy from [[23_FAILURE_RECOVERY]] is a distinct, not-yet-implemented layer above this router-level provider fallback, which handles "this provider is unavailable," not "this call transiently failed."
+
+**Date:** 2026-08-31
+**Impact:** `packages/model-router/src/router.ts`. Explicit `request.provider` still means "use exactly this one" — no automatic substitution — matching the principle that an explicit caller choice shouldn't be silently overridden.

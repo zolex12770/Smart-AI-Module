@@ -13,7 +13,12 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  OPENAI_ORG_ID: z.string().optional(),
+  OPENAI_PROJECT_ID: z.string().optional(),
+  // docs/28_API_PROVIDER_MATRIX.md: the SDK convention accepts GEMINI_API_KEY as an
+  // alias for GOOGLE_API_KEY — support either name so either doc's instructions work.
   GOOGLE_API_KEY: z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

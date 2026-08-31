@@ -11,7 +11,10 @@ import {
   SqliteTaskRepository,
   SqliteTaskTransitionRepository,
 } from "@ai-platform/database";
+import { AnthropicProvider } from "@ai-platform/llm-anthropic";
+import { GoogleProvider } from "@ai-platform/llm-google";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
+import { OpenAIProvider } from "@ai-platform/llm-openai";
 import { connectMcpServer } from "@ai-platform/mcp";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
@@ -26,9 +29,29 @@ async function main() {
   await runMigrations(db);
 
   const registry = new ModelRegistry();
-  // Phase 2 registers real adapters here when their API key is present
-  // (docs/26_DECISIONS.md ADR-010); Phase 1 always has the mock as a safety net.
-  registry.register(new MockLLMProvider(), { asDefault: true });
+
+  // Real adapters register only when their API key is present (docs/26_DECISIONS.md
+  // ADR-010); each has been fixture-tested, not live-tested (ADR-023) — the mock
+  // registers unconditionally as both the zero-credential default and a safety net.
+  if (config.ANTHROPIC_API_KEY) {
+    registry.register(new AnthropicProvider({ apiKey: config.ANTHROPIC_API_KEY }));
+  }
+  if (config.OPENAI_API_KEY) {
+    registry.register(
+      new OpenAIProvider({
+        apiKey: config.OPENAI_API_KEY,
+        organizationId: config.OPENAI_ORG_ID,
+        projectId: config.OPENAI_PROJECT_ID,
+      })
+    );
+  }
+  const googleApiKey = config.GOOGLE_API_KEY ?? config.GEMINI_API_KEY;
+  if (googleApiKey) {
+    registry.register(new GoogleProvider({ apiKey: googleApiKey }));
+  }
+
+  const hasRealProvider = Boolean(config.ANTHROPIC_API_KEY || config.OPENAI_API_KEY || googleApiKey);
+  registry.register(new MockLLMProvider(), { asDefault: !hasRealProvider });
 
   const sandboxRoot = resolve(config.SANDBOX_ROOT);
   mkdirSync(sandboxRoot, { recursive: true });

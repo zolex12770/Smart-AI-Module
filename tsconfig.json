@@ -3,6 +3,9 @@
   "references": [
     { "path": "packages/shared" },
     { "path": "packages/providers/llm-mock" },
+    { "path": "packages/providers/llm-anthropic" },
+    { "path": "packages/providers/llm-openai" },
+    { "path": "packages/providers/llm-google" },
     { "path": "packages/model-router" },
     { "path": "packages/database" },
     { "path": "packages/tools" },

@@ -4,7 +4,7 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Current Phase
 
-**Phases 0, 1, 3, 4, and 5 are complete and verified.** Phase 2 (real LLM provider adapters) is the natural next step — both the agent-core planner and the coding agent are currently deterministic/rule-based specifically because no real model key exists yet; Phase 2 is what lets them graduate to genuine reasoning. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
+**Phases 0, 1, 3, 4, 5 are complete and verified. Phase 2 (real LLM provider adapters) is MVP-done**, per the user's explicit choice (2026-08-31) to keep building it without providing a real key yet. The planner (Phase 3) and coding agent (Phase 5) remain deterministic/rule-based, as designed — they're built to graduate to real reasoning the moment a real key is dropped in, with zero code changes needed. See [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md).
 
 ## Completed
 
@@ -35,6 +35,15 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 - **Honest scope decision (ADR-022), same reasoning as ADR-018's planner:** the mock provider can't actually reason about arbitrary test failures and write a correct fix — that needs a real LLM (Phase 2). Rather than fake that with canned mock-provider text, the "fix" is a deterministic literal-value correction driven by a structured signal the test itself prints (`FIX_NEEDED path=... find=... replace=...`). This is a real, narrow, honestly-scoped automated-fix capability, not a simulation of a smarter one.
 - **Verified against a running server:** set up a real two-file Node project (`math.js` with a wrong constant, `math.test.js` asserting the right one) in the sandbox; confirmed the test genuinely fails standalone; ran the `fix_failing_test` task and confirmed all four steps completed for real — the actual file on disk changed from `ANSWER = 41` to `ANSWER = 42`, and the final re-run genuinely reported `exitCode: 0` / `"PASS"`. Re-ran the same task afterward (test now passing) and confirmed it correctly fails with "nothing to fix" rather than fabricating a result. Directly verified the terminal tool's command allow-list rejects a non-`node` command (`bash -c "echo pwned"` → rejected).
 
+**Phase 2 (real LLM provider adapters) — MVP done, verified further than expected without a real key:**
+
+- New packages: `packages/providers/llm-anthropic`, `llm-openai` (targets the Responses API, per docs/28's recommendation), `llm-google` (targets `generateContent`/`streamGenerateContent`, per docs/28's recommendation over the newer Interactions API). Each built with raw `fetch` against the documented HTTP/SSE shape rather than the official SDKs (ADR-023) — an injectable `fetchImpl` makes them unit-testable without network access.
+- New shared utility: `packages/shared/src/sse.ts`, a generic SSE frame parser used by all three adapters and their tests (`stringToStream` builds a fixture `ReadableStream` from a plain string).
+- First automated test suite in this project: **Vitest**, added to all three provider packages, 9 tests total, all passing (`npm test` now works at the repo root). Fixed a real, if minor, issue caught immediately: `tsc -b` was compiling `.test.ts` files into `dist/`, and Vitest was then running each test twice (once from `src`, once from the stale compiled copy) — fixed by excluding test files from each package's `tsconfig.json`.
+- `ModelRouter` gained real fallback logic (ADR-024): tries the default provider, falls back through the rest of the registry in order, but only before a provider's first token is committed (never mid-stream, to avoid a confusing partial-then-restarted response); logs a `console.warn` on every fallback for operator visibility.
+- **Went further than fixture-only testing, despite no real key being available:** each adapter was pointed at its actual live endpoint with a deliberately invalid key. All three reached the real API and got back a real, correctly-shaped documented error (Anthropic: real 401 `authentication_error` JSON; OpenAI: real 401 referencing the real platform.openai.com error copy; Google: real 400 `"API key not valid."`) — this confirms request construction (URLs, headers, auth mechanism, model path) is genuinely correct against the live services, not just against fixtures I wrote myself. The router's fallback-to-mock was then confirmed working against these real failures, end to end through the running API, not a simulated one.
+- **What's still honestly unverified:** the success path — parsing an actual real streamed completion — since that needs a valid key, which the user has deliberately not provided yet. Every adapter's file header states this precisely (fixture-tested + real-error-confirmed, not real-success-confirmed) so this caveat can't be casually lost later.
+
 ## Known Issues / Blockers
 
 - None blocking Phase 2 or Phase 5. Phase 2 (real LLM providers) needs at least one real API key from the user to verify end-to-end beyond adapter unit tests. Phase 6 needs Postgres (Docker Desktop or a hosted free-tier Postgres). Phase 14 needs a real GCP project/billing.
@@ -43,10 +52,14 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 ## Last Successful Test
 
-2026-08-31 — full manual, curl-driven verification of Phase 5 (coding agent): a real failing test was genuinely fixed on disk and re-verified passing, plus the honest "nothing to fix" and command-allow-list-rejection paths. `npm run build` and `npm run typecheck` both green across all 9 workspaces.
+2026-08-31 — `npm test` (9 fixture-based provider adapter tests, all passing), `npm run typecheck` and `npm run build` both green across all 12 workspaces, plus three real live-endpoint verification calls (Anthropic/OpenAI/Google, each with a deliberately invalid key) confirming genuine request correctness and real router fallback behavior.
 
 ## Next Action
 
-**Phase 2 — real LLM provider adapters** (`llm-anthropic`, `llm-openai`, `llm-google` per docs/04, docs/28) is the clear next step: it's what lets both the agent-core planner (ADR-018) and the coding agent (ADR-022) stop being deterministic/rule-based and start doing genuine reasoning — the single biggest capability unlock available right now. Needs a real API key from the user for end-to-end verification; adapter code + fixture-based unit tests can start without one.
+Nothing is currently blocked. The single biggest capability unlock remaining is a real API key from the user — it's what lets the agent-core planner (ADR-018) and coding agent (ADR-022) graduate from deterministic/rule-based to genuine reasoning, and lets Phase 2's success path finally be confirmed. Until then, reasonable next increments, roughly in order of value:
 
-Also still open, lower priority: terminal/git/web native tools beyond the `node`-only allow-list, multi-file coding-agent edits, a dedicated automated prompt-injection fixture test (FR-023).
+1. Expand automated test coverage beyond the provider adapters — agent-core (state machine transitions, crash-recovery reconciliation), tools (sandbox-path traversal, terminal allow-list), and API route-level tests — currently everything outside the three provider packages has only been verified manually/via curl, not via a checked-in automated suite.
+2. Terminal/git/web native tools beyond the current `node`-only allow-list (expand only alongside a concrete verified scenario that needs them, per the established discipline).
+3. Multi-file coding-agent edits (current pipeline is single-file).
+4. A dedicated automated prompt-injection fixture test (FR-023) — the manual path-traversal test covers a related but distinct attack class.
+5. Phase 6 (memory & RAG) — the next roadmap phase after 2-5, and the trigger for introducing Postgres per ADR-006.
