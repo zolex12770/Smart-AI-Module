@@ -47,9 +47,8 @@ Authoritative, honest status per capability from the original project brief. Sta
 | Doc | Status |
 |---|---|
 | 00–01, 24–27, 29 (this file) | DONE (written directly) |
-| 02, 03, 08–11 | IN PROGRESS (research agent dispatched) |
-| 04, 12, 28 | IN PROGRESS (research agent dispatched) |
-| 05–07 | IN PROGRESS (research agent dispatched) |
-| 13, 18, 20–21 | IN PROGRESS (research agent dispatched) |
-| 14–17, 19, 22–23 | NOT STARTED — architecture-synthesis docs written after research lands and stack is finalized |
-| 30 (Final System Spec) | NOT STARTED — written at program completion |
+| 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 18, 20, 21, 28 | DONE (research agents completed 2026-08-31, verified present and substantive) |
+| 14–17, 19, 22–23 | DONE — architecture-synthesis docs written, informed by completed research |
+| 30 (Final System Spec) | DRAFTED as target-state spec (2026-08-31); re-validated against actual implementation at program completion (Phase 15) |
+
+**All 31 Phase 0 documents now exist with substantive content.** Phase 0 exit criteria met — see [[25_IMPLEMENTATION_ROADMAP]]. Next: Phase 1 scaffolding.
