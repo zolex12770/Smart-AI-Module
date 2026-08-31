@@ -4,6 +4,7 @@ import type { AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
 import { registerHealthRoute } from "./routes/health.js";
+import { registerAgentRoutes } from "./routes/v1/agent.js";
 import { registerChatRoute } from "./routes/v1/chat.js";
 
 export async function buildServer(config: AppConfig, ctx: AppContext) {
@@ -14,6 +15,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext) {
   registerErrorHandler(app);
   registerHealthRoute(app);
   registerChatRoute(app, ctx);
+  registerAgentRoutes(app, ctx);
 
   return app;
 }

@@ -11,6 +11,9 @@
     { "path": "../../packages/shared" },
     { "path": "../../packages/database" },
     { "path": "../../packages/model-router" },
-    { "path": "../../packages/providers/llm-mock" }
+    { "path": "../../packages/providers/llm-mock" },
+    { "path": "../../packages/tools" },
+    { "path": "../../packages/mcp" },
+    { "path": "../../packages/agent-core" }
   ]
 }

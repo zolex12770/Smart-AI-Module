@@ -218,3 +218,44 @@ New decisions are appended at the bottom. Do not edit past decisions to hide his
 
 **Date:** 2026-08-31
 **Impact:** None yet — Phase 14 is documentation/IaC only per ADR-011 and is not authorized to provision anything.
+
+---
+
+## ADR-018: Agent-core Phase 3/4 scope — deterministic planner, atomic nodes only, real MCP integration
+
+**Decision:** The first working implementation of [[11_AGENT_LOOP]] and [[10_TOOL_AND_MCP_ARCHITECTURE]] (`packages/agent-core`, `packages/tools`, `packages/mcp`) covers: the full 13-state task state machine; `atomic` task-graph nodes scheduled purely via `dependsOn` (sufficient to express sequential graphs, per [[11_AGENT_LOOP]] §3.2 — `sequential_group`/`parallel_group`/`conditional`/`loop`/`sub_agent` are reserved in the type enum but not executed by the dispatcher yet); `schema_check`/`deterministic_compare`/`none` verification (`test_suite`/`model_judge`/`human` throw rather than silently pass if ever hit); per-node retry with correct classification-ready plumbing (the `plan-invalidating` replan-loop transition is not wired up — see rationale below); commit-before-act persistence with real crash-recovery reconciliation (§4.2–4.3); a sandboxed native filesystem tool set with real permission-tiered approval gating; and a real (not simulated) MCP client connected to the official `@modelcontextprotocol/server-filesystem` reference server over stdio.
+
+**Reason — deterministic planner instead of LLM-driven planning:** [[11_AGENT_LOOP]]'s `PLANNING` state is designed for an LLM that reasons about arbitrary requests. Building that against the mock provider (no real LLM key configured — [[26_DECISIONS]] ADR-010) would produce a planner that can't actually reason, i.e. theater dressed as a feature. A small rule-based planner (`packages/agent-core/src/planner.ts`) for four known task shapes (`echo_chat`, `read_and_summarize`, `mcp_read_and_summarize`, `delete_sandbox_file`) exercises the entire state machine, task graph, tool-calling, approval, and persistence machinery for real, honestly, without claiming reasoning that isn't there. Swapping in an LLM-driven planner once Phase 2 has a real provider key is a `planner.ts`-only change — the dispatcher, verification, and persistence layers don't know or care how a graph was produced.
+
+**Reason — plan-invalidating replan loop not wired up:** [[11_AGENT_LOOP]] §2.2 specifies that retry exhaustion can escalate to a return-to-`PLANNING` replan, not just `FAILED`. With a deterministic planner, replanning would deterministically reproduce the identical graph and fail again — implementing the loopback now would mean building infinite-loop protection for a code path that can't yet produce a different outcome. Retry exhaustion always terminates as `FAILED` in this increment; the state machine still supports the `PLANNING`-reachable-from-`VERIFYING` transition for when a real planner makes replanning meaningful.
+
+**Reason — real MCP server over a fake one:** connecting to an actual `@modelcontextprotocol/server-filesystem` subprocess (not a hand-rolled stub pretending to speak MCP) is what makes "MCP integration works" a verified claim rather than an assertion — see PROJECT_STATUS.md for the concrete verification (14 real tools discovered, registered disabled-by-default per [[10_TOOL_AND_MCP_ARCHITECTURE]] §3.2, one explicitly enabled and called through the real subprocess).
+
+**Alternatives considered:** Waiting for Phase 2 (real LLM provider) before starting agent-core at all — rejected; the state machine, persistence, crash-recovery, and tool/MCP infrastructure are all independent of *which* planner produces a graph, per [[01_REQUIREMENTS]]'s own phase-gating logic, and building them now means Phase 2's real planner has real infrastructure to slot into rather than being built together with it.
+
+**Date:** 2026-08-31
+**Impact:** [[29_FEATURE_MATRIX]] marks task graph/tool-calling/MCP as MVP DONE, not DONE — full completion needs the deferred node types and an LLM-driven planner.
+
+---
+
+## ADR-019: MCP tool trust — name-based permission-level heuristic, disabled by default
+
+**Decision:** A newly-discovered MCP tool's `permissionLevel` is inferred from its name (patterns like `delete|remove|drop` → `destructive`, `write|create|move|rename|edit` → `write_local`, else `read_only`) and every discovered tool is registered with `enabled: false` regardless of inferred risk, requiring an explicit operator action (`POST /api/v1/tools/:id/enable`) before it's callable.
+
+**Reason:** [[10_TOOL_AND_MCP_ARCHITECTURE]] §2.6 is explicit that MCP gives a tool's name/description/schema, not a trust level — the host must assign one, and §3.2 specifies disabled-by-default for newly-discovered tools as the mitigation for tool-poisoning risk (§2.5). A name-based heuristic is a real, working ASSUMED policy (labeled as such), not a permanent design — verified in practice against the reference filesystem server's 14 real tools (`read_text_file` → `read_only`, `edit_file`/`write_file`/`move_file` → `write_local`, correctly matching their actual behavior).
+
+**Tradeoffs:** A tool whose name doesn't hint at its risk (or is deliberately misleading — the tool-poisoning scenario this whole mechanism defends against) could be misclassified as lower-risk than it is. The disabled-by-default requirement is the actual safety net here, not the heuristic — an operator reviewing a tool's real description before enabling it is what catches a heuristic miss.
+
+**Date:** 2026-08-31
+**Impact:** `packages/mcp/src/client.ts`'s `inferPermissionLevel`; revisit if/when MCP servers carry richer standardized risk metadata.
+
+---
+
+## ADR-021: No OS-level sandboxing for the spawned MCP subprocess (yet)
+
+**Decision:** The MCP reference server is spawned as a normal child process (via Node's `child_process`, through the MCP SDK's `StdioClientTransport`) with the platform's own OS user privileges — no container, restricted user, or seccomp profile around it.
+
+**Reason:** [[10_TOOL_AND_MCP_ARCHITECTURE]] §2.5 is explicit that a local stdio MCP server has full subprocess privileges unless the host imposes isolation, and that MCP itself provides none. Building real OS-level sandboxing (containerization or a restricted-user spawn) is a meaningful chunk of platform-specific work that wasn't in scope for proving the MCP integration itself works end-to-end. This is a known, accepted gap for this increment.
+
+**Date:** 2026-08-31
+**Impact:** Tracked in [[27_RISKS_AND_LIMITATIONS]] as a standing item — required before connecting to any MCP server whose trustworthiness isn't fully controlled (the reference filesystem server, running against our own sandbox directory, was chosen specifically because this gap doesn't create real exposure yet).

@@ -10,15 +10,19 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-platform/agent-core": "*",
+    "@ai-platform/mcp": "*",
     "@ai-platform/database": "*",
     "@ai-platform/llm-mock": "*",
     "@ai-platform/model-router": "*",
     "@ai-platform/shared": "*",
+    "@ai-platform/tools": "*",
     "@fastify/cors": "^11.3.0",
     "fastify": "^5.12.1",
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@modelcontextprotocol/server-filesystem": "^2026.7.10",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3"
   }

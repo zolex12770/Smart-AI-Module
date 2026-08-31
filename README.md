@@ -2,7 +2,7 @@
 
 A modular, model-agnostic AI agent platform: chat, autonomous multi-step tasks, a coding agent, tool calling and MCP integration, memory, RAG, and (initially mocked) image/video generation — built as a staged program, not a single release.
 
-**Status: Phase 1 — a minimal chat loop is real and working** (streamed chat over SSE, backed by a mock LLM provider and a persisted SQLite conversation history). See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
+**Status: chat, an agent task engine, and real tool/MCP calling are all real and working.** Streamed chat over SSE backed by a mock LLM provider; a full state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating; sandboxed native tools plus a real connection to an external MCP server. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
 
 ## Start here
 

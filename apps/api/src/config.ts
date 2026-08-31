@@ -9,6 +9,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(8787),
   DATABASE_FILE: z.string().default("./data/dev.sqlite"),
+  SANDBOX_ROOT: z.string().default("./data/sandbox"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),

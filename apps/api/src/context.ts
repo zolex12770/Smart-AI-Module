@@ -1,5 +1,7 @@
-import type { ConversationRepository, MessageRepository } from "@ai-platform/database";
+import type { AgentEngine } from "@ai-platform/agent-core";
+import type { ConversationRepository, MessageRepository, TaskNodeRepository, TaskRepository } from "@ai-platform/database";
 import type { ModelRouter } from "@ai-platform/model-router";
+import type { ToolRegistry } from "@ai-platform/tools";
 
 /**
  * Composition-root context passed into route registration — plain constructor
@@ -10,4 +12,8 @@ export interface AppContext {
   conversations: ConversationRepository;
   messages: MessageRepository;
   corsOrigin: string;
+  engine: AgentEngine;
+  tasks: TaskRepository;
+  taskNodes: TaskNodeRepository;
+  toolRegistry: ToolRegistry;
 }
