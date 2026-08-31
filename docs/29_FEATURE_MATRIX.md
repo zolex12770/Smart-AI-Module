@@ -4,7 +4,7 @@ Authoritative, honest status per capability from the original project brief. Sta
 
 | # | Capability | Status | Phase | Notes |
 |---|---|---|---|---|
-| 1 | General AI chat / Q&A | NOT STARTED | 1–2 | Docs done; scaffolding next |
+| 1 | General AI chat / Q&A | MVP DONE | 1–2 | Working end-to-end against mock provider, verified in browser; real providers land in Phase 2 |
 | 2 | Coding Agent | NOT STARTED | 5 | Depends on agent core + tools |
 | 3 | Autonomous multi-step task execution | NOT STARTED | 3 | |
 | 4 | Image generation | NOT STARTED | 8 | Will ship MOCKED first (ADR-009) |
@@ -18,13 +18,13 @@ Authoritative, honest status per capability from the original project brief. Sta
 | 12 | Tool calling | NOT STARTED | 4 | |
 | 13 | MCP integration | NOT STARTED | 4 | |
 | 14 | Agent memory | NOT STARTED | 6 | |
-| 15 | Conversation history | NOT STARTED | 1 | |
+| 15 | Conversation history | MVP DONE | 1 | Persisted to SQLite, multi-turn continuity verified |
 | 16 | User/project context | NOT STARTED | 1/6 | Basic in Phase 1, full in Phase 6 |
-| 17 | Multi-model orchestration | NOT STARTED | 2 | |
-| 18 | Model routing | NOT STARTED | 2 | |
+| 17 | Multi-model orchestration | NOT STARTED | 2 | Registry exists; only one (mock) provider registered so far |
+| 18 | Model routing | NOT STARTED | 2 | Minimal router exists (default-provider only); real routing/fallback logic is Phase 2 |
 | 19 | Background jobs | NOT STARTED | 7 | |
 | 20 | Queue-based long-running tasks | NOT STARTED | 7 | |
-| 21 | Streaming responses | NOT STARTED | 1 | |
+| 21 | Streaming responses | MVP DONE | 1 | SSE token streaming verified end-to-end (curl + browser) |
 | 22 | Progress reporting | NOT STARTED | 7 | |
 | 23 | Cancellation/resume of long-running jobs | NOT STARTED | 3/7 | Agent-level in Phase 3, job-level in Phase 7 |
 | 24 | Retry and failure recovery | NOT STARTED | 2/7 | Provider-level Phase 2, job-level Phase 7 |
@@ -32,9 +32,9 @@ Authoritative, honest status per capability from the original project brief. Sta
 | 26 | Usage tracking | NOT STARTED | 11/15 | |
 | 27 | Cost/token/resource tracking | NOT STARTED | 15 | |
 | 28 | Admin controls | NOT STARTED | 10 | |
-| 29 | API access | NOT STARTED | 1 | `/api/v1` from the start |
-| 30 | Web application UI | NOT STARTED | 1/10 | Minimal Phase 1, complete Phase 10 |
-| 31 | Developer/API interface | NOT STARTED | 1 | Same API serves both |
+| 29 | API access | MVP DONE | 1 | `/api/v1/chat` live; rest of the surface in `docs/15_API_ARCHITECTURE.md` lands with the features it backs |
+| 30 | Web application UI | MVP DONE | 1/10 | Minimal chat screen working; full screen set is Phase 10 |
+| 31 | Developer/API interface | MVP DONE | 1 | Verified directly via `curl`, independent of the web UI |
 | 32 | Plugin/tool architecture | NOT STARTED | 4 | |
 | 33 | Cloud deployment | NOT STARTED | 14 | Docs/IaC only until authorized, ADR-011 |
 | 34 | Observability | NOT STARTED | 12 | |
@@ -51,4 +51,6 @@ Authoritative, honest status per capability from the original project brief. Sta
 | 14–17, 19, 22–23 | DONE — architecture-synthesis docs written, informed by completed research |
 | 30 (Final System Spec) | DRAFTED as target-state spec (2026-08-31); re-validated against actual implementation at program completion (Phase 15) |
 
-**All 31 Phase 0 documents now exist with substantive content.** Phase 0 exit criteria met — see [[25_IMPLEMENTATION_ROADMAP]]. Next: Phase 1 scaffolding.
+**All 31 Phase 0 documents now exist with substantive content.** Phase 0 exit criteria met — see [[25_IMPLEMENTATION_ROADMAP]].
+
+**Phase 1 exit criteria also met (2026-08-31):** the minimal chat loop runs end-to-end against the mock provider with zero external services, verified in an actual browser session, not just by code review. See PROJECT_STATUS.md for the two real bugs this verification caught and fixed. Next: Phase 2 (real LLM provider adapters).

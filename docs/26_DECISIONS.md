@@ -188,6 +188,30 @@ New decisions are appended at the bottom. Do not edit past decisions to hide his
 
 ---
 
+## ADR-016: SQLite driver — libSQL (`@libsql/client`), not better-sqlite3
+
+**Decision:** The Phase 1 SQLite implementation (ADR-006) uses `@libsql/client` + `drizzle-orm/libsql`, not `better-sqlite3`.
+
+**Reason:** Discovered during actual Phase 1 scaffolding, not anticipated at doc-writing time: `better-sqlite3` requires native compilation via node-gyp, and this dev machine has no Visual Studio C++ Desktop workload/Windows SDK installed, and no prebuilt binary exists yet for Node 24.13.0 on win32/x64 (confirmed by a failed `npm install`). Rather than asking the user to install a multi-gigabyte C++ build toolchain just to run `npm install`, libSQL was substituted — it ships a prebuilt native binary for win32-x64 (`@libsql/win32-x64-msvc`) via napi-rs, installs with zero local compilation, and Drizzle supports it as a first-class SQLite driver with the same schema/query-builder API. Node's built-in `node:sqlite` was considered first (zero dependencies at all) but rejected because Drizzle has no driver integration for it as of this research.
+
+**Tradeoffs:** libSQL's client API is async throughout (vs. better-sqlite3's synchronous API) — a non-issue here since the repository interfaces in [[14_DATABASE_ARCHITECTURE]] were already written async-first (to match the Postgres implementation coming in Phase 6).
+
+**Date:** 2026-08-31 (Phase 1 scaffolding)
+**Impact:** `packages/database/src/client.ts` uses `createClient` from `@libsql/client`; no other package is aware of the driver choice, per the repository-interface isolation this was designed for.
+
+---
+
+## ADR-017: API default port — 8787, not 4000
+
+**Decision:** `apps/api` defaults to port 8787.
+
+**Reason:** Port 4000 was already occupied by unrelated, pre-existing processes on this dev machine when Phase 1 was verified end-to-end (confirmed via `netstat`/`tasklist` — unrelated `node.exe` processes, not this project). Rather than investigate or kill processes this project didn't start, the API's default port was moved. Purely a local default — `PORT` is always configurable via env.
+
+**Date:** 2026-08-31 (Phase 1 verification)
+**Impact:** `.env.example`, `apps/api/src/config.ts`, and `apps/web/app/lib/chat-stream.ts`'s fallback all use 8787.
+
+---
+
 ## ADR-015: GCP service selection detail — deferred to Phase 14, tracked here as a pointer
 
 **Decision:** No new decision needed now; recorded only so this file stays the single index of pending architectural calls. See [[18_CLOUD_ARCHITECTURE]] for the current recommendation (Cloud Run + Cloud SQL + Cloud Storage + Cloud Tasks(deferred, see ADR-012) + Secret Manager + Artifact Registry, GKE/AlloyDB/Pub-Sub explicitly deferred).

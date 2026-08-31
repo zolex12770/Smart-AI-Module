@@ -9,4 +9,8 @@ build/
 .claude/
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+apps/*/data/
 coverage/
+*.tsbuildinfo
