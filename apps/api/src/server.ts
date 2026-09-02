@@ -13,7 +13,11 @@ import { registerVideoRoutes } from "./routes/v1/videos.js";
 export async function buildServer(config: AppConfig, ctx: AppContext) {
   const app = Fastify({ logger: true });
 
-  await app.register(cors, { origin: config.CORS_ORIGIN });
+  // @fastify/cors defaults `methods` to "GET,HEAD,POST" only — DELETE (used by
+  // /api/v1/memory/:id) and PUT/PATCH would otherwise fail preflight in any real browser,
+  // a real bug found only by actual browser-driven UI testing (docs/25 Phase 10), never by
+  // curl (which doesn't enforce CORS at all) or by unit/integration tests.
+  await app.register(cors, { origin: config.CORS_ORIGIN, methods: ["GET", "POST", "PUT", "PATCH", "DELETE"] });
 
   registerErrorHandler(app);
   registerHealthRoute(app);

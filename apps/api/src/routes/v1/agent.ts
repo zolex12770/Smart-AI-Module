@@ -15,6 +15,8 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
     reply.status(201).send({ task });
   });
 
+  app.get("/api/v1/agent/tasks", async () => ({ tasks: await ctx.tasks.list() }));
+
   app.get<{ Params: { id: string } }>("/api/v1/agent/tasks/:id", async (request) => {
     const task = await ctx.tasks.get(request.params.id);
     if (!task) throw new NotFoundError(`Task "${request.params.id}" not found.`);

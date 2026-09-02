@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import type { DrizzleDb } from "../client.js";
 import { conversations } from "../schema/index.js";
@@ -17,6 +17,8 @@ export interface Conversation {
 export interface ConversationRepository {
   create(title?: string): Promise<Conversation>;
   get(id: string): Promise<Conversation | undefined>;
+  /** Most recent first — backs the `/chat` sidebar (docs/16_FRONTEND_ARCHITECTURE.md). */
+  list(): Promise<Conversation[]>;
 }
 
 export class PgConversationRepository implements ConversationRepository {
@@ -31,5 +33,9 @@ export class PgConversationRepository implements ConversationRepository {
   async get(id: string): Promise<Conversation | undefined> {
     const [row] = await this.db.select().from(conversations).where(eq(conversations.id, id));
     return row;
+  }
+
+  async list(): Promise<Conversation[]> {
+    return this.db.select().from(conversations).orderBy(desc(conversations.createdAt));
   }
 }

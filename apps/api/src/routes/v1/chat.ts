@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { chatRequestSchema, ValidationError, type ChatStreamEvent } from "@ai-platform/shared";
+import { chatRequestSchema, NotFoundError, ValidationError, type ChatStreamEvent } from "@ai-platform/shared";
 import type { AppContext } from "../../context.js";
 
 /**
@@ -7,6 +7,14 @@ import type { AppContext } from "../../context.js";
  * See docs/15_API_ARCHITECTURE.md ("Streaming: SSE, not WebSockets, as the default").
  */
 export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
+  app.get("/api/v1/conversations", async () => ({ conversations: await ctx.conversations.list() }));
+
+  app.get<{ Params: { id: string } }>("/api/v1/conversations/:id/messages", async (request) => {
+    const conversation = await ctx.conversations.get(request.params.id);
+    if (!conversation) throw new NotFoundError(`Conversation "${request.params.id}" not found.`);
+    return { messages: await ctx.messages.listByConversation(conversation.id) };
+  });
+
   app.post("/api/v1/chat", async (request, reply) => {
     const parsed = chatRequestSchema.safeParse(request.body);
     if (!parsed.success) {

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { Task, TaskState, TaskType } from "@ai-platform/shared";
 import type { DrizzleDb } from "../client.js";
 import { tasks } from "../schema/index.js";
@@ -19,6 +19,8 @@ export interface TaskRepository {
   ): Promise<void>;
   /** Tasks not in a terminal state — scanned on boot for crash recovery (docs/11 §4.2). */
   listNonTerminal(): Promise<Task[]>;
+  /** Most recent first — backs the `/tasks` history screen (docs/16_FRONTEND_ARCHITECTURE.md). */
+  list(): Promise<Task[]>;
 }
 
 const TERMINAL_STATES: TaskState[] = ["COMPLETED", "FAILED", "CANCELLED"];
@@ -66,6 +68,11 @@ export class PgTaskRepository implements TaskRepository {
   async listNonTerminal(): Promise<Task[]> {
     const rows = await this.db.select().from(tasks);
     return rows.filter((r) => !TERMINAL_STATES.includes(r.state as TaskState)).map(toTask);
+  }
+
+  async list(): Promise<Task[]> {
+    const rows = await this.db.select().from(tasks).orderBy(desc(tasks.createdAt));
+    return rows.map(toTask);
   }
 }
 

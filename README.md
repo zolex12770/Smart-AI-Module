@@ -2,7 +2,7 @@
 
 A modular, model-agnostic AI agent platform: chat, autonomous multi-step tasks, a coding agent, tool calling and MCP integration, memory, RAG, and (initially mocked) image/video generation — built as a staged program, not a single release.
 
-**Status: chat, a full agent task engine, tool/MCP calling, a narrow coding agent, real LLM provider adapters, retrieval-augmented document Q&A, a real async job system, async image generation (mocked), and a long-form video generation pipeline (mocked) are all working, on real PostgreSQL.** Streamed chat over SSE; a state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating; sandboxed native tools plus a real connection to an external MCP server; a coding agent that runs a real failing test, fixes it, and re-verifies; real Anthropic/OpenAI/Google adapters alongside the mock, with automatic fallback; document ingestion (a real background job, not a blocking request) + pgvector similarity search backing retrieval-augmented answers; pg-boss-backed jobs with genuine crash recovery; a provider-agnostic image generation pipeline (submit → async job → real, inspectable output) running on a mock provider until real image credentials are supplied; and a long-form video pipeline (prompt → deterministic scene planner → per-scene async jobs → real ffmpeg assembly when available) with proven per-scene resumability. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
+**Status: chat, a full agent task engine, tool/MCP calling, a narrow coding agent, real LLM provider adapters, retrieval-augmented document Q&A, a real async job system, async image generation (mocked), a long-form video generation pipeline (mocked), and a real, browser-verified web frontend for all of it are all working, on real PostgreSQL.** Streamed chat over SSE with a multi-conversation UI; a state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating, rendered live in the browser via SSE; sandboxed native tools plus a real connection to an external MCP server; a coding agent that runs a real failing test, fixes it, and re-verifies, with its own UI showing the real commands run and files changed; real Anthropic/OpenAI/Google adapters alongside the mock, with automatic fallback; document ingestion (a real background job, not a blocking request) + pgvector similarity search backing retrieval-augmented answers; pg-boss-backed jobs with genuine crash recovery; a provider-agnostic image generation pipeline (submit → async job → real, inspectable output) running on a mock provider until real image credentials are supplied; and a long-form video pipeline (prompt → deterministic scene planner → per-scene async jobs → real ffmpeg assembly when available) with proven per-scene resumability. See [PROJECT_STATUS.md](PROJECT_STATUS.md) for exactly what's done, in progress, and next.
 
 ## Start here
 
@@ -19,14 +19,14 @@ TypeScript/Node.js monorepo (npm workspaces) · Fastify API · Next.js web front
 
 ## Running locally
 
-Verified working end-to-end (2026-08-31) — real browser and API sessions covering chat, agent tasks, tool/MCP calls, and document retrieval, all persisted to real PostgreSQL:
+Verified working end-to-end (2026-08-31) — real headless-browser (Playwright) and API sessions covering every screen: chat, agent/coding task detail with live SSE and human-in-the-loop approval, image and video generation, document retrieval, and memory settings, all persisted to real PostgreSQL:
 
 ```
 npm install     # installs and builds every workspace package (predev hook)
 npm run dev     # starts the API (port 8787) and the web app (port 3000)
 ```
 
-Then open http://localhost:3000. **No Docker, no separately-installed database server, and no API keys are required** — the app runs on a real embedded PostgreSQL instance (PGlite, auto-created and auto-migrated on boot at `apps/api/data/pgdata`) and a mock LLM provider that clearly labels its own responses as mock.
+Then open http://localhost:3000 — you'll land on `/chat`; the nav bar links to Chat, Tasks, Images, Videos, Files, and Settings. **No Docker, no separately-installed database server, and no API keys are required** — the app runs on a real embedded PostgreSQL instance (PGlite, auto-created and auto-migrated on boot at `apps/api/data/pgdata`) and a mock LLM provider that clearly labels its own responses as mock.
 
 Other useful commands: `npm run typecheck`, `npm run build` (production build of every app), `npm test` (35 real tests: provider adapters, embeddings, the mock image/video providers (including a real hand-rolled GIF codec round-trip), and genuine end-to-end integration tests for RAG, the job queue, and the long-form video pipeline's resumability against real in-memory Postgres/pg-boss — no mocks), `npm run db:generate -w @ai-platform/database` (after a schema change, to create a new migration file).
 

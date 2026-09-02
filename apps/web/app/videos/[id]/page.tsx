@@ -1,0 +1,103 @@
+"use client";
+
+import { use, useEffect, useState } from "react";
+import { assetUrl, getVideo, retryVideo, type VideoProject, type VideoScene } from "../../lib/api";
+import { StatusBadge } from "../../lib/status-badge";
+
+export default function VideoDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  const [project, setProject] = useState<VideoProject | null>(null);
+  const [scenes, setScenes] = useState<VideoScene[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+
+  function refresh() {
+    getVideo(id)
+      .then((r) => {
+        setProject(r.project);
+        setScenes(r.scenes);
+      })
+      .catch((e) => setError(String(e)));
+  }
+
+  useEffect(() => {
+    refresh();
+    const interval = setInterval(refresh, 2000);
+    return () => clearInterval(interval);
+  }, [id]);
+
+  async function handleRetry() {
+    setRetrying(true);
+    try {
+      await retryVideo(id);
+      refresh();
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  if (error) return <div className="page error-text">{error}</div>;
+  if (!project) return <div className="page empty-state">Loading…</div>;
+
+  const hasFailedScenes = scenes.some((s) => s.status === "failed");
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <div>
+          <h1>{project.prompt}</h1>
+          <p className="page-subtitle">{project.id}</p>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <StatusBadge status={project.status} />
+          {hasFailedScenes && (
+            <button className="btn" disabled={retrying} onClick={handleRetry}>
+              {retrying ? "Retrying…" : "Retry failed scenes"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="card">
+        <strong>Final render</strong>
+        {project.renderStatus === "succeeded" && project.renderAssetId ? (
+          <video src={assetUrl(project.renderAssetId)} controls style={{ width: "100%", marginTop: 8, borderRadius: 8 }} />
+        ) : (
+          <div style={{ marginTop: 8 }}>
+            <StatusBadge status={project.renderStatus ?? "pending"} />
+            {project.renderError && <p className="page-subtitle">{project.renderError}</p>}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <strong>Scenes ({scenes.length})</strong>
+        <div className="grid" style={{ marginTop: 8 }}>
+          {scenes.map((scene) => (
+            <div key={scene.id} className="card">
+              {scene.status === "succeeded" && scene.assetId ? (
+                <img src={assetUrl(scene.assetId)} alt={scene.shotDescription} style={{ width: "100%", borderRadius: 8 }} />
+              ) : (
+                <div className="empty-state" style={{ height: 90, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {scene.status}
+                </div>
+              )}
+              <p className="page-subtitle" style={{ marginTop: 6 }}>
+                Scene {scene.sceneIndex + 1} · {scene.durationSeconds}s
+              </p>
+              <StatusBadge status={scene.status} />
+              {scene.lastError && <p className="error-text">{scene.lastError}</p>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {project.errorMessage && (
+        <div className="card" style={{ borderColor: "var(--warning)" }}>
+          <strong>Note</strong>
+          <p className="page-subtitle">{project.errorMessage}</p>
+        </div>
+      )}
+    </div>
+  );
+}
