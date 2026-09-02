@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { SpanStatusCode, withSpan } from "@ai-platform/observability";
 import { chatRequestSchema, NotFoundError, ValidationError, type ChatStreamEvent } from "@ai-platform/shared";
 import type { AppContext } from "../../context.js";
 
@@ -56,25 +57,62 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     };
 
-    try {
-      for await (const event of ctx.router.streamChat({ ...chatRequest, conversationId: conversation.id })) {
-        send(event);
-        if (event.type === "done") {
-          await ctx.messages.add({
-            conversationId: conversation.id,
-            role: "assistant",
-            content: event.message.content,
-            providerUsed: event.provider,
-            modelUsed: event.model,
-            usage: event.usage,
-          });
+    // docs/20_OBSERVABILITY.md §3.3 `gen_ai.chat` span + §1.2 provider-call log fields —
+    // `request.id` (Fastify's own per-request id, already present on every request/response
+    // log line) is the correlation id threaded through here; the job-queue paths thread the
+    // same id through job payloads (see routes/v1/images.ts) so a job's worker-side and
+    // provider-call logs can be found from the originating request, and vice versa.
+    const startedAt = Date.now();
+    await withSpan(
+      "gen_ai.chat",
+      { "gen_ai.system": "unknown", request_id: request.id, conversation_id: conversation.id },
+      async (span) => {
+        try {
+          for await (const event of ctx.router.streamChat({ ...chatRequest, conversationId: conversation.id })) {
+            send(event);
+            if (event.type === "done") {
+              await ctx.messages.add({
+                conversationId: conversation.id,
+                role: "assistant",
+                content: event.message.content,
+                providerUsed: event.provider,
+                modelUsed: event.model,
+                usage: event.usage,
+              });
+              span.setAttributes({
+                "gen_ai.system": event.provider,
+                "gen_ai.request.model": event.model,
+                "gen_ai.usage.input_tokens": event.usage.inputTokens,
+                "gen_ai.usage.output_tokens": event.usage.outputTokens,
+              });
+              request.log.info(
+                {
+                  request_id: request.id,
+                  provider: event.provider,
+                  model: event.model,
+                  tokens_input: event.usage.inputTokens,
+                  tokens_output: event.usage.outputTokens,
+                  latency_ms: Date.now() - startedAt,
+                  status: "success",
+                },
+                "provider call completed"
+              );
+            }
+          }
+        } catch (err) {
+          // Handled here (an SSE error event is sent to the client, not re-thrown) — but the
+          // span must still reflect ERROR, or a real failure would misleadingly read as a
+          // successful `gen_ai.chat` call in any trace view.
+          span.recordException(err instanceof Error ? err : String(err));
+          span.setStatus({ code: SpanStatusCode.ERROR, message: err instanceof Error ? err.message : String(err) });
+          request.log.error(
+            { request_id: request.id, err, latency_ms: Date.now() - startedAt, status: "error" },
+            "chat stream failed"
+          );
+          send({ type: "error", message: "The model provider failed to respond. Please try again." });
         }
       }
-    } catch (err) {
-      request.log.error(err, "chat stream failed");
-      send({ type: "error", message: "The model provider failed to respond. Please try again." });
-    } finally {
-      reply.raw.end();
-    }
+    );
+    reply.raw.end();
   });
 }

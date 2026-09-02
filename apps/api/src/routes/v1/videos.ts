@@ -17,7 +17,13 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
 
       const id = uuid();
       const project = await createVideoProject({ projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes }, id, parsed.data);
-      await orchestrateVideoProject({ projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue }, id);
+      // docs/20_OBSERVABILITY.md §3.2 — see the matching comment in video-orchestration.ts
+      // for how this id then reaches every scene job and the eventual render job.
+      await orchestrateVideoProject(
+        { projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue },
+        id,
+        request.id
+      );
 
       reply.status(202).send({ project });
     }
@@ -38,7 +44,11 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
   app.post<{ Params: { id: string } }>("/api/v1/videos/:id/retry", async (request, reply) => {
     const project = await ctx.videoProjects.get(request.params.id);
     if (!project) throw new NotFoundError(`Video project "${request.params.id}" not found.`);
-    await orchestrateVideoProject({ projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue }, project.id);
+    await orchestrateVideoProject(
+      { projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue },
+      project.id,
+      request.id
+    );
     reply.status(202).send({ project: await ctx.videoProjects.get(project.id) });
   });
 }

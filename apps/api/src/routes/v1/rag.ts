@@ -23,7 +23,8 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
     if (!path) throw new ValidationError("Body must include a sandbox-relative \"path\".");
 
     const document = await createPendingDocument(ctx.documents, path);
-    await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id });
+    // docs/20_OBSERVABILITY.md §3.2 — see routes/v1/images.ts for why.
+    await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id, requestId: request.id });
     reply.status(202).send({ document });
   });
 

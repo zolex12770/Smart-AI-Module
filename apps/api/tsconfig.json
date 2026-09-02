@@ -20,6 +20,7 @@
     { "path": "../../packages/embeddings" },
     { "path": "../../packages/rag" },
     { "path": "../../packages/jobs" },
+    { "path": "../../packages/observability" },
     { "path": "../../packages/media" },
     { "path": "../../packages/providers/image-mock" },
     { "path": "../../packages/providers/video-mock" },

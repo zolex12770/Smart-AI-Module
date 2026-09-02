@@ -1,6 +1,7 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyBaseLogger } from "fastify";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
+import type { Logger } from "@ai-platform/observability";
 import type { AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
@@ -11,8 +12,15 @@ import { registerImageRoutes } from "./routes/v1/images.js";
 import { registerRagRoutes } from "./routes/v1/rag.js";
 import { registerVideoRoutes } from "./routes/v1/videos.js";
 
-export async function buildServer(config: AppConfig, ctx: AppContext) {
-  const app = Fastify({ logger: true });
+export async function buildServer(config: AppConfig, ctx: AppContext, logger: Logger) {
+  // docs/20_OBSERVABILITY.md §1.1 — a pre-built, shared Pino instance (not `logger: true`,
+  // which would make Fastify construct its own, separate from the one job workers use) so
+  // every structured log line in this process — HTTP request/response and job/provider-call
+  // alike — shares the same redaction config and JSON shape. The cast is real Fastify/Pino
+  // TypeScript friction, not a runtime concern: a Pino `Logger` implements everything
+  // `FastifyBaseLogger` requires (Fastify's own default logger *is* a Pino instance), the
+  // types just don't structurally line up on an optional `msgPrefix` field.
+  const app = Fastify({ loggerInstance: logger as unknown as FastifyBaseLogger });
 
   // @fastify/cors defaults `methods` to "GET,HEAD,POST" only — DELETE (used by
   // /api/v1/memory/:id) and PUT/PATCH would otherwise fail preflight in any real browser,

@@ -28,6 +28,7 @@ import { OpenAIProvider } from "@ai-platform/llm-openai";
 import { connectMcpServer } from "@ai-platform/mcp";
 import { LocalAssetStore, processImageGeneration, processVideoRender, processVideoScene } from "@ai-platform/media";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
+import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/observability";
 import { createRagTools, processDocumentIngestion } from "@ai-platform/rag";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { MockVideoProvider } from "@ai-platform/video-mock";
@@ -37,6 +38,12 @@ import { buildServer } from "./server.js";
 
 async function main() {
   const config = loadConfig();
+
+  // docs/20_OBSERVABILITY.md — must happen before anything else logs or traces, so no
+  // early-boot line is missed and the tracer provider is registered before any span-creating
+  // code path (job workers registered below, request handlers once the server starts) runs.
+  initTracing("api");
+  const logger = createLogger("api");
 
   const db = await createDb(config.DATABASE_DIR);
   await runMigrations(db);
@@ -95,11 +102,15 @@ async function main() {
   const jobQueue = new JobQueue({ db: fromPglite(db.$client), backend: "pglite" });
   await jobQueue.start();
   await jobQueue.ensureQueue("document.ingest", { retryLimit: 2, expireInSeconds: 120 });
-  await jobQueue.registerWorker<{ documentId: string }>("document.ingest", async ({ documentId }) => {
-    const document = await documents.get(documentId);
-    if (!document) throw new Error(`document.ingest job referenced unknown document "${documentId}".`);
-    await processDocumentIngestion({ documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot }, document);
-  });
+  await jobQueue.registerWorker<{ documentId: string; requestId?: string }>(
+    "document.ingest",
+    async ({ documentId, requestId }) =>
+      runJob(logger, { queue: "document.ingest", jobId: documentId, requestId }, async () => {
+        const document = await documents.get(documentId);
+        if (!document) throw new Error(`document.ingest job referenced unknown document "${documentId}".`);
+        await processDocumentIngestion({ documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot }, document);
+      })
+  );
 
   // Image generation (docs/05_IMAGE_GENERATION_RESEARCH.md) — mock-only until real
   // credentials exist (docs/26_DECISIONS.md ADR-009), but genuinely runs through the same
@@ -110,9 +121,23 @@ async function main() {
   const imageGenerations = new PgImageGenerationRepository(db);
   const imageProvider = new MockImageProvider();
   await jobQueue.ensureQueue("image.generate", { retryLimit: 1, expireInSeconds: 60 });
-  await jobQueue.registerWorker<{ generationId: string }>("image.generate", async ({ generationId }) => {
-    await processImageGeneration({ generationRepo: imageGenerations, assetStore, provider: imageProvider }, generationId);
-  });
+  await jobQueue.registerWorker<{ generationId: string; requestId?: string }>(
+    "image.generate",
+    async ({ generationId, requestId }) =>
+      runJob(logger, { queue: "image.generate", jobId: generationId, requestId }, async () => {
+        await processImageGeneration({ generationRepo: imageGenerations, assetStore, provider: imageProvider }, generationId);
+        const generation = await imageGenerations.get(generationId);
+        logger.info(
+          {
+            request_id: requestId,
+            job_id: generationId,
+            provider: generation?.providerName ?? imageProvider.name,
+            status: generation?.status === "succeeded" ? "success" : "error",
+          },
+          "provider call completed"
+        );
+      })
+  );
 
   // Long-form video pipeline (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md Part 2,
   // docs/26_DECISIONS.md ADR-030) — mock-only per the same ADR-009 policy as images.
@@ -122,23 +147,29 @@ async function main() {
   const videoScenes = new PgVideoSceneRepository(db);
   const videoProvider = new MockVideoProvider();
   await jobQueue.ensureQueue("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
-  await jobQueue.registerWorker<{ sceneId: string }>(
+  await jobQueue.registerWorker<{ sceneId: string; requestId?: string }>(
     "video.generate_scene",
-    async ({ sceneId }) => {
-      await processVideoScene(
-        { projectRepo: videoProjects, sceneRepo: videoScenes, jobQueue, assetStore, provider: videoProvider },
-        sceneId
-      );
-    },
+    async ({ sceneId, requestId }) =>
+      runJob(logger, { queue: "video.generate_scene", jobId: sceneId, requestId }, async () => {
+        await processVideoScene(
+          { projectRepo: videoProjects, sceneRepo: videoScenes, jobQueue, assetStore, provider: videoProvider },
+          sceneId,
+          requestId
+        );
+      }),
     { localConcurrency: 3 }
   );
   await jobQueue.ensureQueue("video.render", { retryLimit: 1, expireInSeconds: 300 });
-  await jobQueue.registerWorker<{ projectId: string }>("video.render", async ({ projectId }) => {
-    await processVideoRender(
-      { projectRepo: videoProjects, sceneRepo: videoScenes, assetRepo: assets, assetStore, ffmpegPath: config.FFMPEG_PATH },
-      projectId
-    );
-  });
+  await jobQueue.registerWorker<{ projectId: string; requestId?: string }>(
+    "video.render",
+    async ({ projectId, requestId }) =>
+      runJob(logger, { queue: "video.render", jobId: projectId, requestId }, async () => {
+        await processVideoRender(
+          { projectRepo: videoProjects, sceneRepo: videoScenes, assetRepo: assets, assetStore, ffmpegPath: config.FFMPEG_PATH },
+          projectId
+        );
+      })
+  );
 
   // Real external MCP server connection (docs/10_TOOL_AND_MCP_ARCHITECTURE.md §2/§3.2) —
   // the official reference filesystem server, scoped to the same sandbox root as our
@@ -201,7 +232,7 @@ async function main() {
     videoScenes,
   };
 
-  const app = await buildServer(config, ctx);
+  const app = await buildServer(config, ctx, logger);
 
   await app.listen({ port: config.PORT, host: "0.0.0.0" });
 
@@ -234,3 +265,38 @@ main().catch((err) => {
   console.error("Fatal startup error:", err);
   process.exit(1);
 });
+
+/**
+ * docs/20_OBSERVABILITY.md §3.3 (`job.process` span) + §1.2 (structured job log fields) —
+ * shared by every job worker registered above so a job's `request_id` (propagated from the
+ * enqueueing HTTP request — see routes/v1/images.ts, videos.ts, rag.ts) is threaded through
+ * both the trace and every log line the job produces, closing the "API → worker →
+ * provider-call" correlation the roadmap's Phase 12 exit criterion asks for.
+ */
+async function runJob<T>(
+  jobLogger: Logger,
+  params: { queue: string; jobId: string; requestId?: string },
+  fn: () => Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  return withSpan(
+    "job.process",
+    { "job.queue": params.queue, job_id: params.jobId, request_id: params.requestId ?? "" },
+    async () => {
+      try {
+        const result = await fn();
+        jobLogger.info(
+          { request_id: params.requestId, job_id: params.jobId, queue: params.queue, latency_ms: Date.now() - startedAt, status: "success" },
+          "job completed"
+        );
+        return result;
+      } catch (err) {
+        jobLogger.error(
+          { request_id: params.requestId, job_id: params.jobId, queue: params.queue, err, latency_ms: Date.now() - startedAt, status: "error" },
+          "job failed"
+        );
+        throw err;
+      }
+    }
+  );
+}

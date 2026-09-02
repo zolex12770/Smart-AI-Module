@@ -23,7 +23,11 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
 
       const id = uuid();
       const generation = await ctx.imageGenerations.create(id, parsed.data);
-      await ctx.jobQueue.enqueue("image.generate", { generationId: id });
+      // docs/20_OBSERVABILITY.md §3.2 — propagate the originating request's id into the job
+      // payload so the worker's logs (apps/api/src/index.ts's `runJob`) can be correlated
+      // back to this request, the "API → worker → provider-call" trail the Phase 12 exit
+      // criterion asks for.
+      await ctx.jobQueue.enqueue("image.generate", { generationId: id, requestId: request.id });
       reply.status(202).send({ generation });
     }
   );
