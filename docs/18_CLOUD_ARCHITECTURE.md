@@ -1,10 +1,15 @@
 # 18. Cloud Architecture (Google Cloud) — Plan, Not Yet Provisioned
 
-**Status: planning document only.** No GCP project, billing account, or budget currently exists
-for this platform, and nothing described here should be provisioned until the team has both. This
-document exists so that when a project/budget is approved, the team can move quickly with an
-already-reasoned-through architecture instead of ad hoc service selection. Where the doc says
-"recommended," it means "recommended once you provision," not "provision now."
+**Status: planning document, now backed by real Dockerfiles + Terraform (Phase 14, 2026-09-02 —
+see [[26_DECISIONS]] ADR-037), still not provisioned.** No GCP project, billing account, or budget
+currently exists for this platform, and nothing described here (or in `infrastructure/`) should be
+provisioned until the team has both. Where the doc says "recommended," it means "recommended once
+you provision," not "provision now." **Two real divergences from this document's §1.5/§2, found
+while building the actual IaC**: the system that was actually built uses pg-boss directly on
+Postgres (ADR-012/ADR-027), not Cloud Tasks, and uses no distributed cache at all (rate limiting is
+in-process, ADR-032), so `infrastructure/terraform/` does not provision Cloud Tasks or Memorystore
+— provisioning either would pay for infrastructure nothing in this codebase calls. See ADR-037 for
+the full reasoning, the Dockerfiles, and the deployment runbook.
 
 Local development in the meantime must not hard-require any of this. See §6 for the local-dev
 implication and the setup gap it creates.

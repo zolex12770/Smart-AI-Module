@@ -42,20 +42,27 @@ export class PgDocumentChunkRepository implements DocumentChunkRepository {
 
   async search(queryEmbedding: number[], limit: number): Promise<DocumentChunkMatch[]> {
     const vectorLiteral = `[${queryEmbedding.join(",")}]`;
-    const result = await this.db.execute<{
-      id: string;
-      document_id: string;
-      chunk_index: number;
-      content: string;
-      created_at: Date;
-      distance: number;
-    }>(
+    // `.execute()`'s return type is generic over the driver's query-result HKT, which
+    // DrizzleDb (docs/26_DECISIONS.md ADR-037) deliberately leaves abstract so repositories
+    // stay dialect-agnostic — both PGlite's and node-postgres's real result objects carry
+    // `.rows` at runtime (the standard `pg`-style convention both follow), so this cast
+    // reflects an actual stable shape, not a fudge.
+    const result = (await this.db.execute(
       sql`select id, document_id, chunk_index, content, created_at,
                  embedding <=> ${vectorLiteral}::vector as distance
           from document_chunks
           order by distance asc
           limit ${limit}`
-    );
+    )) as {
+      rows: Array<{
+        id: string;
+        document_id: string;
+        chunk_index: number;
+        content: string;
+        created_at: Date;
+        distance: number;
+      }>;
+    };
     return result.rows.map((r) => ({
       id: r.id,
       documentId: r.document_id,

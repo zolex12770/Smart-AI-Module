@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 import { AgentEngine } from "@ai-platform/agent-core";
 import {
   createDb,
+  createPostgresDb,
   runMigrations,
+  runPostgresMigrations,
+  type DrizzleDb,
   PgConversationRepository,
   PgMessageRepository,
   PgTaskNodeRepository,
@@ -20,7 +23,7 @@ import {
 } from "@ai-platform/database";
 import { HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MockImageProvider } from "@ai-platform/image-mock";
-import { fromPglite, JobQueue } from "@ai-platform/jobs";
+import { fromPglite, JobQueue, type JobQueueOptions } from "@ai-platform/jobs";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
@@ -32,9 +35,35 @@ import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/o
 import { createRagTools, processDocumentIngestion } from "@ai-platform/rag";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { MockVideoProvider } from "@ai-platform/video-mock";
-import { loadConfig } from "./config.js";
+import { loadConfig, type AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { buildServer } from "./server.js";
+
+/**
+ * Connects to whichever Postgres backend `config` selects (docs/26_DECISIONS.md ADR-037):
+ * the local embedded PGlite default, or a real standalone Postgres (e.g. Cloud SQL, once
+ * Phase 14's infrastructure is actually deployed to) when DATABASE_URL is set. Everything
+ * past this point in `main()` only ever touches the returned `db` through the general,
+ * dialect-agnostic `DrizzleDb` type every repository already accepts — the two backends'
+ * driver-specific connection-teardown and job-queue-wiring differences are captured here,
+ * once, rather than scattered through the rest of boot.
+ */
+async function connectDatabase(
+  config: AppConfig
+): Promise<{ db: DrizzleDb; jobQueueOptions: JobQueueOptions; close: () => Promise<void> }> {
+  if (config.DATABASE_URL) {
+    const db = await createPostgresDb(config.DATABASE_URL);
+    await runPostgresMigrations(db);
+    return { db, jobQueueOptions: { connectionString: config.DATABASE_URL }, close: () => db.$client.end() };
+  }
+  const db = await createDb(config.DATABASE_DIR);
+  await runMigrations(db);
+  return {
+    db,
+    jobQueueOptions: { db: fromPglite(db.$client), backend: "pglite" },
+    close: () => db.$client.close(),
+  };
+}
 
 async function main() {
   const config = loadConfig();
@@ -45,8 +74,7 @@ async function main() {
   initTracing("api");
   const logger = createLogger("api");
 
-  const db = await createDb(config.DATABASE_DIR);
-  await runMigrations(db);
+  const { db, jobQueueOptions, close: closeDb } = await connectDatabase(config);
 
   const registry = new ModelRegistry();
 
@@ -94,12 +122,13 @@ async function main() {
   }
 
   // Real async job queue (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md, docs/26_DECISIONS.md
-  // ADR-012/ADR-027) — pg-boss against the same PGlite instance via its native `fromPglite`
-  // adapter. The worker runs in-process here rather than in a separate apps/worker process
-  // because PGlite is single-connection/embedded (ADR-025) — a second OS process cannot
-  // open the same database. See ADR-027 for the full reasoning and what changes once a
-  // real standalone Postgres exists.
-  const jobQueue = new JobQueue({ db: fromPglite(db.$client), backend: "pglite" });
+  // ADR-012/ADR-027/ADR-037) — pg-boss, either against the local PGlite instance via its
+  // native `fromPglite` adapter, or (once DATABASE_URL is set) its own default connection
+  // pool built from that same connection string; connectDatabase above decides which. The
+  // worker still runs in-process here rather than in a separate apps/worker process even
+  // against a real standalone Postgres — that split is a real, currently-unbuilt follow-up
+  // (see ADR-037's deployment runbook), not something this env-var switch does by itself.
+  const jobQueue = new JobQueue(jobQueueOptions);
   await jobQueue.start();
   await jobQueue.ensureQueue("document.ingest", { retryLimit: 2, expireInSeconds: 120 });
   await jobQueue.registerWorker<{ documentId: string; requestId?: string }>(
@@ -250,7 +279,7 @@ async function main() {
     try {
       await app.close();
       await jobQueue.stop();
-      await db.$client.close();
+      await closeDb();
     } catch (err) {
       console.error("Error during graceful shutdown:", err);
     } finally {

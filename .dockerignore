@@ -14,8 +14,7 @@ build/
 apps/*/data/
 coverage/
 *.tsbuildinfo
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars
-!*.tfvars.example
+.git/
+.github/
+infrastructure/
+docs/

@@ -11,6 +11,10 @@ const envSchema = z.object({
   // Real PostgreSQL via PGlite (docs/26_DECISIONS.md ADR-025) — a directory, not a
   // single file, since Postgres persists multiple files there.
   DATABASE_DIR: z.string().default("./data/pgdata"),
+  // When set, connects to a real standalone Postgres (e.g. Cloud SQL) instead of the local
+  // embedded PGlite default — docs/26_DECISIONS.md ADR-037. Optional: local dev and every
+  // existing deployment keep working identically with this unset.
+  DATABASE_URL: z.string().optional(),
   SANDBOX_ROOT: z.string().default("./data/sandbox"),
   ASSETS_ROOT: z.string().default("./data/assets"),
   // docs/26_DECISIONS.md ADR-030: the long-form video render stage shells out to a system

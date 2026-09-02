@@ -4,8 +4,13 @@ import type { ConstructorOptions, JobWithMetadata, QueuePolicy, WorkOptions } fr
 export { fromPglite };
 
 export interface JobQueueOptions {
-  db: ConstructorOptions["db"];
+  /** Either `db` (a pg-boss connection adapter — `fromPglite` today, ADR-027) or
+   * `connectionString` (a real standalone Postgres, ADR-037) is expected; pg-boss falls
+   * back to its own default `pg.Pool`-backed adapter built from `connectionString` when
+   * `db` is omitted. */
+  db?: ConstructorOptions["db"];
   backend?: ConstructorOptions["backend"];
+  connectionString?: ConstructorOptions["connectionString"];
   /** Passthrough for pg-boss's own tuning knobs — tests use a fast interval so
    * crash-recovery (stale-lock expiry -> requeue) is observable in seconds, not minutes. */
   superviseIntervalSeconds?: ConstructorOptions["superviseIntervalSeconds"];
@@ -52,6 +57,7 @@ export class JobQueue {
     this.boss = new PgBoss({
       db: options.db,
       backend: options.backend,
+      connectionString: options.connectionString,
       ...(options.superviseIntervalSeconds !== undefined
         ? { superviseIntervalSeconds: options.superviseIntervalSeconds }
         : {}),

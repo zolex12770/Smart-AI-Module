@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars (gitignored) and fill in real values, or pass each as
+# -var/-var-file/TF_VAR_* at apply time. Never commit a file with real secrets in it.
+
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+
+# Build and push both images first (see ../DEPLOYMENT_RUNBOOK.md), then fill these in.
+api_image = "us-central1-docker.pkg.dev/your-gcp-project-id/ai-platform/api:latest"
+web_image = "us-central1-docker.pkg.dev/your-gcp-project-id/ai-platform/web:latest"
+
+# Prefer TF_VAR_db_password (an env var) over writing this here even in a gitignored file.
+# db_password = "..."
+
+# Optional — leave blank/unset to deploy on the mock LLM provider, same as local dev.
+# anthropic_api_key = "..."
+# openai_api_key    = "..."
+# google_api_key    = "..."
