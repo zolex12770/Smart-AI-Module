@@ -9,13 +9,16 @@ import { LOG_REDACT_PATHS } from "./logging.js";
  * keeps output format identical across both, and keeps redaction configured in exactly one
  * place rather than duplicated between a Fastify `logger` option and a separate worker logger.
  */
-export function createLogger(name: string): Logger {
-  return pino({
+export function createLogger(name: string, destination?: NodeJS.WritableStream): Logger {
+  const options = {
     name,
     level: process.env.LOG_LEVEL ?? "info",
     redact: { paths: LOG_REDACT_PATHS, censor: "[REDACTED]" },
     timestamp: pino.stdTimeFunctions.isoTime, // docs/20 §1.2: ISO 8601, UTC
-  });
+  };
+  // `destination` exists so tests can capture real log output (see logger.test.ts) — Pino
+  // writes to stdout by default when omitted, which is what every real call site wants.
+  return destination ? pino(options, destination) : pino(options);
 }
 
 export type { Logger };

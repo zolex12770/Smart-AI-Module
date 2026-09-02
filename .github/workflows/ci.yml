@@ -1,0 +1,83 @@
+name: CI
+
+# docs/21_TESTING_STRATEGY.md §4 "CI pipeline shape" + docs/26_DECISIONS.md ADR-035.
+#
+# Every job here mirrors an exact command verified locally in this repository's own
+# development sessions — nothing in this file is aspirational or copy-pasted from a
+# template. Notably, this pipeline needs no database/queue service containers at all:
+# the whole test suite runs against PGlite (an embedded, in-memory, genuinely
+# Postgres-compatible engine — ADR-025) and pg-boss's native PGlite adapter (ADR-027,
+# ADR-012), not a real standalone Postgres/Redis, so there is nothing to spin up as a
+# `services:` container the way docs/21 §2.2's Testcontainers-based design assumes for a
+# more conventional Postgres+Redis stack.
+#
+# Honesty note (docs/26_DECISIONS.md ADR-035): this file has been validated for syntax
+# and by running every one of its steps locally, but this repository has no GitHub
+# remote in the environment that authored it, so the workflow itself has never actually
+# executed in GitHub Actions. Treat "CI green" as unverified until the first real run
+# after this repo is pushed somewhere.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Real, found-not-assumed ordering constraint (docs/26_DECISIONS.md ADR-035): each
+      # package's own `typecheck` script runs a plain `tsc --noEmit`, which resolves a
+      # dependency package (e.g. `@ai-platform/shared`) through its built `dist/*.d.ts`
+      # output, not its TypeScript source — so on a genuinely fresh checkout with no
+      # `dist/` yet, `npm run typecheck` fails immediately with "Cannot find module"
+      # errors for every cross-package import, confirmed by wiping every `dist/` and
+      # `.tsbuildinfo` locally and re-running the intended step order. `build:packages`
+      # (the same project-references build every package's own dependents already need)
+      # must run first.
+      - name: Build packages (required before typecheck can resolve cross-package types)
+        run: npm run build:packages
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build (apps)
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      # docs/13_SECURITY_ARCHITECTURE.md §3 "Dependency/SCA scanning" + docs/21 §2.8.
+      # --audit-level=high: the 4 known moderate advisories (drizzle-kit's dev-only,
+      # never-network-exposed esbuild dependency) are an accepted risk, documented in
+      # docs/26_DECISIONS.md — this gate exists to catch a *new* high/critical
+      # regression, not to re-litigate an already-reviewed one on every single run.
+      - name: Dependency audit (high/critical only)
+        run: npm audit --audit-level=high
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # docs/13_SECURITY_ARCHITECTURE.md §3 "Enforce this with pre-commit secret-scanning
+      # (e.g., gitleaks) and CI secret-scanning as a merge-blocking check" — the real tool
+      # the security doc names, not a hand-rolled substitute, now that CI exists to run it
+      # on (docs/27_RISKS_AND_LIMITATIONS.md previously tracked this as blocked on exactly
+      # that precondition).
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

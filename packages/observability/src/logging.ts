@@ -4,18 +4,37 @@
  * agent-core/model-router call sites that log provider calls.
  */
 
-/** Pino `redact` paths (docs/20 §1.4: never log raw secrets, defense-in-depth even though no
- * current call site logs one directly). Matches by field name wherever it appears in a log
- * object, not just at these exact paths — Pino's redact supports wildcard paths for this. */
+/**
+ * Pino `redact` paths (docs/20 §1.4: never log raw secrets, defense-in-depth even though no
+ * current call site logs one directly).
+ *
+ * A real, found-by-testing correction (docs/26_DECISIONS.md ADR-035): a wildcard path like
+ * `*.apiKey` does **not** mean "match `apiKey` at any depth" — `fast-redact` (Pino's redaction
+ * engine) treats `*` as "any key at exactly this one depth", so `*.apiKey` only matches a
+ * *nested* field (`{ x: { apiKey } }`) and silently does nothing for a top-level one
+ * (`{ apiKey }`), which a real test caught passing straight through unredacted. There is no
+ * fast-redact syntax for "this key at any depth" — each secret-shaped field name is therefore
+ * listed explicitly at both the top level and one level of nesting (the only depths any real
+ * call site in this codebase actually produces: flat log objects, or Fastify's own
+ * `req.headers.*` shape).
+ */
 export const LOG_REDACT_PATHS = [
+  "apiKey",
   "*.apiKey",
+  "api_key",
   "*.api_key",
+  "password",
   "*.password",
+  "authorization",
   "*.authorization",
   "req.headers.authorization",
+  "ANTHROPIC_API_KEY",
   "*.ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
   "*.OPENAI_API_KEY",
+  "GOOGLE_API_KEY",
   "*.GOOGLE_API_KEY",
+  "GEMINI_API_KEY",
   "*.GEMINI_API_KEY",
 ];
 
