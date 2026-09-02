@@ -24,6 +24,7 @@
     "uuid": "^11.0.4"
   },
   "devDependencies": {
+    "@ai-platform/llm-mock": "*",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }
