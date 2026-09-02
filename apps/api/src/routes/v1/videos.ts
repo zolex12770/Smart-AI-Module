@@ -5,16 +5,23 @@ import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
 
 export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void {
-  app.post("/api/v1/videos", async (request, reply) => {
-    const parsed = videoProjectRequestSchema.safeParse(request.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.message);
+  app.post(
+    "/api/v1/videos",
+    // docs/13_SECURITY_ARCHITECTURE.md §4 Layer 2 — a long-form video fans out into many
+    // per-scene generation jobs (docs/07 §1.6), the most resource-intensive single request
+    // shape in the platform; capped tighter than images accordingly.
+    { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = videoProjectRequestSchema.safeParse(request.body);
+      if (!parsed.success) throw new ValidationError(parsed.error.message);
 
-    const id = uuid();
-    const project = await createVideoProject({ projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes }, id, parsed.data);
-    await orchestrateVideoProject({ projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue }, id);
+      const id = uuid();
+      const project = await createVideoProject({ projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes }, id, parsed.data);
+      await orchestrateVideoProject({ projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue }, id);
 
-    reply.status(202).send({ project });
-  });
+      reply.status(202).send({ project });
+    }
+  );
 
   app.get("/api/v1/videos", async () => ({ projects: await ctx.videoProjects.list() }));
 

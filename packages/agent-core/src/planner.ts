@@ -1,5 +1,6 @@
 import type { CreateTaskNodeInput, TaskType, ToolDefinition } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
+import { UNTRUSTED_CONTENT_SYSTEM_PROMPT, wrapUntrustedContent } from "./trust-boundary.js";
 
 export type ToolLookup = (toolId: string) => ToolDefinition | undefined;
 
@@ -107,9 +108,10 @@ function planReadAndSummarize(
       dependsOn: [readNodeId],
       input: {
         messages: [
+          { role: "system", content: UNTRUSTED_CONTENT_SYSTEM_PROMPT },
           {
             role: "user",
-            content: `Here is the file content:\n\n{{${readNodeId}.output.content}}\n\nQuestion: ${question}`,
+            content: `Here is the file content:\n\n${wrapUntrustedContent(`{{${readNodeId}.output.content}}`)}\n\nQuestion: ${question}`,
           },
         ],
       },
@@ -176,9 +178,10 @@ function planAnswerFromDocuments(input: Record<string, unknown>, lookupTool: Too
       dependsOn: [searchNodeId],
       input: {
         messages: [
+          { role: "system", content: UNTRUSTED_CONTENT_SYSTEM_PROMPT },
           {
             role: "user",
-            content: `Answer the question using only the context below, and cite which numbered source you used.\n\nContext:\n{{${searchNodeId}.output.context}}\n\nQuestion: ${question}`,
+            content: `Answer the question using only the context below, and cite which numbered source you used.\n\nContext:\n${wrapUntrustedContent(`{{${searchNodeId}.output.context}}`)}\n\nQuestion: ${question}`,
           },
         ],
       },

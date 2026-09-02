@@ -11,15 +11,22 @@ import type { AppContext } from "../../context.js";
  * it never calls the provider inline.
  */
 export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void {
-  app.post("/api/v1/images", async (request, reply) => {
-    const parsed = imageGenerationRequestSchema.safeParse(request.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.message);
+  app.post(
+    "/api/v1/images",
+    // docs/13_SECURITY_ARCHITECTURE.md §4 Layer 2 (per-resource consumption caps) — image
+    // generation is the most expensive endpoint the mock provider stands in for; a real
+    // provider bills per call, so this cap exists even though the mock itself is cheap.
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = imageGenerationRequestSchema.safeParse(request.body);
+      if (!parsed.success) throw new ValidationError(parsed.error.message);
 
-    const id = uuid();
-    const generation = await ctx.imageGenerations.create(id, parsed.data);
-    await ctx.jobQueue.enqueue("image.generate", { generationId: id });
-    reply.status(202).send({ generation });
-  });
+      const id = uuid();
+      const generation = await ctx.imageGenerations.create(id, parsed.data);
+      await ctx.jobQueue.enqueue("image.generate", { generationId: id });
+      reply.status(202).send({ generation });
+    }
+  );
 
   app.get("/api/v1/images", async () => ({ generations: await ctx.imageGenerations.list() }));
 

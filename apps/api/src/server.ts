@@ -1,5 +1,6 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import type { AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
@@ -18,6 +19,29 @@ export async function buildServer(config: AppConfig, ctx: AppContext) {
   // a real bug found only by actual browser-driven UI testing (docs/25 Phase 10), never by
   // curl (which doesn't enforce CORS at all) or by unit/integration tests.
   await app.register(cors, { origin: config.CORS_ORIGIN, methods: ["GET", "POST", "PUT", "PATCH", "DELETE"] });
+
+  // docs/13_SECURITY_ARCHITECTURE.md §4 "Layer 1 — edge/API rate limiting". A generous
+  // global default (real requests aren't expensive; this exists to blunt a runaway client
+  // or script, not to throttle normal use) plus stricter per-route overrides on the
+  // genuinely expensive endpoints (image/video generation, agent task creation) — see
+  // routes/v1/{images,videos,agent}.ts's `config.rateLimit`. In-memory store: correct for
+  // this single-instance deployment (ADR-025/027's same reasoning for not adding Redis
+  // before it's actually needed) — revisit if/when the API ever runs as more than one
+  // instance behind a shared load balancer.
+  await app.register(rateLimit, {
+    global: true,
+    max: 300,
+    timeWindow: "1 minute",
+    // @fastify/rate-limit's default error has a `statusCode` but no `code` property, so the
+    // central error handler's generic fallback ("BAD_REQUEST") reported an accurate status
+    // with a misleading label — this keeps the response shape consistent with every other
+    // endpoint's typed error codes.
+    errorResponseBuilder: (_req, context) => ({
+      statusCode: context.statusCode,
+      code: "RATE_LIMITED",
+      message: `Rate limit exceeded, retry in ${context.after}.`,
+    }),
+  });
 
   registerErrorHandler(app);
   registerHealthRoute(app);

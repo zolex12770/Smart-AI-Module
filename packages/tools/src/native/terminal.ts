@@ -68,6 +68,37 @@ export function createTerminalTools(root: string): NativeToolEntry[] {
       const cwd = resolveSandboxedPath(root, typeof args.cwd === "string" ? args.cwd : ".");
       const cmdArgs = Array.isArray(args.args) ? args.args.map(String) : [];
 
+      // docs/13_SECURITY_ARCHITECTURE.md §6/§11 — found the hard way (a real exploit run
+      // against a live server, not a theoretical review): `node`'s own CLI parser treats a
+      // single argv token like `--eval=<code>` as a flag, not a filename, so a plain
+      // allow-list of the *command* alone does nothing to stop the *argument* from being
+      // arbitrary code execution — `args: ["--eval=require('fs').readFileSync(...)"]`
+      // genuinely read a file outside the sandbox in this exact code path before this fix.
+      // A flag-shaped argument is never a legitimate use of this tool (its only real job is
+      // `node <script-file>`), so any arg starting with "-" is rejected outright. Every
+      // argument (not only the first) is additionally resolved through the same sandbox
+      // boundary as `cwd`: today only `args[0]` is ever a real path (the planner only ever
+      // sends one arg), but a plain string like a flag-free numeric or name argument still
+      // resolves harmlessly under `cwd` when treated as a path, so validating all of them
+      // uniformly costs nothing for legitimate callers while closing off a second-argument
+      // path-escape for any future caller that passes more than one.
+      for (const arg of cmdArgs) {
+        if (arg.startsWith("-")) {
+          return {
+            ok: false,
+            error: `Argument "${arg}" looks like a command-line flag, which this tool never legitimately needs — rejected.`,
+          };
+        }
+        try {
+          // Resolved relative to the already-sandboxed `cwd` — the same base Node itself
+          // will use to resolve a path argument when it actually runs — not relative to
+          // `root`, which would validate the wrong path for any non-root `cwd`.
+          resolveSandboxedPath(root, arg, cwd);
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+
       const result = await runProcess(command, cmdArgs, cwd);
       return { ok: true, output: result };
     },

@@ -7,13 +7,21 @@ import type { AppContext } from "../../context.js";
  * graph implemented in packages/agent-core (docs/11_AGENT_LOOP.md).
  */
 export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void {
-  app.post("/api/v1/agent/tasks", async (request, reply) => {
-    const parsed = createTaskRequestSchema.safeParse(request.body);
-    if (!parsed.success) throw new ValidationError(parsed.error.message);
+  app.post(
+    "/api/v1/agent/tasks",
+    // docs/13_SECURITY_ARCHITECTURE.md §4 Layer 2 — each task spins up a full task graph
+    // (potentially several tool/model-call nodes); the dispatcher's own hard cascade-
+    // iteration ceiling (packages/agent-core/src/engine.ts) bounds a single runaway task,
+    // this bounds the rate of *new* tasks.
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = createTaskRequestSchema.safeParse(request.body);
+      if (!parsed.success) throw new ValidationError(parsed.error.message);
 
-    const task = await ctx.engine.createAndStart(parsed.data.taskType, parsed.data.input);
-    reply.status(201).send({ task });
-  });
+      const task = await ctx.engine.createAndStart(parsed.data.taskType, parsed.data.input);
+      reply.status(201).send({ task });
+    }
+  );
 
   app.get("/api/v1/agent/tasks", async () => ({ tasks: await ctx.tasks.list() }));
 
