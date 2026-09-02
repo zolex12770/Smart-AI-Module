@@ -1,9 +1,25 @@
 import { readFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { v4 as uuid } from "uuid";
 import type { Document, DocumentChunkRepository, DocumentRepository } from "@ai-platform/database";
 import { resolveSandboxedPath } from "@ai-platform/tools";
 import type { EmbeddingProvider } from "@ai-platform/embeddings";
 import { chunkText } from "./chunking.js";
+import { extractDocxText } from "./parsers/docx.js";
+import { extractPdfText } from "./parsers/pdf.js";
+
+/**
+ * Extension-based dispatch — real parsing for .pdf (packages/rag/src/parsers/pdf.ts, via
+ * pdfjs-dist) and .docx (parsers/docx.ts, a hand-rolled ZIP+XML reader, no new dependency
+ * — the same "real implementation over a new dependency" call as ADR-030's GIF encoder),
+ * plain UTF-8 text for everything else (.txt/.md and unrecognized extensions alike, so a
+ * text file with an unusual extension still ingests as it always has).
+ */
+async function extractText(safePath: string, extension: string): Promise<string> {
+  if (extension === ".pdf") return extractPdfText(await readFile(safePath));
+  if (extension === ".docx") return extractDocxText(await readFile(safePath));
+  return readFile(safePath, "utf8");
+}
 
 export interface IngestDeps {
   documentRepo: DocumentRepository;
@@ -32,16 +48,19 @@ export async function createPendingDocument(
  * Real document ingestion (docs/09_RAG_ARCHITECTURE.md) — reads a file from the same
  * sandboxed workspace the native tools use, chunks it, embeds every chunk (real feature-
  * hashed vectors — docs/26_DECISIONS.md ADR-026), and persists the chunks, updating the
- * given document's status in place. Currently handles plain text (.txt/.md); PDF/DOCX
- * parsing is not yet implemented (PROJECT_STATUS.md).
+ * given document's status in place. Handles plain text/.md, real PDF text extraction, and
+ * real DOCX text extraction (see extractText above); CSV/code-aware chunking (docs/09 §2's
+ * remaining rows) are not yet implemented.
  */
 export async function processDocumentIngestion(deps: IngestDeps, document: Document): Promise<void> {
   try {
     const safePath = resolveSandboxedPath(deps.sandboxRoot, document.sourcePath);
-    const text = await readFile(safePath, "utf8");
+    const text = await extractText(safePath, extname(document.sourcePath).toLowerCase());
     const chunks = chunkText(text);
     if (chunks.length === 0) {
-      throw new Error("Document produced zero chunks (empty file?).");
+      throw new Error(
+        "Document produced zero chunks (empty file, or a scanned/image-only PDF with no extractable text layer — OCR is not implemented)."
+      );
     }
 
     const embeddings = await deps.embeddings.embed(chunks);

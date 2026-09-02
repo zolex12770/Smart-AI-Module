@@ -46,8 +46,8 @@ export default function FilesPage() {
           <p className="page-subtitle">
             Ingests a real file into chunked, embedded, pgvector-searchable storage (docs/09_RAG_ARCHITECTURE.md) as a
             real async job — no synchronous upload widget exists yet, so the path below is relative to the API
-            server's own sandbox directory (<code>SANDBOX_ROOT</code>), not a browser file picker. Plain text/Markdown
-            only — PDF/DOCX parsing isn't built yet.
+            server&apos;s own sandbox directory (<code>SANDBOX_ROOT</code>), not a browser file picker. Plain
+            text/Markdown, PDF, and DOCX all ingest for real — CSV isn&apos;t parsed yet.
           </p>
         </div>
       </div>
