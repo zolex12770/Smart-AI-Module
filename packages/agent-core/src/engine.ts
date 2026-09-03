@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import type { TaskNodeRepository, TaskRepository, TaskTransitionRepository } from "@ai-platform/database";
-import type { ModelRouter } from "@ai-platform/model-router";
+import { estimatePromptTokens, type ModelRouter } from "@ai-platform/model-router";
 import type { ToolRegistry } from "@ai-platform/tools";
-import type { ChatMessage, ChatRole, Task, TaskEvent, TaskNode, TaskType } from "@ai-platform/shared";
+import type { ChatMessage, ChatRole, Task, TaskEvent, TaskNode, TaskType, TokenUsage } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import { planTask } from "./planner.js";
 import { resolveNodeInput } from "./template.js";
@@ -11,12 +11,43 @@ import { verifyNodeOutput } from "./verify.js";
 const TERMINAL_TASK_STATES = ["COMPLETED", "FAILED", "CANCELLED"] as const;
 const TERMINAL_NODE_STATUSES = ["completed", "failed", "cancelled", "skipped"] as const;
 
+/**
+ * Quota check + usage recording for the engine's model calls — docs/26_DECISIONS.md ADR-046.
+ *
+ * `POST /api/v1/chat` has always checked quota before a provider call and written a real
+ * `usage_records` row after it. The engine's `model_call` nodes went through the *same*
+ * provider and did neither, so an agent task's spend was invisible to `GET /api/v1/usage` and
+ * unbounded by `DAILY_TOKEN_LIMIT`/`MONTHLY_TOKEN_LIMIT`. Harmless while every provider was a
+ * mock; a real hole the moment a real key exists (FR-061/FR-063 say "all LLM calls", not "all
+ * chat calls").
+ *
+ * Deliberately a small structural interface rather than a dependency on `@ai-platform/quota`
+ * and a concrete repository: agent-core stays testable with a scripted double, and the
+ * composition root remains the only place that knows how quota and the usage ledger are built.
+ */
+export interface ModelCallMeter {
+  /** Pre-flight, on an estimate — the real counts aren't known until the provider answers. */
+  checkTokens(estimatedTokens: number): Promise<{ allowed: boolean; reason?: string }>;
+  /** Post-call, with the provider's real figures. Never called for a call that did not happen. */
+  record(entry: {
+    provider: string;
+    model: string;
+    inputTokens: number;
+    outputTokens: number;
+    taskId: string;
+    nodeId: string;
+  }): Promise<void>;
+}
+
 export interface AgentEngineDeps {
   taskRepo: TaskRepository;
   nodeRepo: TaskNodeRepository;
   transitionRepo: TaskTransitionRepository;
   toolRegistry: ToolRegistry;
   modelRouter: ModelRouter;
+  /** Optional so existing tests and any embedder without a ledger keep working unchanged;
+   * `apps/api` always supplies one (ADR-046). */
+  meter?: ModelCallMeter;
 }
 
 /**
@@ -246,7 +277,31 @@ export class AgentEngine {
       await this.updateNode(node, { status: "waiting_model" }, "engine");
       try {
         const messages = (resolvedInput.messages as ChatMessage[] | undefined) ?? [];
+        // ADR-046 — the same order as the chat route: refuse before spending, record after.
+        if (this.deps.meter) {
+          const estimatedTokens = estimatePromptTokens(messages.map((m) => m.content).join(" "));
+          const check = await this.deps.meter.checkTokens(estimatedTokens);
+          if (!check.allowed) {
+            // A node failure, not a thrown quota error: the task's own failure path already
+            // records the reason on the node and in the transition log, so an operator can see
+            // exactly which node was refused and why.
+            await this.handleNodeFailure(taskId, node, check.reason ?? "Token quota exceeded.");
+            return;
+          }
+        }
         const result = await runModelToCompletion(this.deps.modelRouter, messages, node.modelProvider);
+        if (this.deps.meter) {
+          // Recorded even when the router fell back to the mock — the ledger's job is to say
+          // what actually happened, and `provider` on the row is what distinguishes them.
+          await this.deps.meter.record({
+            provider: result.provider,
+            model: result.model,
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            taskId,
+            nodeId: node.id,
+          });
+        }
         await this.verifyAndAdvance(taskId, node, byId, {
           content: result.content,
           provider: result.provider,
@@ -459,12 +514,14 @@ async function runModelToCompletion(
   router: ModelRouter,
   messages: ChatMessage[],
   provider: string | null
-): Promise<{ content: string; provider: string; model: string }> {
+): Promise<{ content: string; provider: string; model: string; usage: TokenUsage }> {
   const normalizedMessages = messages.map((m) => ({ role: m.role as ChatRole, content: m.content }));
   for await (const event of router.streamChat({ messages: normalizedMessages, provider: provider ?? undefined })) {
     if (event.type === "error") throw new Error(event.message);
     if (event.type === "done") {
-      return { content: event.message.content, provider: event.provider, model: event.model };
+      // `usage` was previously discarded here — which is precisely why an agent task's real
+      // token spend never reached the ledger (ADR-046).
+      return { content: event.message.content, provider: event.provider, model: event.model, usage: event.usage };
     }
   }
   throw new Error("Model stream ended without a done event.");

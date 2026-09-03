@@ -46,9 +46,25 @@ async function setupHarness() {
   registry.register(new MockLLMProvider(0), { asDefault: true }); // 0ms token delay — fast tests
   const modelRouter = new ModelRouter(registry);
 
-  const engine = new AgentEngine({ taskRepo: tasks, nodeRepo: taskNodes, transitionRepo: taskTransitions, toolRegistry, modelRouter });
+  // docs/26_DECISIONS.md ADR-046 — a real recording meter, scripted only in its verdict, so
+  // the tests below assert on what the engine actually handed it.
+  const meterCalls: Array<{ provider: string; model: string; inputTokens: number; outputTokens: number; taskId: string; nodeId: string }> = [];
+  const meterChecks: number[] = [];
+  const meter = {
+    allow: true as boolean,
+    reason: undefined as string | undefined,
+    async checkTokens(estimatedTokens: number) {
+      meterChecks.push(estimatedTokens);
+      return { allowed: meter.allow, reason: meter.reason };
+    },
+    async record(entry: { provider: string; model: string; inputTokens: number; outputTokens: number; taskId: string; nodeId: string }) {
+      meterCalls.push(entry);
+    },
+  };
 
-  return { db, sandboxRoot, tasks, taskNodes, taskTransitions, toolRegistry, modelRouter, engine };
+  const engine = new AgentEngine({ taskRepo: tasks, nodeRepo: taskNodes, transitionRepo: taskTransitions, toolRegistry, modelRouter, meter });
+
+  return { db, sandboxRoot, tasks, taskNodes, taskTransitions, toolRegistry, modelRouter, engine, meter, meterCalls, meterChecks };
 }
 
 async function waitForTaskState(tasks: TaskRepository, taskId: string, states: TaskState[], timeoutMs = 5000): Promise<Task> {
@@ -265,3 +281,53 @@ describe("AgentEngine — real state machine + dispatcher", () => {
     });
   });
 });
+
+/**
+ * docs/26_DECISIONS.md ADR-046 — the chat route has always checked quota before a provider
+ * call and written a real usage row after it; the engine's model_call nodes went through the
+ * same provider and did neither, so an agent task's spend was invisible to GET /api/v1/usage
+ * and unbounded by the token limits.
+ */
+describe("AgentEngine model-call metering", () => {
+  let harness: Awaited<ReturnType<typeof setupHarness>>;
+
+  beforeEach(async () => {
+    harness = await setupHarness();
+  });
+
+  afterEach(async () => {
+    await harness.db.$client.close();
+    rmSync(harness.sandboxRoot, { recursive: true, force: true });
+  });
+
+  it("checks quota before the call and records the provider's real usage after it", async () => {
+    const task = await harness.engine.createAndStart("echo_chat", { message: "meter me" });
+    await waitForTaskState(harness.tasks, task.id, ["COMPLETED"]);
+
+    expect(harness.meterChecks.length).toBe(1);
+    expect(harness.meterChecks[0]).toBeGreaterThan(0);
+
+    expect(harness.meterCalls.length).toBe(1);
+    const recorded = harness.meterCalls[0];
+    expect(recorded.provider).toBe("mock");
+    expect(recorded.taskId).toBe(task.id);
+    // The real figures from the provider's done event, not an estimate.
+    expect(recorded.outputTokens).toBeGreaterThan(0);
+    const nodes = await harness.taskNodes.listByRoot(task.id);
+    expect(nodes.some((n) => n.id === recorded.nodeId)).toBe(true);
+  });
+
+  it("refuses the call when quota says no — the node fails with the reason and NOTHING is recorded", async () => {
+    harness.meter.allow = false;
+    harness.meter.reason = "Daily token limit of 100 would be exceeded (98 used so far today).";
+
+    const task = await harness.engine.createAndStart("echo_chat", { message: "over budget" });
+    await waitForTaskState(harness.tasks, task.id, ["FAILED"]);
+
+    expect(harness.meterCalls).toEqual([]);
+    const nodes = await harness.taskNodes.listByRoot(task.id);
+    expect(nodes[0].status).toBe("failed");
+    expect(nodes[0].errorMessage).toMatch(/Daily token limit of 100/);
+  });
+});
+

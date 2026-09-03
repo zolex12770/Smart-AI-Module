@@ -38,7 +38,7 @@ import {
   processVideoScene,
   type AssetStore,
 } from "@ai-platform/media";
-import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
+import { estimateLlmCostUsd, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/observability";
 import { QuotaManager } from "@ai-platform/quota";
 import { createRagTools, processDocumentIngestion, processDocumentScan } from "@ai-platform/rag";
@@ -412,6 +412,30 @@ async function main() {
   });
 
   const engine = new AgentEngine({
+    // docs/26_DECISIONS.md ADR-046 — the same quota gate and usage ledger the chat route
+    // uses, so a real key's spend through agent tasks is bounded and visible too.
+    meter: {
+      checkTokens: (estimatedTokens) => quota.checkLlmTokens(estimatedTokens),
+      record: async ({ provider, model, inputTokens, outputTokens, taskId, nodeId }) => {
+        await usage.create({
+          id: uuid(),
+          kind: "llm",
+          provider,
+          model,
+          inputTokens,
+          outputTokens,
+          units: null,
+          estimatedCostUsd: estimateLlmCostUsd(provider, model, { inputTokens, outputTokens }),
+          // No HTTP request id here: the call originates from a task node, not a request.
+          // The node id is the durable identifier an operator would trace it back by.
+          requestId: nodeId,
+        });
+        logger.info(
+          { task_id: taskId, node_id: nodeId, provider, model, tokens_input: inputTokens, tokens_output: outputTokens, status: "success" },
+          "provider call completed"
+        );
+      },
+    },
     taskRepo: tasks,
     nodeRepo: taskNodes,
     transitionRepo: taskTransitions,
