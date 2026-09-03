@@ -32,7 +32,7 @@ Each handler is a thin adapter too: fetch job payload → call into `packages/me
 
 ## Configuration loading
 
-All configuration (provider API keys, database URL, storage config, feature flags) is loaded once at process boot via a single Zod schema per app (`config.ts`), which fails fast with a clear error if required variables are missing/malformed — never read ad hoc via `process.env.X` scattered through the codebase (this is also what makes ADR-013's "mock provider can't boot in production" guard possible to implement in one place). `.env.example` documents every variable; see [[19_DEPLOYMENT_ARCHITECTURE]] for the full environment variable reference.
+All configuration (provider API keys, database URL, storage config, feature flags) is loaded once at process boot via a single Zod schema per app (`config.ts`), which fails fast with a clear error if required variables are missing/malformed — never read ad hoc via `process.env.X` scattered through the codebase (this is also what makes ADR-013's "mock provider can't boot in production" guard possible to implement in one place). `.env.example` documents every variable; see [[19_DEPLOYMENT_ARCHITECTURE]] for the full environment variable reference. Since [[26_DECISIONS]] ADR-043 that file is not just documentation: `loadConfig()` loads `apps/api/.env` and then the repo-root `.env` through Node's built-in `process.loadEnvFile` before parsing the schema, so a real provider key can be supplied by dropping it in a gitignored file. A real environment variable always wins over a file value, and nothing is loaded under `NODE_ENV=test`.
 
 ## Error handling middleware
 

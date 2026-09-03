@@ -1,4 +1,34 @@
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
+
+/**
+ * Loads `.env` files into process.env using Node's own loader (`process.loadEnvFile`, no
+ * dependency) — docs/26_DECISIONS.md ADR-043. Two locations, resolved relative to THIS
+ * module rather than the working directory (which differs between `tsx watch` under
+ * `npm run dev -w`, `node apps/api/dist/index.js` in the container, and the test runner):
+ *
+ *   apps/api/.env   — app-specific
+ *   <repo root>/.env — the location `.env.example` documents
+ *
+ * Both paths resolve identically from `src/` and from `dist/`. Real environment variables
+ * always win over file values (Node's loader never overwrites an existing key — verified in
+ * config.test.ts, not assumed), so a container's injected secrets can't be shadowed by a
+ * stray file. Never runs under NODE_ENV=test: a developer's `.env` with DATABASE_URL set
+ * must not be able to point the test suite at a real database.
+ */
+export function loadDotEnvFiles(nodeEnv = process.env.NODE_ENV): string[] {
+  if (nodeEnv === "test") return [];
+  const candidates = [new URL("../.env", import.meta.url), new URL("../../../.env", import.meta.url)];
+  const loaded: string[] = [];
+  for (const url of candidates) {
+    const path = fileURLToPath(url);
+    if (!existsSync(path)) continue;
+    process.loadEnvFile(path);
+    loaded.push(path);
+  }
+  return loaded;
+}
 
 /**
  * Single point of env loading — see docs/17_BACKEND_ARCHITECTURE.md. Fails fast on boot
@@ -67,6 +97,12 @@ const envSchema = z.object({
 export type AppConfig = z.infer<typeof envSchema>;
 
 export function loadConfig(): AppConfig {
+  const envFiles = loadDotEnvFiles();
+  if (envFiles.length > 0) {
+    // Plain console: the structured logger is constructed AFTER config (it needs LOG_LEVEL).
+    // Paths only — never the values, some of which are secrets.
+    console.log(`Loaded environment from: ${envFiles.join(", ")}`);
+  }
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     console.error("Invalid environment configuration:", parsed.error.flatten().fieldErrors);

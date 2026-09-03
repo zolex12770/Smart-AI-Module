@@ -92,3 +92,14 @@ closing section warned about.
   or the Cloud Run sidecar (a [[27_RISKS_AND_LIMITATIONS]] row). The live run also caught a
   real harness gap (the test app had not ensured the new queue) that the passing unit tests
   could not have. docs/30's security box updated accordingly.
+- **2026-09-03 — a documentation-vs-behaviour divergence found and closed ([[26_DECISIONS]]
+  ADR-043).** `.env.example` had been in the repository since Phase 0 and `.gitignore` had
+  ignored `.env` for just as long, but no code ever read such a file: the documented way to
+  configure the platform did nothing, which for a reader supplying a real API key would have
+  looked like the mock provider ignoring their key. This is the same class of defect as the
+  stale "auth is real" claim this audit's first pass caught — a doc asserting a behaviour the
+  code does not have — and it is the reason Phase 2's success path could only ever have been
+  verified by pasting a secret into a shell. `apps/api` now loads `.env` natively (Node's own
+  loader, no dependency; real environment beats file, nothing loads under `NODE_ENV=test`,
+  paths logged and values never), and `.env.example` — which had drifted to six of the
+  schema's twenty-four variables — now documents all of them.

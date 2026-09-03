@@ -38,7 +38,7 @@ If the API ever fails to boot with a PGlite `RuntimeError: Aborted()`, the local
 
 ## Configuring real providers
 
-Real providers activate automatically when their environment variable is set — no code changes needed. Each is built against the raw documented API (not the official SDK — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-023) and has been confirmed to reach the real live endpoint correctly (a deliberately invalid key gets back a real, correctly-shaped error from each provider), but the success path has not been verified end-to-end since no real key exists in this environment — that's the one thing a real key from you would let us finally confirm.
+Real providers activate automatically when their environment variable is set — no code changes needed. Put it in a `.env` file (copy `.env.example` to `.env` at the repo root, or create `apps/api/.env`; both are gitignored and loaded natively at boot, ADR-043) or export it in your shell — a real environment variable always wins over a file value. Each is built against the raw documented API (not the official SDK — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-023) and has been confirmed to reach the real live endpoint correctly (a deliberately invalid key gets back a real, correctly-shaped error from each provider), but the success path has not been verified end-to-end since no real key exists in this environment — that's the one thing a real key from you would let us finally confirm.
 
 | Provider | Env var |
 |---|---|
