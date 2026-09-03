@@ -79,8 +79,31 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       "gen_ai.chat",
       { "gen_ai.system": "unknown", request_id: request.id, conversation_id: conversation.id },
       async (span) => {
+        // docs/26_DECISIONS.md ADR-044 — every provider the router skipped, in order. Without
+        // this the only structured record of a failed real-provider call would be the
+        // `provider: "mock", status: "success"` line below, which reads as a perfectly healthy
+        // request; an operator (or a first real-key verification) could not tell "the key
+        // worked" from "the key failed and the mock answered in its place".
+        const fellBackFrom: string[] = [];
         try {
-          for await (const event of ctx.router.streamChat({ ...chatRequest, conversationId: conversation.id })) {
+          for await (const event of ctx.router.streamChat(
+            { ...chatRequest, conversationId: conversation.id },
+            {
+              onFallback: (fallback) => {
+                fellBackFrom.push(fallback.provider);
+                request.log.warn(
+                  {
+                    request_id: request.id,
+                    provider: fallback.provider,
+                    stage: fallback.stage,
+                    error: fallback.message,
+                    status: "fallback",
+                  },
+                  "provider call failed, falling back to the next provider"
+                );
+              },
+            }
+          )) {
             send(event);
             if (event.type === "done") {
               await ctx.messages.add({
@@ -112,6 +135,7 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 "gen_ai.request.model": event.model,
                 "gen_ai.usage.input_tokens": event.usage.inputTokens,
                 "gen_ai.usage.output_tokens": event.usage.outputTokens,
+                "gen_ai.fell_back_from": fellBackFrom.join(","),
               });
               request.log.info(
                 {
@@ -122,6 +146,9 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                   tokens_output: event.usage.outputTokens,
                   latency_ms: Date.now() - startedAt,
                   status: "success",
+                  // ADR-044: empty on a clean call; naming the skipped providers otherwise, so
+                  // this line alone answers "did a real provider actually serve this?"
+                  fell_back_from: fellBackFrom,
                 },
                 "provider call completed"
               );

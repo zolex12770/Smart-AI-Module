@@ -714,3 +714,37 @@ New decisions are appended at the bottom. Do not edit past decisions to hide his
 
 **Date:** 2026-09-03
 **Impact:** `apps/api/src/config.ts` (`loadDotEnvFiles`, called at the top of `loadConfig()`); `apps/api/src/config.test.ts` (new, 3 tests); `.env.example` rewritten to cover all 24 variables; `README.md` (how to supply a key). 166 tests now pass across 34 files (up from 163/33).
+
+---
+
+## ADR-044: A provider fallback must be structurally visible — found by dry-running the real-key verification before the key existed
+
+**Decision:** `ModelRouter.streamChat` now reports every skipped provider to its caller through an `onFallback` hook — per call (so it can carry a request id) or per router instance — instead of only writing a `console.warn`. `apps/api` logs each fallback as a real structured WARN (`provider`, `stage`, `error`, `status: "fallback"`), and the chat route's `provider call completed` line and `gen_ai.chat` span now carry `fell_back_from`. The mock provider's canned text no longer claims that no real provider is configured.
+
+**How this was found.** ADR-043 made it possible to supply a real key by file, so before asking for one, the verification itself was dry-run with a deliberately **invalid** Google key — the point being to prove the harness, not the key. It failed in a way more interesting than the harness bug it was looking for. The real Gemini call was made, really rejected with a `400 API_KEY_INVALID`, and ADR-024's fallback quietly served a mock answer — and the *only structured record of that request* read:
+
+```
+{"level":30,...,"provider":"mock","model":"mock-1","tokens_input":19,"tokens_output":58,"status":"success","msg":"provider call completed"}
+```
+
+Zero WARN lines, zero ERROR lines, `status: "success"`. The failure existed only as a `console.warn` on stderr — unstructured text that Cloud Logging would scatter across several unparsed lines. So the two outcomes the user's first real key is meant to distinguish — *"the key works"* and *"the key failed and the mock covered for it"* — were indistinguishable in the JSON logs. That is precisely the failure mode that would have made a "successful" first verification meaningless.
+
+**docs/20 had already required this.** Its §3.3 says the provider-call span must record "critically — which fallback provider (if any) was used, so a trace shows the full retry/fallback path rather than just the call that eventually succeeded." The design doc was right and the implementation had never satisfied it; nothing failed, so nothing surfaced it. Same class of defect as ADR-043's unread `.env` — a documented behaviour the code did not have — which is why both are recorded in `docs/FINAL_AUDIT.md` rather than treated as tidy-ups.
+
+**Why a hook rather than a logger dependency.** `packages/model-router` depends only on `@ai-platform/shared` and `@ai-platform/llm-mock`; wiring the app's Pino logger into it would invert that and make the package untestable without an app. The hook keeps the router a pure library, lets the *chat route* attach the request id that makes a fallback correlatable with the request that caused it, and lets the composition root cover every other caller (today the agent engine's `model_call` nodes) with an instance-wide hook. `console.warn` survives as the default when no hook is supplied, so the library's standalone behaviour is unchanged.
+
+**The mock's message was actively misleading.** It read `[mock response — no real LLM provider is configured] … Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY to talk to a real model instead.` — a sentence that is false in exactly the case where a user most needs the truth: a configured key whose provider call failed. Someone with a valid but rate-limited key would have been told their key was missing. It now says no real model produced the answer (true in both cases) and names the log line that distinguishes them.
+
+**Verified for real:**
+- 2 new router tests: a per-call hook receives each skipped provider with the correct `stage` (`no_first_event` for a throw, `error_event` for an error first event) and message, in order, while the surviving provider still serves the request; an instance-wide hook is used when a call supplies none, and a clean call reports nothing at all.
+- **Live, the same dry run repeated after the fix**: the invalid key now produces two structured WARN lines naming `provider: "google"`, `stage: "no_first_event"` and the real `API_KEY_INVALID` message — one carrying `request_id: "req-3"` (the chat route's per-call hook), one without (the agent engine's instance hook, a genuinely different caller) — and the completed-call line reads `"fell_back_from":["google"]`. The API key's value appears nowhere in the log, checked explicitly.
+- 168 tests now pass across 34 files.
+
+**Also fixed while dry-running the harness** (harness-side, not product): the verification script compared task status case-sensitively against the API's lower-case value, and accepted `estimatedCostUsdThisMonth: 0` as a pass — correct for the unpriced mock, but it would have silently passed a *real* provider whose model has no pricing entry, which is exactly the check that matters.
+
+**Honestly unverified:** no real, valid key has been used yet — the success path (a real provider serving a request with `fell_back_from: []`) is still unproven and remains the one open Phase 2 item. The fallback path is now proven in both directions: it fires, and it is visible.
+
+**Alternatives considered:** Adding `fellBackFrom` to the SSE `done` event — rejected for now: it changes a client-facing contract for something no UI consumes yet, and the `provider` field already tells a client which provider answered. Making the router log directly through `packages/observability` — rejected per the dependency reasoning above. Failing the request outright instead of falling back — that is ADR-024's decision, not this one's to revisit; the complaint here was never that fallback happens, only that it happened silently.
+
+**Date:** 2026-09-03
+**Impact:** `packages/model-router/src/router.ts` (`ProviderFallback`, `StreamChatOptions`, per-call and instance hooks; `console.warn` only as the default) + 2 tests; `apps/api/src/index.ts` (instance hook to a structured WARN), `routes/v1/chat.ts` (per-call hook with `request_id`, `fell_back_from` on the completed-call log and the `gen_ai.chat` span); `packages/providers/llm-mock/src/index.ts` (honest wording); `docs/20_OBSERVABILITY.md` field table. 168 tests now pass across 34 files (up from 166/34).

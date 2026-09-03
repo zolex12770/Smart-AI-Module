@@ -42,6 +42,7 @@ the point a request/job/agent-run begins):
 | `provider` | Provider adapter name (`vertex`, `openai`, `anthropic`, `mock`) |
 | `latency_ms` | Duration of the operation the log line reports on |
 | `tokens_input` / `tokens_output` | Token counts for the specific model call, when applicable |
+| `fell_back_from` | **As built** ([[26_DECISIONS]] ADR-044): the providers the router skipped before the one that answered, in order — `[]` on a clean call. Present on `provider call completed`; a matching WARN line with `status: "fallback"` carries each skipped provider's `stage` and error message |
 | `cost_estimate_usd` | Computed from token counts × the provider's published per-token rate at call time (see §1.3) |
 | `tool_name` | For tool-call logs: which tool was invoked |
 | `mcp_server_id` | For MCP-routed tool calls: which registered MCP server handled it |

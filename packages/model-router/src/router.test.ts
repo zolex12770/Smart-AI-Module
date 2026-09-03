@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatRequest, ChatStreamEvent, LLMProvider } from "@ai-platform/shared";
 import { ModelRegistry } from "./registry.js";
-import { ModelRouter } from "./router.js";
+import { ModelRouter, type ProviderFallback } from "./router.js";
 
 /**
  * Real fake providers (not mocks of ModelRouter itself) exercising the actual fallback
@@ -130,5 +130,58 @@ describe("ModelRouter (real fallback state machine)", () => {
         // drain
       }
     }).rejects.toThrow(/down|failed to respond/);
+  });
+});
+
+/**
+ * docs/26_DECISIONS.md ADR-044. A fallback used to be reported only as a `console.warn`, so
+ * the single structured record of a request that a real provider had failed said
+ * `provider: "mock", status: "success"`. These lock in that every skipped provider is
+ * handed to the caller, which is what makes a failed real call visible in the JSON logs.
+ */
+describe("ModelRouter fallback reporting", () => {
+  it("hands each skipped provider to a per-call onFallback hook, naming the failure stage", async () => {
+    const throwing = new ScriptedProvider("throwing", () => {
+      throw new Error("connection refused");
+    });
+    const erroring = new ScriptedProvider("erroring", [{ type: "error", message: "quota exhausted" }]);
+    const good = new ScriptedProvider("good", [doneEvent("good")]);
+    const registry = new ModelRegistry();
+    registry.register(throwing, { asDefault: true });
+    registry.register(erroring);
+    registry.register(good);
+    const router = new ModelRouter(registry);
+
+    const seen: ProviderFallback[] = [];
+    const events: ChatStreamEvent[] = [];
+    for await (const event of router.streamChat(request, { onFallback: (f) => seen.push(f) })) events.push(event);
+
+    expect(events.at(-1)).toMatchObject({ type: "done", provider: "good" });
+    expect(seen.map((f) => [f.provider, f.stage, f.message])).toEqual([
+      ["throwing", "no_first_event", "connection refused"],
+      ["erroring", "error_event", "quota exhausted"],
+    ]);
+  });
+
+  it("falls back to the instance-wide hook when a call supplies none, and reports nothing on a clean call", async () => {
+    const failing = new ScriptedProvider("failing", () => {
+      throw new Error("down");
+    });
+    const good = new ScriptedProvider("good", [doneEvent("good")]);
+    const registry = new ModelRegistry();
+    registry.register(failing, { asDefault: true });
+    registry.register(good);
+
+    const seen: ProviderFallback[] = [];
+    const router = new ModelRouter(registry, { onFallback: (f) => seen.push(f) });
+    for await (const _ of router.streamChat(request)) { /* drain */ }
+    expect(seen.map((f) => f.provider)).toEqual(["failing"]);
+
+    seen.length = 0;
+    const cleanRegistry = new ModelRegistry();
+    cleanRegistry.register(good, { asDefault: true });
+    const cleanRouter = new ModelRouter(cleanRegistry, { onFallback: (f) => seen.push(f) });
+    for await (const _ of cleanRouter.streamChat(request)) { /* drain */ }
+    expect(seen).toEqual([]);
   });
 });

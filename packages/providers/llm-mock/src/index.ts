@@ -49,9 +49,16 @@ export class MockLLMProvider implements LLMProvider {
       return "I didn't receive any message content. Try sending some text.";
     }
     return (
-      `[mock response — no real LLM provider is configured] ` +
+      // docs/26_DECISIONS.md ADR-044: this used to assert "no real LLM provider is
+      // configured", which is FALSE in the case that matters most — a configured real
+      // provider whose call failed, where ADR-024's fallback routes here. A user with a
+      // valid-but-rate-limited key was told their key was missing. The wording below is
+      // true in both cases and points at the log line that distinguishes them.
+      `[mock response — no real model produced this answer] ` +
       `You said: "${userText.trim()}". ` +
-      `Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY to talk to a real model instead.`
+      `If no ANTHROPIC_API_KEY, OPENAI_API_KEY or GOOGLE_API_KEY is set, set one to talk to a real model. ` +
+      `If one IS set, the real provider call failed and the router fell back — look for a ` +
+      `"provider call failed, falling back" line in the logs for the reason.`
     );
   }
 }

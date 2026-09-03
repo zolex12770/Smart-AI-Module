@@ -354,7 +354,17 @@ async function main() {
   const tasks = new PgTaskRepository(db);
   const taskNodes = new PgTaskNodeRepository(db);
   const taskTransitions = new PgTaskTransitionRepository(db);
-  const modelRouter = new ModelRouter(registry);
+  // docs/26_DECISIONS.md ADR-044 — the instance-wide fallback hook. The chat route overrides
+  // it per call so its warning carries the request id; this one covers every other caller
+  // (today: the agent engine's model_call nodes), which would otherwise report a failed real
+  // provider only as an unstructured `console.warn` on stderr.
+  const modelRouter = new ModelRouter(registry, {
+    onFallback: (fallback) =>
+      logger.warn(
+        { provider: fallback.provider, stage: fallback.stage, error: fallback.message, status: "fallback" },
+        "provider call failed, falling back to the next provider"
+      ),
+  });
 
   const engine = new AgentEngine({
     taskRepo: tasks,

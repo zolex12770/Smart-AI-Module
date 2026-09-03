@@ -103,3 +103,12 @@ closing section warned about.
   loader, no dependency; real environment beats file, nothing loads under `NODE_ENV=test`,
   paths logged and values never), and `.env.example` — which had drifted to six of the
   schema's twenty-four variables — now documents all of them.
+- **2026-09-03 — a silent-fallback defect found by dry-running a verification before the key
+  for it existed ([[26_DECISIONS]] ADR-044).** With a deliberately invalid Google key, the real
+  provider call failed, ADR-024's fallback served a mock answer, and the only structured log
+  line for the request said `provider: "mock" … status: "success"` with no WARN or ERROR
+  anywhere — making "the real key worked" indistinguishable from "the real key failed" in
+  exactly the verification this project has been waiting to run. [[20_OBSERVABILITY]] §3.3 had
+  required the fallback path be recorded since Phase 0; the code never did. Third instance of
+  this audit's recurring theme: the defects that remain are documented behaviours the code
+  does not have, and they surface only when something is actually run.
