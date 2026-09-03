@@ -1,5 +1,5 @@
 {
-  "name": "@ai-platform/model-router",
+  "name": "@ai-platform/quota",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,8 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@ai-platform/llm-mock": "*",
-    "@ai-platform/shared": "*"
+    "@ai-platform/database": "*"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

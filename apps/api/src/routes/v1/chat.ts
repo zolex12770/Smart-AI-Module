@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
+import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
 import { SpanStatusCode, withSpan } from "@ai-platform/observability";
-import { chatRequestSchema, NotFoundError, ValidationError, type ChatStreamEvent } from "@ai-platform/shared";
+import { chatRequestSchema, NotFoundError, QuotaExceededError, ValidationError, type ChatStreamEvent } from "@ai-platform/shared";
+import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
 
 /**
@@ -38,6 +40,16 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
         role: "user",
         content: lastUserMessage.content,
       });
+    }
+
+    // FR-063 — checked before any provider call is made, never after (docs/22_COST_AND_
+    // QUOTA_STRATEGY.md): a rough pre-flight estimate (real token counts aren't known until
+    // the provider responds) decides only whether to reject now; the usage actually
+    // recorded below is always the real post-call figure.
+    const estimatedTokens = estimatePromptTokens(chatRequest.messages.map((m) => m.content).join(" "));
+    const quotaCheck = await ctx.quota.checkLlmTokens(estimatedTokens);
+    if (!quotaCheck.allowed) {
+      throw new QuotaExceededError(quotaCheck.reason ?? "Token quota exceeded.");
     }
 
     // reply.hijack() below bypasses @fastify/cors' onSend hook entirely, so the
@@ -78,6 +90,22 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 providerUsed: event.provider,
                 modelUsed: event.model,
                 usage: event.usage,
+              });
+              // FR-061/FR-063 — the real post-call usage, not the pre-flight estimate above
+              // (docs/22: "only actuals count against quota"). estimatedCostUsd is null, not
+              // a fabricated figure, for any provider/model without researched pricing
+              // (packages/model-router/src/cost-estimator.ts) — today that's only the mock
+              // provider; the three real providers' current default models are priced.
+              await ctx.usage.create({
+                id: uuid(),
+                kind: "llm",
+                provider: event.provider,
+                model: event.model,
+                inputTokens: event.usage.inputTokens,
+                outputTokens: event.usage.outputTokens,
+                units: null,
+                estimatedCostUsd: estimateLlmCostUsd(event.provider, event.model, event.usage),
+                requestId: request.id,
               });
               span.setAttributes({
                 "gen_ai.system": event.provider,

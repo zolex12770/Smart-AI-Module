@@ -68,6 +68,8 @@ Exit criteria: `docker build` succeeds locally for each app image. **No `gcloud`
 Scope: cost/quota enforcement (FR-063), final pass on [[27_RISKS_AND_LIMITATIONS]], `/docs/FINAL_AUDIT.md` per the project's own definition of done.
 Exit criteria: FINAL_AUDIT.md exists with zero open CRITICAL items; every item in [[29_FEATURE_MATRIX]] has an accurate, current status.
 
+**Status (2026-09-02, [[26_DECISIONS]] ADR-038): both exit criteria met.** Real cost/quota enforcement (a new `usage_records` table, real researched per-token pricing for the three real providers' default models, `packages/quota`'s `QuotaManager`) is wired into chat/images/videos and live-verified with real `429` rejections and real per-scene usage aggregation. An independent audit agent — deliberately given no access to this session's own account of what was built — re-verified [[29_FEATURE_MATRIX]] and [[30_FINAL_SYSTEM_SPEC]] against the real repository, found one real CRITICAL divergence (docs/30 claimed a working auth system that doesn't exist) and fixed it in the same phase, plus two stale diagram details and a real automated-test gap in `packages/model-router` (closed with 5 new tests). `/docs/FINAL_AUDIT.md` records all of it.
+
 ---
 
 **Note on pacing:** phases are dependency-ordered, not time-boxed — each is only started once the previous phase's exit criteria are actually met and verified (build/test/typecheck green, manually confirmed where the checklist in the original brief calls for it). PROJECT_STATUS.md is the source of truth for "what phase are we actually in," not this document.

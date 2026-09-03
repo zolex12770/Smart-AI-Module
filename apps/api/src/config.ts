@@ -30,6 +30,13 @@ const envSchema = z.object({
   // alias for GOOGLE_API_KEY — support either name so either doc's instructions work.
   GOOGLE_API_KEY: z.string().optional(),
   GEMINI_API_KEY: z.string().optional(),
+  // FR-063 (docs/22_COST_AND_QUOTA_STRATEGY.md) — single-operator scope (ADR-008), so these
+  // are global, not per-user, limits. All optional: unset means "no limit configured," the
+  // same opt-in default docs/22's own design calls for.
+  DAILY_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
+  MONTHLY_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
+  DAILY_IMAGE_LIMIT: z.coerce.number().int().positive().optional(),
+  MONTHLY_VIDEO_SECONDS_LIMIT: z.coerce.number().int().positive().optional(),
 });
 
 export type AppConfig = z.infer<typeof envSchema>;

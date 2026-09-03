@@ -37,3 +37,11 @@ export class ProviderError extends AppError {
   readonly code = "PROVIDER_ERROR";
   readonly statusCode = 502;
 }
+
+/** FR-063 (docs/22_COST_AND_QUOTA_STRATEGY.md) — a configured usage quota would be
+ * exceeded by this request. Distinct from RateLimitError: that's a per-time-window request
+ * throttle (docs/26_DECISIONS.md ADR-032); this is a usage-budget check. */
+export class QuotaExceededError extends AppError {
+  readonly code = "QUOTA_EXCEEDED";
+  readonly statusCode = 429;
+}

@@ -7,5 +7,5 @@
   },
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../shared" }, { "path": "../providers/llm-mock" }]
+  "references": [{ "path": "../database" }]
 }

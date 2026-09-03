@@ -24,6 +24,7 @@
     "@ai-platform/media": "*",
     "@ai-platform/model-router": "*",
     "@ai-platform/observability": "*",
+    "@ai-platform/quota": "*",
     "@ai-platform/rag": "*",
     "@ai-platform/shared": "*",
     "@ai-platform/tools": "*",
@@ -32,6 +33,7 @@
     "@fastify/rate-limit": "^11.2.0",
     "@modelcontextprotocol/server-filesystem": "^2026.7.10",
     "fastify": "^5.12.1",
+    "uuid": "^11.0.4",
     "zod": "^3.25.76"
   },
   "devDependencies": {

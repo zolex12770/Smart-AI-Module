@@ -20,6 +20,7 @@ import {
   PgImageGenerationRepository,
   PgVideoProjectRepository,
   PgVideoSceneRepository,
+  PgUsageRecordRepository,
 } from "@ai-platform/database";
 import { HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MockImageProvider } from "@ai-platform/image-mock";
@@ -32,9 +33,11 @@ import { connectMcpServer } from "@ai-platform/mcp";
 import { LocalAssetStore, processImageGeneration, processVideoRender, processVideoScene } from "@ai-platform/media";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/observability";
+import { QuotaManager } from "@ai-platform/quota";
 import { createRagTools, processDocumentIngestion } from "@ai-platform/rag";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { MockVideoProvider } from "@ai-platform/video-mock";
+import { v4 as uuid } from "uuid";
 import { loadConfig, type AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { buildServer } from "./server.js";
@@ -112,6 +115,16 @@ async function main() {
   const documentChunks = new PgDocumentChunkRepository(db);
   const embeddings = new HashEmbeddingProvider();
 
+  // FR-063 (docs/22_COST_AND_QUOTA_STRATEGY.md) — single-operator scope (ADR-008), so these
+  // are global limits read straight from config; all optional (unset = no limit).
+  const usage = new PgUsageRecordRepository(db);
+  const quota = new QuotaManager(usage, {
+    dailyTokenLimit: config.DAILY_TOKEN_LIMIT,
+    monthlyTokenLimit: config.MONTHLY_TOKEN_LIMIT,
+    dailyImageLimit: config.DAILY_IMAGE_LIMIT,
+    monthlyVideoSecondsLimit: config.MONTHLY_VIDEO_SECONDS_LIMIT,
+  });
+
   for (const { definition, handler } of [
     ...createFilesystemTools(sandboxRoot),
     ...createTerminalTools(sandboxRoot),
@@ -165,6 +178,22 @@ async function main() {
           },
           "provider call completed"
         );
+        // FR-061/FR-063 — recorded only on real success; a failed generation never happened,
+        // so it shouldn't consume the daily image quota. estimatedCostUsd is null (docs/22:
+        // image cost estimation needs a real image provider, ADR-009 — this stays mock-only).
+        if (generation?.status === "succeeded") {
+          await usage.create({
+            id: uuid(),
+            kind: "image",
+            provider: generation.providerName ?? imageProvider.name,
+            model: null,
+            inputTokens: null,
+            outputTokens: null,
+            units: 1,
+            estimatedCostUsd: null,
+            requestId: requestId ?? null,
+          });
+        }
       })
   );
 
@@ -185,6 +214,22 @@ async function main() {
           sceneId,
           requestId
         );
+        // FR-061/FR-063 — recorded per scene (the real unit of work), only on real success,
+        // same reasoning as the image job above. estimatedCostUsd is null (mock-only, ADR-009).
+        const scene = await videoScenes.get(sceneId);
+        if (scene?.status === "succeeded") {
+          await usage.create({
+            id: uuid(),
+            kind: "video",
+            provider: videoProvider.name,
+            model: null,
+            inputTokens: null,
+            outputTokens: null,
+            units: scene.durationSeconds,
+            estimatedCostUsd: null,
+            requestId: requestId ?? null,
+          });
+        }
       }),
     { localConcurrency: 3 }
   );
@@ -259,6 +304,8 @@ async function main() {
     imageGenerations,
     videoProjects,
     videoScenes,
+    usage,
+    quota,
   };
 
   const app = await buildServer(config, ctx, logger);

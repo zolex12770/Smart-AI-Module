@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { createVideoProject, orchestrateVideoProject } from "@ai-platform/media";
-import { NotFoundError, ValidationError, videoProjectRequestSchema } from "@ai-platform/shared";
+import { NotFoundError, QuotaExceededError, ValidationError, videoProjectRequestSchema } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
 
@@ -14,6 +14,13 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
     async (request, reply) => {
       const parsed = videoProjectRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
+
+      // FR-063 — the whole project's requested duration is checked against the monthly
+      // budget up front (docs/22_COST_AND_QUOTA_STRATEGY.md's long-form-video special case:
+      // "a bad estimate has real consequence... the UI must show this... before the job is
+      // enqueued"), not per scene as each one starts.
+      const quotaCheck = await ctx.quota.checkVideoSeconds(parsed.data.targetDurationSeconds);
+      if (!quotaCheck.allowed) throw new QuotaExceededError(quotaCheck.reason ?? "Video-seconds quota exceeded.");
 
       const id = uuid();
       const project = await createVideoProject({ projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes }, id, parsed.data);

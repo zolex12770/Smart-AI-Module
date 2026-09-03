@@ -220,3 +220,29 @@ export const videoScenes = pgTable("video_scenes", {
   createdAt: timestamp("created_at").notNull(),
   updatedAt: timestamp("updated_at").notNull(),
 });
+
+/**
+ * One row per real generation call (docs/22_COST_AND_QUOTA_STRATEGY.md "Usage recording"),
+ * normalized across the three kinds this platform makes so quota checks (FR-063) and a
+ * usage dashboard (FR-061) can run one query pattern instead of three different ones —
+ * kept deliberately separate from `messages.inputTokens/outputTokens` (which already
+ * records LLM usage per-message for a different purpose, the conversation audit trail) and
+ * from `image_generations`/`video_scenes` (which have no usage/cost columns at all). Single-
+ * operator scope (docs/26_DECISIONS.md ADR-008, matching `rag.ts`'s `SINGLE_OPERATOR_OWNER_ID`
+ * pattern) — no `user_id`/`project_id` column, since there is exactly one operator today;
+ * add one the same day real multi-user auth exists, not before.
+ */
+export const usageRecords = pgTable("usage_records", {
+  id: text("id").primaryKey(),
+  kind: text("kind", { enum: ["llm", "image", "video"] }).notNull(),
+  provider: text("provider").notNull(),
+  model: text("model"),
+  inputTokens: integer("input_tokens"),
+  outputTokens: integer("output_tokens"),
+  units: integer("units"),
+  // Null, not zero, when no researched price exists for this provider/model
+  // (packages/model-router's cost-estimator.ts) — never a fabricated cost.
+  estimatedCostUsd: doublePrecision("estimated_cost_usd"),
+  requestId: text("request_id"),
+  createdAt: timestamp("created_at").notNull(),
+});

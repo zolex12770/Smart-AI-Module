@@ -10,6 +10,7 @@ import { registerAgentRoutes } from "./routes/v1/agent.js";
 import { registerChatRoute } from "./routes/v1/chat.js";
 import { registerImageRoutes } from "./routes/v1/images.js";
 import { registerRagRoutes } from "./routes/v1/rag.js";
+import { registerUsageRoute } from "./routes/v1/usage.js";
 import { registerVideoRoutes } from "./routes/v1/videos.js";
 
 export async function buildServer(config: AppConfig, ctx: AppContext, logger: Logger) {
@@ -58,6 +59,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   registerRagRoutes(app, ctx);
   registerImageRoutes(app, ctx);
   registerVideoRoutes(app, ctx);
+  registerUsageRoute(app, ctx);
 
   return app;
 }

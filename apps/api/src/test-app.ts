@@ -18,12 +18,14 @@ import {
   PgTaskTransitionRepository,
   PgVideoProjectRepository,
   PgVideoSceneRepository,
+  PgUsageRecordRepository,
   type DrizzleDb,
 } from "@ai-platform/database";
 import { HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
+import { QuotaManager } from "@ai-platform/quota";
 import { createFilesystemTools, ToolRegistry } from "@ai-platform/tools";
 import { loadConfig } from "./config.js";
 import type { AppContext } from "./context.js";
@@ -89,6 +91,10 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; db: Drizzl
     imageGenerations: new PgImageGenerationRepository(db),
     videoProjects: new PgVideoProjectRepository(db),
     videoScenes: new PgVideoSceneRepository(db),
+    usage: new PgUsageRecordRepository(db),
+    // No limits configured by default — route tests exercise the unlimited (opt-in) path;
+    // a dedicated quota test constructs its own QuotaManager with real limits.
+    quota: new QuotaManager(new PgUsageRecordRepository(db), {}),
   };
 
   const { createLogger } = await import("@ai-platform/observability");

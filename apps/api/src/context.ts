@@ -9,12 +9,14 @@ import type {
   MessageRepository,
   TaskNodeRepository,
   TaskRepository,
+  UsageRecordRepository,
   VideoProjectRepository,
   VideoSceneRepository,
 } from "@ai-platform/database";
 import type { EmbeddingProvider } from "@ai-platform/embeddings";
 import type { JobQueue } from "@ai-platform/jobs";
 import type { ModelRouter } from "@ai-platform/model-router";
+import type { QuotaManager } from "@ai-platform/quota";
 import type { ToolRegistry } from "@ai-platform/tools";
 
 /**
@@ -41,4 +43,6 @@ export interface AppContext {
   imageGenerations: ImageGenerationRepository;
   videoProjects: VideoProjectRepository;
   videoScenes: VideoSceneRepository;
+  usage: UsageRecordRepository;
+  quota: QuotaManager;
 }

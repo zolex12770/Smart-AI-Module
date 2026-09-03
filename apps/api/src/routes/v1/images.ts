@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
-import { imageGenerationRequestSchema, NotFoundError, ValidationError } from "@ai-platform/shared";
+import { imageGenerationRequestSchema, NotFoundError, QuotaExceededError, ValidationError } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
 
@@ -20,6 +20,10 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
     async (request, reply) => {
       const parsed = imageGenerationRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
+
+      // FR-063 — checked before the job is even created, per docs/22_COST_AND_QUOTA_STRATEGY.md.
+      const quotaCheck = await ctx.quota.checkImageGeneration();
+      if (!quotaCheck.allowed) throw new QuotaExceededError(quotaCheck.reason ?? "Image generation quota exceeded.");
 
       const id = uuid();
       const generation = await ctx.imageGenerations.create(id, parsed.data);
