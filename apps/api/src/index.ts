@@ -197,7 +197,10 @@ async function main() {
         runJob(logger, { queue: "document.ingest", jobId: documentId, requestId }, async () => {
           const document = await documents.get(documentId);
           if (!document) throw new Error(`document.ingest job referenced unknown document "${documentId}".`);
-          await processDocumentIngestion({ documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot }, document);
+          await processDocumentIngestion(
+            { documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot, assetRepo: assets, assetStore },
+            document
+          );
         })
     );
 

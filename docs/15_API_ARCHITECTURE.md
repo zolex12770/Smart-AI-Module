@@ -15,7 +15,7 @@ Fastify, versioned under `/api/v1` from day one (ADR-003, FR-051). This is the o
 | `/api/v1/images` | POST, GET /:id | Image generation request + result retrieval (FR-040) |
 | `/api/v1/videos` | POST, GET /:id, GET /:id/scenes | Video generation; `/scenes` exposes per-scene status for long-form jobs (FR-043) |
 | `/api/v1/assets` | GET, GET /:id, DELETE /:id | Asset metadata + signed download URL, not the binary itself (assets live in object storage, [[24_PROJECT_STRUCTURE]]) |
-| `/api/v1/files` | POST (upload), GET /:id | Document upload feeding RAG ([[09_RAG_ARCHITECTURE]]) |
+| `/api/v1/files` | POST (sandbox path, local dev), POST `/upload` (multipart, [[26_DECISIONS]] ADR-041), GET, GET /:id | Document ingestion feeding RAG ([[09_RAG_ARCHITECTURE]]) — the multipart route is the one that works on a stateless deployment; both enqueue the same `document.ingest` job |
 | `/api/v1/memory` | GET, DELETE /:id | User-facing memory view/delete (FR-032) |
 | `/api/v1/projects` | GET, POST, GET /:id, PATCH /:id, DELETE /:id | |
 | `/api/v1/models` | GET | Read-only: capability registry contents ([[12_MODEL_ROUTING]]) |

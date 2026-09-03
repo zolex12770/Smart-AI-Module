@@ -386,6 +386,8 @@ Relevant everywhere the platform reads/writes files based on a model- or user-su
 
 ## 12. File upload restrictions
 
+**As built (2026-09-03, [[26_DECISIONS]] ADR-041):** `POST /api/v1/files/upload` implements every control below except malware scanning — allow-list of exactly the four ingestible types, declared-MIME-per-extension check (browsers' `application/octet-stream` tolerated because the content sniff is the real gate), a parser-enforced 25 MiB cap surfacing as a real `413`, a real content sniff (`%PDF-` signature; a structural DOCX check that the ZIP actually contains `word/document.xml`, using the same real ZIP reader ingestion uses; fatal-UTF-8 + no-NUL for text), storage under a generated key with the original filename display-only, `Content-Disposition: attachment` on read-back, and a per-route rate limit. Each is covered by a route test and was exercised live. The quarantine-then-scan step is **not** built ([[27_RISKS_AND_LIMITATIONS]]).
+
 Applies to user-uploaded documents (RAG ingestion, chat attachments) and any file the coding agent
 or media-generation pipeline writes that later gets served back to a user:
 

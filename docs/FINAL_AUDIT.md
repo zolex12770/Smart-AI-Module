@@ -79,3 +79,9 @@ closing section warned about.
   real read-path bug the passing tests had missed. The RAG/coding-agent `SANDBOX_ROOT` remains
   local disk — now the single remaining local-disk dependency ([[27_RISKS_AND_LIMITATIONS]]).
   docs/30's storage diagram box was updated accordingly.
+- **2026-09-03 — RAG's local-disk dependency closed ([[26_DECISIONS]] ADR-041).** A real multipart
+  upload ingress stores documents through the same asset store and feeds the same ingest job;
+  verified live through to a retrieval answer, including the rejection paths. docs/13 §12's
+  controls — which ADR-032 had recorded as "N/A, no upload endpoint" — are now implemented and
+  tested, except malware scanning (a new [[27_RISKS_AND_LIMITATIONS]] row). What remains under
+  `SANDBOX_ROOT` is the coding agent's per-run scratch directory, a legitimate use, not a gap.

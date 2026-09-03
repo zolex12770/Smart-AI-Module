@@ -120,16 +120,25 @@ against a real standalone Postgres for the first time.
   account lacks `roles/storage.objectAdmin` on the bucket; a `403`/`404` on the API's read-back
   means the API service account does (they are separate identities, ADR-039). Nothing should
   appear under the instance's local `ASSETS_ROOT`.
+- **Document upload end to end (ADR-041).** `curl -F "file=@some.pdf;type=application/pdf"
+  https://<api-service-url>/api/v1/files/upload` → `202` with `"sourcePath":null` and an
+  `assetId`; `gsutil ls gs://<media-bucket>/document/` lists `<assetId>.pdf`; polling
+  `GET /api/v1/files/<id>` reaches `ready` (the worker pool's logs show the `document.ingest`
+  job); then an `answer_from_documents` task can retrieve its content. A `400` naming the
+  allow-list or a sniff reason is the route working as designed, not a deploy problem.
 
 ## Known gaps this runbook does not close
 
-- **`SANDBOX_ROOT` is still the container's local disk** (docs/27_RISKS_AND_LIMITATIONS.md,
-  ADR-037 narrowed by ADR-040): generated assets now go to Cloud Storage, but RAG ingestion's
-  `POST /api/v1/files` reads a sandbox-relative path already sitting on disk and so has no way
-  to receive a file at all against a freshly-started instance, and the coding agent's workspace
-  does not survive the instance. That is a product-design question (an upload endpoint into
-  the already-provisioned `uploads` bucket, then a fetch into a per-job temp dir?), not an
-  adapter swap — deliberately not part of this runbook's claims.
+- **The coding agent's workspace is per-instance scratch** (docs/27_RISKS_AND_LIMITATIONS.md,
+  ADR-037 narrowed by ADR-040/041): RAG ingestion now has a real upload ingress
+  (`POST /api/v1/files/upload`, ADR-041) that stores into the media bucket, so the path-based
+  `POST /api/v1/files` is dev-only on a deployment — nothing can place a file under
+  `SANDBOX_ROOT` on a stateless instance. A coding-agent run's files last as long as its
+  instance, which is fine for one run; nothing about a run is durable across instances.
+- **No malware scanning of uploads** (docs/13 §12, ADR-041): uploads pass an allow-list, a
+  declared-type check, and a real content sniff, then go straight to ingestion. The
+  `quarantine` bucket exists but nothing promotes through it. Acceptable for a single
+  operator; not for uploads from untrusted users.
 - **The Cloud Storage asset store has only ever been exercised against an emulator**
   (ADR-040) — step 5's asset check is the first time real GCS, Application Default
   Credentials, and the Terraform IAM bindings will all be in the loop together.

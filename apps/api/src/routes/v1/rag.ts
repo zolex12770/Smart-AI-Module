@@ -1,6 +1,7 @@
+import { basename, extname } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { NotFoundError, ValidationError } from "@ai-platform/shared";
-import { createPendingDocument } from "@ai-platform/rag";
+import { createPendingDocument, createPendingUploadedDocument, sniffDocumentBytes, UPLOAD_ALLOWED_TYPES } from "@ai-platform/rag";
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
 
@@ -27,6 +28,47 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
     await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id, requestId: request.id });
     reply.status(202).send({ document });
   });
+
+  // Real file upload (docs/15's "POST (upload)", docs/26_DECISIONS.md ADR-041) — the flow that
+  // works on a stateless Cloud Run instance, where there is no sandbox directory for the
+  // path-based route above to point at. Every docs/13 §12 control is applied here, in order:
+  // allow-list by extension (only what packages/rag can actually parse), declared MIME
+  // checked against that extension, a hard size cap (the multipart plugin's own limit, a
+  // real 413), a real CONTENT sniff (not just the header), and "rename on upload" — the
+  // bytes are stored under a generated key by the AssetStore, the original filename is
+  // reduced to a basename and kept for display only. NOT done: malware scanning / the
+  // quarantine-bucket promotion docs/13 §12 also calls for — tracked openly in docs/27.
+  app.post(
+    "/api/v1/files/upload",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const part = await request.file();
+      if (!part) throw new ValidationError('Multipart body must include a "file" field.');
+
+      const originalName = basename(part.filename ?? "").trim();
+      const ext = extname(originalName).toLowerCase();
+      const allowedMimes = UPLOAD_ALLOWED_TYPES[ext];
+      if (!allowedMimes) {
+        throw new ValidationError(
+          `Unsupported file type "${ext || "(none)"}". Allowed: ${Object.keys(UPLOAD_ALLOWED_TYPES).join(", ")}.`
+        );
+      }
+      if (!allowedMimes.includes(part.mimetype)) {
+        throw new ValidationError(`Declared content type "${part.mimetype}" is not valid for a ${ext} file.`);
+      }
+
+      // Throws the plugin's own 413 (FST_REQ_FILE_TOO_LARGE) if the size cap is exceeded.
+      const bytes = await part.toBuffer();
+      if (bytes.length === 0) throw new ValidationError("Uploaded file is empty.");
+      const sniff = sniffDocumentBytes(ext, bytes);
+      if (!sniff.ok) throw new ValidationError(`Rejected: ${sniff.reason}`);
+
+      const assetId = await ctx.assetStore.store(bytes, allowedMimes[0], ext.slice(1), "document");
+      const document = await createPendingUploadedDocument(ctx.documents, { filename: originalName, assetId });
+      await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id, requestId: request.id });
+      reply.status(202).send({ document });
+    }
+  );
 
   app.get("/api/v1/files", async () => ({ documents: await ctx.documents.list() }));
 

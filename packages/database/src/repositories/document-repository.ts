@@ -7,14 +7,22 @@ export type DocumentStatus = "ingesting" | "ready" | "failed";
 export interface Document {
   id: string;
   filename: string;
-  sourcePath: string;
+  /** Sandbox-relative path — the local-dev ingestion flow. Null for uploaded documents. */
+  sourcePath: string | null;
+  /** The AssetStore asset holding the uploaded bytes (docs/26_DECISIONS.md ADR-041). Null
+   * for path-based documents. Exactly one of `sourcePath`/`assetId` is set. */
+  assetId: string | null;
   status: DocumentStatus;
   errorMessage: string | null;
   createdAt: Date;
 }
 
+export type CreateDocumentInput =
+  | { id: string; filename: string; sourcePath: string; assetId?: undefined }
+  | { id: string; filename: string; assetId: string; sourcePath?: undefined };
+
 export interface DocumentRepository {
-  create(input: { id: string; filename: string; sourcePath: string }): Promise<Document>;
+  create(input: CreateDocumentInput): Promise<Document>;
   updateStatus(id: string, status: DocumentStatus, errorMessage?: string): Promise<void>;
   get(id: string): Promise<Document | undefined>;
   list(): Promise<Document[]>;
@@ -23,12 +31,13 @@ export interface DocumentRepository {
 export class PgDocumentRepository implements DocumentRepository {
   constructor(private readonly db: DrizzleDb) {}
 
-  async create(input: { id: string; filename: string; sourcePath: string }): Promise<Document> {
-    const row = {
+  async create(input: CreateDocumentInput): Promise<Document> {
+    const row: Document = {
       id: input.id,
       filename: input.filename,
-      sourcePath: input.sourcePath,
-      status: "ingesting" as DocumentStatus,
+      sourcePath: input.sourcePath ?? null,
+      assetId: input.assetId ?? null,
+      status: "ingesting",
       errorMessage: null,
       createdAt: new Date(),
     };

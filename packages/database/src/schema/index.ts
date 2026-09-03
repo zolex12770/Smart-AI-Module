@@ -95,7 +95,12 @@ export const messages = pgTable("messages", {
 export const documents = pgTable("documents", {
   id: text("id").primaryKey(),
   filename: text("filename").notNull(),
-  sourcePath: text("source_path").notNull(),
+  // Exactly one of these is set (docs/26_DECISIONS.md ADR-041): `sourcePath` for the
+  // original sandbox-relative-path flow (local dev), `assetId` for a real upload whose bytes
+  // live in the AssetStore (local disk or Cloud Storage, ADR-040) — the flow that works on
+  // a stateless Cloud Run instance, where there is no sandbox directory to point at.
+  sourcePath: text("source_path"),
+  assetId: text("asset_id").references(() => assets.id),
   status: text("status", { enum: ["ingesting", "ready", "failed"] }).notNull(),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").notNull(),

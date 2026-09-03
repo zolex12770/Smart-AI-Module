@@ -119,7 +119,10 @@ export const retryVideo = (id: string) => request<{ project: VideoProject }>(`/a
 export interface DocumentRecord {
   id: string;
   filename: string;
-  sourcePath: string;
+  /** Set for the sandbox-path flow; null for uploads. */
+  sourcePath: string | null;
+  /** Set for uploads (the bytes live in the asset store); null for the path flow. */
+  assetId: string | null;
   status: "ingesting" | "ready" | "failed";
   errorMessage: string | null;
   createdAt: string;
@@ -128,6 +131,19 @@ export interface DocumentRecord {
 export const listFiles = () => request<{ documents: DocumentRecord[] }>("/api/v1/files");
 export const ingestFile = (path: string) =>
   request<{ document: DocumentRecord }>("/api/v1/files", { method: "POST", body: JSON.stringify({ path }) });
+
+/** Real multipart upload (ADR-041). Deliberately NOT through `request()`: the browser must set
+ * the multipart Content-Type itself (it includes the boundary), so no JSON header here. */
+export async function uploadFile(file: File): Promise<{ document: DocumentRecord }> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  const res = await fetch(`${API_URL}/api/v1/files/upload`, { method: "POST", body: form });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Upload failed (${res.status}): ${body.slice(0, 300)}`);
+  }
+  return (await res.json()) as { document: DocumentRecord };
+}
 
 // --- Memory / settings ---------------------------------------------------------------------
 

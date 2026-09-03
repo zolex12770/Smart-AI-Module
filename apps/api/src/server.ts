@@ -1,5 +1,6 @@
 import Fastify, { type FastifyBaseLogger } from "fastify";
 import cors from "@fastify/cors";
+import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import type { Logger } from "@ai-platform/observability";
 import type { AppConfig } from "./config.js";
@@ -12,6 +13,8 @@ import { registerImageRoutes } from "./routes/v1/images.js";
 import { registerRagRoutes } from "./routes/v1/rag.js";
 import { registerUsageRoute } from "./routes/v1/usage.js";
 import { registerVideoRoutes } from "./routes/v1/videos.js";
+
+export const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 
 export async function buildServer(config: AppConfig, ctx: AppContext, logger: Logger) {
   // docs/20_OBSERVABILITY.md §1.1 — a pre-built, shared Pino instance (not `logger: true`,
@@ -51,6 +54,14 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
       message: `Rate limit exceeded, retry in ${context.after}.`,
     }),
   });
+
+  // docs/13_SECURITY_ARCHITECTURE.md §12 / docs/26_DECISIONS.md ADR-041 — the only multipart
+  // consumer is POST /api/v1/files/upload (routes/v1/rag.ts). Hard caps enforced by the
+  // parser itself, before any route code runs: one file per request, 25 MiB — comfortably
+  // above any real document this platform ingests, far below anything that could exhaust
+  // memory when buffered for the content sniff + asset-store write. Exceeding it surfaces
+  // as a real 413 through the central error handler, not a silent truncation.
+  await app.register(multipart, { limits: { files: 1, fileSize: UPLOAD_MAX_BYTES, fields: 5 } });
 
   registerErrorHandler(app);
   registerHealthRoute(app);

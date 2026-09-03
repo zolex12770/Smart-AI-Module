@@ -51,6 +51,12 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
     // to a signed URL keeps the frontend's `<img src>` contract and CORS story unchanged;
     // signed URLs are a real later optimization once assets get large, not needed today.
     const bytes = await ctx.assetStore.read(asset);
+    // docs/13 §12: never render user-uploaded content inline. Generated images/clips are
+    // ours and are meant to display in <img>; an uploaded document (ADR-041) is served as
+    // a download, under its generated id, never under the user-supplied filename.
+    if (asset.kind === "document") {
+      reply.header("content-disposition", `attachment; filename="${asset.id}"`);
+    }
     reply.header("content-type", asset.mimeType).header("content-length", asset.sizeBytes).send(bytes);
   });
 }

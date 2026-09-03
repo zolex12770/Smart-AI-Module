@@ -30,6 +30,7 @@
     "@ai-platform/tools": "*",
     "@ai-platform/video-mock": "*",
     "@fastify/cors": "^11.3.0",
+    "@fastify/multipart": "^10.1.1",
     "@fastify/rate-limit": "^11.2.0",
     "@modelcontextprotocol/server-filesystem": "^2026.7.10",
     "fastify": "^5.12.1",

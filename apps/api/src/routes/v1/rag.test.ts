@@ -3,8 +3,19 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { DrizzleDb } from "@ai-platform/database";
+import { processDocumentIngestion, searchDocuments } from "@ai-platform/rag";
 import { buildTestApp, closeTestApp } from "../../test-app.js";
 import type { AppContext } from "../../context.js";
+import { UPLOAD_MAX_BYTES } from "../../server.js";
+
+/** A real multipart body via the platform FormData/Blob — Fastify's inject() streams it
+ * with a real boundary (light-my-request's form-data support), so the route sees exactly
+ * what a browser sends. */
+function upload(app: FastifyInstance, filename: string, bytes: Buffer | string, type: string) {
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type }), filename);
+  return app.inject({ method: "POST", url: "/api/v1/files/upload", payload: form });
+}
 
 describe("files (RAG ingestion) + memory routes", () => {
   let app: FastifyInstance;
@@ -32,6 +43,111 @@ describe("files (RAG ingestion) + memory routes", () => {
   it("POST /api/v1/files rejects a missing path", async () => {
     const res = await app.inject({ method: "POST", url: "/api/v1/files", payload: {} });
     expect(res.statusCode).toBe(400);
+  });
+
+  describe("POST /api/v1/files/upload — real multipart upload into the AssetStore (ADR-041, docs/13 §12)", () => {
+    it("accepts a real text upload, stores it under a generated key, and the SAME ingest job then makes it retrievable", async () => {
+      const res = await upload(app, "remote-work-policy.txt", "Remote work: employees may work remotely three days per week.", "text/plain");
+      expect(res.statusCode).toBe(202);
+      const { document } = res.json();
+      expect(document.status).toBe("ingesting");
+      expect(document.filename).toBe("remote-work-policy.txt");
+      expect(document.sourcePath).toBeNull();
+      expect(typeof document.assetId).toBe("string");
+
+      // The bytes live in the asset store under the generated id, not under the filename.
+      const asset = await ctx.assets.get(document.assetId);
+      expect(asset).toBeDefined();
+      expect(asset!.kind).toBe("document");
+      expect(asset!.storagePath).not.toContain("remote-work-policy");
+
+      // The test app registers no job workers (test-app.ts), so drive the real ingestion
+      // step directly with the real deps the worker would use — real asset-store read, real
+      // chunking, real embeddings, real pgvector write.
+      const row = await ctx.documents.get(document.id);
+      await processDocumentIngestion(
+        {
+          documentRepo: ctx.documents,
+          chunkRepo: ctx.documentChunks,
+          embeddings: ctx.embeddings,
+          sandboxRoot: ctx.sandboxRoot,
+          assetRepo: ctx.assets,
+          assetStore: ctx.assetStore,
+        },
+        row!
+      );
+      expect((await ctx.documents.get(document.id))!.status).toBe("ready");
+
+      const hits = await searchDocuments({ chunkRepo: ctx.documentChunks, embeddings: ctx.embeddings }, "how many remote days per week?", 1);
+      expect(hits[0]?.content).toContain("three days");
+    });
+
+    it("accepts a real PDF upload (content-sniffed) and ingests it through the real PDF parser", async () => {
+      // Minimal valid PDF, same construction as packages/rag's pdf.test.ts.
+      const stream = "BT /F1 18 Tf 10 150 Td (Expense receipts within thirty days) Tj ET";
+      const objs = [
+        "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
+        "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n",
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n",
+        "4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n",
+        `5 0 obj\n<< /Length ${stream.length} >>\nstream\n${stream}\nendstream\nendobj\n`,
+      ];
+      let body = "%PDF-1.4\n";
+      const offsets: number[] = [];
+      for (const o of objs) { offsets.push(body.length); body += o; }
+      const xrefStart = body.length;
+      const xref = `xref\n0 6\n0000000000 65535 f \n` + offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("");
+      const pdf = Buffer.from(body + xref + `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`, "utf8");
+
+      const res = await upload(app, "policy.pdf", pdf, "application/pdf");
+      expect(res.statusCode).toBe(202);
+      const { document } = res.json();
+      await processDocumentIngestion(
+        { documentRepo: ctx.documents, chunkRepo: ctx.documentChunks, embeddings: ctx.embeddings, sandboxRoot: ctx.sandboxRoot, assetRepo: ctx.assets, assetStore: ctx.assetStore },
+        (await ctx.documents.get(document.id))!
+      );
+      const row = await ctx.documents.get(document.id);
+      expect(row!.status).toBe("ready");
+      const hits = await searchDocuments({ chunkRepo: ctx.documentChunks, embeddings: ctx.embeddings }, "expense receipts", 1);
+      expect(hits[0]?.content).toContain("thirty days");
+    });
+
+    it("rejects an extension outside the allow-list with a clear 400 (never a deny-list)", async () => {
+      const res = await upload(app, "payload.exe", Buffer.from("MZ..."), "application/octet-stream");
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/Unsupported file type/);
+    });
+
+    it("rejects a declared content type that does not match the extension", async () => {
+      const res = await upload(app, "notes.txt", "hello", "application/pdf");
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/not valid for a \.txt/);
+    });
+
+    it("rejects a file whose CONTENT contradicts its extension — the sniff, not the header, is the real gate", async () => {
+      const res = await upload(app, "report.pdf", Buffer.from("<html>definitely not a pdf</html>"), "application/pdf");
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/PDF signature/);
+    });
+
+    it("rejects an oversized upload with a real 413 from the multipart size cap", async () => {
+      const res = await upload(app, "huge.txt", Buffer.alloc(UPLOAD_MAX_BYTES + 1, 0x61), "text/plain");
+      expect(res.statusCode).toBe(413);
+    });
+
+    it("rejects an empty file", async () => {
+      const res = await upload(app, "empty.txt", Buffer.alloc(0), "text/plain");
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("serves an uploaded document back as an attachment under its generated id, never inline", async () => {
+      const res = await upload(app, "handbook.md", "# Handbook\n\nbe kind", "text/markdown");
+      const { document } = res.json();
+      const asset = await app.inject({ method: "GET", url: `/api/v1/assets/${document.assetId}` });
+      expect(asset.statusCode).toBe(200);
+      expect(asset.headers["content-disposition"]).toContain("attachment");
+      expect(asset.headers["content-disposition"]).not.toContain("handbook");
+    });
   });
 
   describe("memory CRUD — regression coverage for two real bugs found in Phase 10 browser testing", () => {
