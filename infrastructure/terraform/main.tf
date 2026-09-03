@@ -301,6 +301,12 @@ resource "google_cloud_run_v2_service" "api" {
         value = "api"
       }
       env {
+        # ADR-040 — generated assets go to Cloud Storage, not the instance's ephemeral disk.
+        # Authenticated via the attached service account (objectAdmin on this bucket, above).
+        name  = "ASSETS_BUCKET"
+        value = google_storage_bucket.media.name
+      }
+      env {
         name = "DATABASE_URL"
         value_source {
           secret_key_ref {
@@ -441,6 +447,12 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       env {
         name  = "ROLE"
         value = "worker"
+      }
+      env {
+        # ADR-040 — the worker WRITES assets (image/video jobs, the ffmpeg render) and the
+        # API READS them back (GET /api/v1/assets/:id): both must point at the same bucket.
+        name  = "ASSETS_BUCKET"
+        value = google_storage_bucket.media.name
       }
       env {
         name = "DATABASE_URL"

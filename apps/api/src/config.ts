@@ -22,6 +22,14 @@ const envSchema = z.object({
   DATABASE_URL: z.string().optional(),
   SANDBOX_ROOT: z.string().default("./data/sandbox"),
   ASSETS_ROOT: z.string().default("./data/assets"),
+  // docs/26_DECISIONS.md ADR-040 — when set, generated assets go to this Google Cloud
+  // Storage bucket (authenticated via Application Default Credentials) instead of
+  // ASSETS_ROOT on local disk. Optional: unset keeps the local-disk default for dev.
+  ASSETS_BUCKET: z.string().optional(),
+  // Only for pointing the real GCS client at a local emulator (fake-gcs-server) during
+  // development/verification — never set in production (see CloudStorageAssetStore for why
+  // this is an explicit option rather than the library's STORAGE_EMULATOR_HOST env var).
+  GCS_API_ENDPOINT: z.string().url().optional(),
   // docs/26_DECISIONS.md ADR-030: the long-form video render stage shells out to a system
   // ffmpeg binary rather than bundling one via npm. Defaults to resolving "ffmpeg" on PATH;
   // override for an environment where it's installed somewhere non-standard.

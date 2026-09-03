@@ -15,6 +15,7 @@ import type {
 } from "@ai-platform/database";
 import type { EmbeddingProvider } from "@ai-platform/embeddings";
 import type { JobQueue } from "@ai-platform/jobs";
+import type { AssetStore } from "@ai-platform/media";
 import type { ModelRouter } from "@ai-platform/model-router";
 import type { QuotaManager } from "@ai-platform/quota";
 import type { ToolRegistry } from "@ai-platform/tools";
@@ -40,6 +41,9 @@ export interface AppContext {
   jobQueue: JobQueue;
   assets: AssetRepository;
   assetsRoot: string;
+  /** The only sanctioned way to read an asset's bytes — never `readFile(asset.storagePath)`
+   * directly, since that path may be a `gs://` URI (docs/26_DECISIONS.md ADR-040). */
+  assetStore: AssetStore;
   imageGenerations: ImageGenerationRepository;
   videoProjects: VideoProjectRepository;
   videoScenes: VideoSceneRepository;

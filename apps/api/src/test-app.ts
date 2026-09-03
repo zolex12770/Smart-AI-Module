@@ -24,6 +24,7 @@ import {
 import { HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
+import { LocalAssetStore } from "@ai-platform/media";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { QuotaManager } from "@ai-platform/quota";
 import { createFilesystemTools, ToolRegistry } from "@ai-platform/tools";
@@ -88,6 +89,7 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; db: Drizzl
     jobQueue,
     assets: new PgAssetRepository(db),
     assetsRoot,
+    assetStore: new LocalAssetStore(assetsRoot, new PgAssetRepository(db)),
     imageGenerations: new PgImageGenerationRepository(db),
     videoProjects: new PgVideoProjectRepository(db),
     videoScenes: new PgVideoSceneRepository(db),

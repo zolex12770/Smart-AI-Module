@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import type { FastifyInstance } from "fastify";
 import { imageGenerationRequestSchema, NotFoundError, QuotaExceededError, ValidationError } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
@@ -47,7 +46,11 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
   app.get<{ Params: { id: string } }>("/api/v1/assets/:id", async (request, reply) => {
     const asset = await ctx.assets.get(request.params.id);
     if (!asset) throw new NotFoundError(`Asset "${request.params.id}" not found.`);
-    const bytes = await readFile(asset.storagePath);
+    // Through the store, never `readFile(asset.storagePath)` — the path may be a gs:// URI
+    // (docs/26_DECISIONS.md ADR-040). Serving bytes through the API rather than redirecting
+    // to a signed URL keeps the frontend's `<img src>` contract and CORS story unchanged;
+    // signed URLs are a real later optimization once assets get large, not needed today.
+    const bytes = await ctx.assetStore.read(asset);
     reply.header("content-type", asset.mimeType).header("content-length", asset.sizeBytes).send(bytes);
   });
 }

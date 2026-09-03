@@ -20,6 +20,7 @@
     "@ai-platform/database": "*",
     "@ai-platform/jobs": "*",
     "@ai-platform/shared": "*",
+    "@google-cloud/storage": "^8.0.1",
     "uuid": "^11.0.4"
   },
   "devDependencies": {

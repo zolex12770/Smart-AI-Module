@@ -72,3 +72,10 @@ closing section warned about.
   through pg-boss); the two roles have not yet run concurrently against one shared database —
   this sandbox cannot (PGlite), which is now the row in [[27_RISKS_AND_LIMITATIONS]] that replaced
   the "worker runs in-process" one. docs/30's diagram box was updated accordingly.
+- **2026-09-03 — finding #3's underlying gap closed for generated assets ([[26_DECISIONS]] ADR-040).**
+  A real `CloudStorageAssetStore` now sits behind an `AssetStore` interface alongside the local
+  one; verified byte-for-byte through the real client against a `fake-gcs-server` emulator
+  (tests + a live API session), never yet against real GCS. The live session found and fixed a
+  real read-path bug the passing tests had missed. The RAG/coding-agent `SANDBOX_ROOT` remains
+  local disk — now the single remaining local-disk dependency ([[27_RISKS_AND_LIMITATIONS]]).
+  docs/30's storage diagram box was updated accordingly.

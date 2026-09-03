@@ -63,7 +63,7 @@ flowchart LR
 | `ANTHROPIC_API_KEY` | Phase 2 (optional) | Enables real Anthropic adapter |
 | `OPENAI_API_KEY` | Phase 2 (optional) | Enables real OpenAI adapter |
 | `GOOGLE_API_KEY` / `GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT` | Phase 2 (optional) | Enables real Gemini/Vertex adapter |
-| `OBJECT_STORAGE_*` | Phase 6+ | Local filesystem adapter by default; GCS config once cloud-deployed |
+| `ASSETS_ROOT` / `ASSETS_BUCKET` | Phase 8 / post-15 | As built ([[26_DECISIONS]] ADR-040): `ASSETS_ROOT` selects the local filesystem adapter (default); setting `ASSETS_BUCKET` selects the Cloud Storage adapter (Application Default Credentials). `GCS_API_ENDPOINT` exists only to point the real client at a local emulator and is never set in production |
 | `NODE_ENV` | always | Gates ADR-013's mock-provider production guard |
 
 ## Provisioning gate

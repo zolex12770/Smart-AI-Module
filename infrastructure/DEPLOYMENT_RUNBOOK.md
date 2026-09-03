@@ -112,19 +112,27 @@ against a real standalone Postgres for the first time.
   the API service's. If the job stays `pending` forever, the worker pool cannot reach the
   database (check its Cloud SQL volume mount and `DATABASE_URL` secret binding); if the API's
   own logs show the job completing, `ROLE` is not set to `api` on the service.
+- **Generated assets in Cloud Storage (ADR-040) — the first time real GCS is in the loop.**
+  Both units' boot logs should show `"assetStore":"gcs"` with the media bucket's name. After
+  the image above reaches `succeeded`, `GET /api/v1/assets/<resultAssetId>` must return
+  `200 image/svg+xml`, and `gsutil ls gs://<media-bucket>/image/` must list
+  `<resultAssetId>.svg`. A `403` in the worker pool's logs on upload means the worker service
+  account lacks `roles/storage.objectAdmin` on the bucket; a `403`/`404` on the API's read-back
+  means the API service account does (they are separate identities, ADR-039). Nothing should
+  appear under the instance's local `ASSETS_ROOT`.
 
 ## Known gaps this runbook does not close
 
-- **Local-disk asset storage and the RAG/coding-agent sandbox root do not survive Cloud Run**
-  (docs/27_RISKS_AND_LIMITATIONS.md, ADR-037): `packages/media`'s `LocalAssetStore` and
-  `SANDBOX_ROOT` both write to the container's local filesystem, which is ephemeral and not
-  shared across instances. Image/video generation output would not reliably survive a
-  restart/redeploy/scale event, and RAG ingestion's `POST /api/v1/files` (which reads a
-  sandbox-relative path already sitting on disk) has no way to receive a file at all against a
-  freshly-deployed, empty container. A real `CloudStorageAssetStore` (and a rethink of what
-  `SANDBOX_ROOT` means for a stateless container) is real, additional, currently-unbuilt work —
-  Cloud Storage buckets are already provisioned by `terraform/main.tf` ahead of that code
-  specifically so this is a code-only follow-up once undertaken, not also an infra change.
+- **`SANDBOX_ROOT` is still the container's local disk** (docs/27_RISKS_AND_LIMITATIONS.md,
+  ADR-037 narrowed by ADR-040): generated assets now go to Cloud Storage, but RAG ingestion's
+  `POST /api/v1/files` reads a sandbox-relative path already sitting on disk and so has no way
+  to receive a file at all against a freshly-started instance, and the coding agent's workspace
+  does not survive the instance. That is a product-design question (an upload endpoint into
+  the already-provisioned `uploads` bucket, then a fetch into a per-job temp dir?), not an
+  adapter swap — deliberately not part of this runbook's claims.
+- **The Cloud Storage asset store has only ever been exercised against an emulator**
+  (ADR-040) — step 5's asset check is the first time real GCS, Application Default
+  Credentials, and the Terraform IAM bindings will all be in the loop together.
 - **The api and worker roles have never run concurrently** (docs/26_DECISIONS.md ADR-039):
   the split itself is built and each role was verified live on its own, but the environment that
   authored this could only run one process at a time (PGlite). Step 5's worker-pool check is the

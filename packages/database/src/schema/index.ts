@@ -135,9 +135,11 @@ export const memoryItems = pgTable("memory_items", {
 
 /**
  * Generic asset storage record (docs/14_DATABASE_ARCHITECTURE.md's `assets` table, rule
- * 20 of the original brief). `storagePath` is a local filesystem path today — swapping to
- * object storage (GCS, docs/19_DEPLOYMENT_ARCHITECTURE.md) later changes how this column
- * is interpreted and written, not the schema.
+ * 20 of the original brief). `storagePath` is whatever the `AssetStore` that wrote the row
+ * understands (docs/26_DECISIONS.md ADR-040): an absolute local path from `LocalAssetStore`,
+ * a `gs://bucket/object` URI from `CloudStorageAssetStore` — exactly as this comment
+ * predicted, the column's interpretation changed, not the schema. Only those stores may
+ * read it.
  */
 export const assets = pgTable("assets", {
   id: text("id").primaryKey(),

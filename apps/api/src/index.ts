@@ -30,7 +30,14 @@ import { GoogleProvider } from "@ai-platform/llm-google";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { OpenAIProvider } from "@ai-platform/llm-openai";
 import { connectMcpServer } from "@ai-platform/mcp";
-import { LocalAssetStore, processImageGeneration, processVideoRender, processVideoScene } from "@ai-platform/media";
+import {
+  CloudStorageAssetStore,
+  LocalAssetStore,
+  processImageGeneration,
+  processVideoRender,
+  processVideoScene,
+  type AssetStore,
+} from "@ai-platform/media";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/observability";
 import { QuotaManager } from "@ai-platform/quota";
@@ -166,7 +173,17 @@ async function main() {
   // ffmpeg if one is present. The repositories/providers are constructed in every role
   // (the api role's routes read them too); only the workers are role-gated.
   const assets = new PgAssetRepository(db);
-  const assetStore = new LocalAssetStore(assetsRoot, assets);
+  // ADR-040 — Cloud Storage when a bucket is configured, local disk otherwise. Same opt-in
+  // shape as DATABASE_URL (ADR-037): unset means today's local-dev behavior, unchanged.
+  const assetStore: AssetStore = config.ASSETS_BUCKET
+    ? new CloudStorageAssetStore({ bucketName: config.ASSETS_BUCKET, apiEndpoint: config.GCS_API_ENDPOINT }, assets)
+    : new LocalAssetStore(assetsRoot, assets);
+  logger.info(
+    config.ASSETS_BUCKET
+      ? { assetStore: "gcs", bucket: config.ASSETS_BUCKET, apiEndpoint: config.GCS_API_ENDPOINT ?? "https://storage.googleapis.com" }
+      : { assetStore: "local", assetsRoot },
+    "asset store selected"
+  );
   const imageGenerations = new PgImageGenerationRepository(db);
   const imageProvider = new MockImageProvider();
   const videoProjects = new PgVideoProjectRepository(db);
@@ -327,6 +344,7 @@ async function main() {
     jobQueue,
     assets,
     assetsRoot,
+    assetStore,
     imageGenerations,
     videoProjects,
     videoScenes,

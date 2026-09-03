@@ -1,10 +1,10 @@
 import type { ImageGenerationRepository } from "@ai-platform/database";
 import type { ImageGenerationRequest, ImageProvider } from "@ai-platform/shared";
-import type { LocalAssetStore } from "./asset-store.js";
+import type { AssetStore } from "./asset-store.js";
 
 export interface ImageGenerationDeps {
   generationRepo: ImageGenerationRepository;
-  assetStore: LocalAssetStore;
+  assetStore: AssetStore;
   provider: ImageProvider;
 }
 

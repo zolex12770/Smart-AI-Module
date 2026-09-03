@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssetRepository, VideoProjectRepository, VideoSceneRepository } from "@ai-platform/database";
-import type { LocalAssetStore } from "./asset-store.js";
+import type { AssetStore } from "./asset-store.js";
 
 const RENDER_WIDTH = 640;
 const RENDER_HEIGHT = 360;
@@ -13,7 +13,7 @@ export interface VideoRenderDeps {
   projectRepo: VideoProjectRepository;
   sceneRepo: VideoSceneRepository;
   assetRepo: AssetRepository;
-  assetStore: LocalAssetStore;
+  assetStore: AssetStore;
   /** Defaults to `"ffmpeg"` (resolved via PATH). Overridable so tests/deployments can pin a path. */
   ffmpegPath?: string;
 }
@@ -65,11 +65,18 @@ export async function processVideoRender(deps: VideoRenderDeps, projectId: strin
     for (const scene of succeededScenes) {
       const asset = await deps.assetRepo.get(scene.assetId as string);
       if (!asset) throw new Error(`Scene ${scene.sceneIndex} references missing asset "${scene.assetId}".`);
+      // ffmpeg needs a real local file, and an asset's bytes may live in Cloud Storage
+      // (ADR-040) — materialize every clip into the render's own temp dir through the
+      // store, never by reading `asset.storagePath` directly. For the local store this is
+      // one extra copy of a small clip; for GCS it is the download that has to happen anyway.
+      const ext = asset.mimeType === "image/gif" ? "gif" : asset.storagePath.split(".").pop() ?? "bin";
+      const inPath = join(workDir, `clip_${String(scene.sceneIndex).padStart(4, "0")}.${ext}`);
+      await writeFile(inPath, await deps.assetStore.read(asset));
       const outPath = join(workDir, `scene_${String(scene.sceneIndex).padStart(4, "0")}.mp4`);
       await runFfmpeg(ffmpegPath, [
         "-y",
         "-i",
-        asset.storagePath,
+        inPath,
         "-vf",
         `scale=${RENDER_WIDTH}:${RENDER_HEIGHT}:force_original_aspect_ratio=decrease,pad=${RENDER_WIDTH}:${RENDER_HEIGHT}:(ow-iw)/2:(oh-ih)/2,fps=${RENDER_FPS}`,
         "-c:v",

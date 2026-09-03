@@ -7,7 +7,7 @@ import type {
 import type { VideoProjectRequest, VideoProvider } from "@ai-platform/shared";
 import type { JobQueue } from "@ai-platform/jobs";
 import { planScenes } from "./video-storyboard.js";
-import type { LocalAssetStore } from "./asset-store.js";
+import type { AssetStore } from "./asset-store.js";
 
 export interface VideoOrchestrationDeps {
   projectRepo: VideoProjectRepository;
@@ -68,7 +68,7 @@ export async function orchestrateVideoProject(
 }
 
 export interface VideoSceneProcessingDeps extends VideoOrchestrationDeps {
-  assetStore: LocalAssetStore;
+  assetStore: AssetStore;
   provider: VideoProvider;
 }
 
