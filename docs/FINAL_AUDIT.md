@@ -112,3 +112,16 @@ closing section warned about.
   required the fallback path be recorded since Phase 0; the code never did. Third instance of
   this audit's recurring theme: the defects that remain are documented behaviours the code
   does not have, and they surface only when something is actually run.
+- **2026-09-03 — the real-key path audited before a real key touched it ([[26_DECISIONS]]
+  ADR-045).** Independent readers over five dimensions, every finding adversarially verified:
+  25 candidates, 3 surviving blockers, 3 more settled by reading. The two that matter most for
+  this audit's running theme — code whose claims have never been executed — are a blank
+  `GOOGLE_API_KEY=` line silently eating a real key set under the documented alias (the
+  `.env.example` that made it reachable was written one commit earlier), and a production
+  container that could never have booted at all, because ADR-013's mock guard throws in a
+  constructor the composition root called unconditionally while the Dockerfile sets
+  NODE_ENV=production. Both are Phase 0/13 artifacts that were reviewed and never run. Fixed,
+  with the production entrypoint now actually executed. Three further real findings were
+  recorded in [[27_RISKS_AND_LIMITATIONS]] rather than bundled into the fix — chief among them
+  that agent-task model calls record no usage and check no quota, which becomes a live spend
+  hole the moment a key exists.

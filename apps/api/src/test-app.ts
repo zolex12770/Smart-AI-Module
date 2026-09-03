@@ -104,6 +104,8 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; db: Drizzl
     // themselves — route handlers read it at request time.
     scanner: null,
     uploadScanRequired: false,
+    // Tests run as development would: the mock media providers are available (ADR-045).
+    mediaGenerationAvailable: true,
   };
 
   const { createLogger } = await import("@ai-platform/observability");

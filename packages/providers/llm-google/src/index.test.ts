@@ -66,3 +66,62 @@ describe("GoogleProvider", () => {
     }).rejects.toThrow(/Google Gemini API request failed \(400\)/);
   });
 });
+
+/**
+ * docs/26_DECISIONS.md ADR-045 — the failure modes a real first call can hit that all used to
+ * end as a successful-looking empty answer attributed to google.
+ */
+describe("GoogleProvider failure modes that must not look like success", () => {
+  const run = async (sse: string) => {
+    const fetchImpl = vi.fn(async () => new Response(stringToStream(sse), { status: 200 })) as unknown as typeof fetch;
+    const provider = new GoogleProvider({ apiKey: "test-key", fetchImpl });
+    const events = [];
+    for await (const event of provider.streamChat({ messages: [{ role: "user", content: "hi" }] })) events.push(event);
+    return events;
+  };
+
+  it("counts thinking tokens as output — they are billed as output but reported separately", async () => {
+    const events = await run(
+      `data: {"candidates":[{"content":{"parts":[{"text":"42"}]}}],"usageMetadata":{"promptTokenCount":30,"candidatesTokenCount":180,"thoughtsTokenCount":1400}}
+
+`
+    );
+    const done = events.find((e) => e.type === "done") as any;
+    expect(done.usage).toEqual({ inputTokens: 30, outputTokens: 1580 });
+  });
+
+  it("throws, naming the safety filter, instead of yielding an empty successful answer", async () => {
+    await expect(run(`data: {"promptFeedback":{"blockReason":"SAFETY"}}
+
+`)).rejects.toThrow(/blocked by a safety filter.*SAFETY/);
+  });
+
+  it("throws, naming the finish reason, when the model stopped before emitting text", async () => {
+    await expect(
+      run(`data: {"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[]}}]}
+
+`)
+    ).rejects.toThrow(/stopped early.*MAX_TOKENS/);
+  });
+
+  it("throws, naming the unreadable frames, rather than reporting an empty success", async () => {
+    await expect(run(`data: {not json
+
+`)).rejects.toThrow(/1 stream frame\(s\) could not be parsed/);
+  });
+
+  it("parses a CRLF-framed stream — the wire form that used to produce zero tokens", async () => {
+    const events = await run(
+      `data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}
+
+data: {"candidates":[{"content":{"parts":[{"text":"!"}]}}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}}
+
+`
+    );
+    expect(events.filter((e) => e.type === "token").map((e: any) => e.delta)).toEqual(["Hello", "!"]);
+    const done = events.find((e) => e.type === "done") as any;
+    expect(done.message.content).toBe("Hello!");
+    expect(done.usage).toEqual({ inputTokens: 3, outputTokens: 2 });
+  });
+});
+

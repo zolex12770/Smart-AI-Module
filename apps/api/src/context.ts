@@ -55,4 +55,8 @@ export interface AppContext {
   scanner: MalwareScanner | null;
   /** When true and `scanner` is null, uploads are refused (503) rather than accepted unscanned. */
   uploadScanRequired: boolean;
+  /** False in production, where the mock-only image/video providers (ADR-009) may not run
+   * (ADR-013): the routes refuse with a 503 instead of queueing work no worker will do.
+   * docs/26_DECISIONS.md ADR-045. */
+  mediaGenerationAvailable: boolean;
 }

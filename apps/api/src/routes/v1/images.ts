@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { imageGenerationRequestSchema, NotFoundError, QuotaExceededError, ValidationError } from "@ai-platform/shared";
+import { imageGenerationRequestSchema, NotFoundError, QuotaExceededError, ServiceUnavailableError, ValidationError } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
 
@@ -9,6 +9,9 @@ import type { AppContext } from "../../context.js";
  * genuinely async end to end: this route only creates the record and enqueues the job,
  * it never calls the provider inline.
  */
+export const MEDIA_UNAVAILABLE =
+  "Image and video generation are mock-only (docs/26_DECISIONS.md ADR-009) and a mock provider may not serve production traffic (ADR-013), so this deployment has no provider for it. Nothing was queued.";
+
 export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post(
     "/api/v1/images",
@@ -17,6 +20,11 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
     // provider bills per call, so this cap exists even though the mock itself is cheap.
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      // ADR-045 — refuse before doing anything, the same shape as the upload route's
+      // fail-closed 503: queueing a job no worker is registered for would leave the caller
+      // polling a `pending` generation forever.
+      if (!ctx.mediaGenerationAvailable) throw new ServiceUnavailableError(MEDIA_UNAVAILABLE);
+
       const parsed = imageGenerationRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
 

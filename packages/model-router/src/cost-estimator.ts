@@ -62,5 +62,11 @@ export function estimateLlmCostUsd(
 ): number | null {
   const pricing = LLM_PRICING[provider]?.[model];
   if (!pricing) return null;
+  // docs/26_DECISIONS.md ADR-045 — a real call always consumes tokens, so all-zero usage
+  // means the telemetry was missing (a provider that omitted its usage block, a truncated
+  // stream), not that the call was free. Returning 0 would write a confident "$0.00, priced"
+  // row into the ledger; null says "unknown", which is what `pricedCallsOnly` on
+  // GET /api/v1/usage already exists to make visible.
+  if (usage.inputTokens <= 0 && usage.outputTokens <= 0) return null;
   return (usage.inputTokens / 1_000_000) * pricing.inputPerMillion + (usage.outputTokens / 1_000_000) * pricing.outputPerMillion;
 }

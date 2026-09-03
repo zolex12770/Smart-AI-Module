@@ -21,10 +21,11 @@ export async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGe
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
 
-    let separatorIndex: number;
-    while ((separatorIndex = buffer.indexOf("\n\n")) !== -1) {
-      const rawFrame = buffer.slice(0, separatorIndex);
-      buffer = buffer.slice(separatorIndex + 2);
+    let match: RegExpExecArray | null;
+    while ((match = FRAME_SEPARATOR.exec(buffer)) !== null) {
+      const rawFrame = buffer.slice(0, match.index);
+      // The separator's own length, not a hard-coded 2 — "\r\n\r\n" is four characters.
+      buffer = buffer.slice(match.index + match[0].length);
       yield parseFrame(rawFrame);
     }
   }
@@ -34,10 +35,23 @@ export async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGe
   }
 }
 
+/**
+ * All three blank-line forms the SSE specification allows, longest first so "\r\n\r\n" is
+ * never mis-matched as a bare "\r\r" — docs/26_DECISIONS.md ADR-045. This parser accepted
+ * only "\n\n"; Google's own JS client matches `(?:\r\n\r\n|\r\r|\n\n)` for the very endpoint
+ * packages/providers/llm-google calls, and a CRLF-framed stream would have hit none of the
+ * old separator's matches, accumulated the entire response into one unparseable blob, and
+ * produced a perfectly successful-looking empty answer.
+ */
+// Deliberately NOT global: `exec` on a global regex carries `lastIndex` between calls, which
+// would skip frames here because the buffer is re-sliced after every match.
+const FRAME_SEPARATOR = /\r\n\r\n|\n\n|\r\r/;
+const LINE_SEPARATOR = /\r\n|\n|\r/;
+
 function parseFrame(rawFrame: string): SseEvent {
   let event: string | undefined;
   const dataLines: string[] = [];
-  for (const line of rawFrame.split("\n")) {
+  for (const line of rawFrame.split(LINE_SEPARATOR)) {
     if (line.startsWith("event:")) event = line.slice("event:".length).trim();
     else if (line.startsWith("data:")) dataLines.push(line.slice("data:".length).trim());
   }

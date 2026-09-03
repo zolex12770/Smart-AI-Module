@@ -111,13 +111,44 @@ async function main() {
       })
     );
   }
-  const googleApiKey = config.GOOGLE_API_KEY ?? config.GEMINI_API_KEY;
+  // `||`, not `??` — docs/26_DECISIONS.md ADR-045. The schema already maps an empty value to
+  // undefined, but this is the line where a blank `GOOGLE_API_KEY=` silently shadowed a real
+  // key set under the documented alias, so it states the intent locally too.
+  const googleApiKey = config.GOOGLE_API_KEY || config.GEMINI_API_KEY;
   if (googleApiKey) {
     registry.register(new GoogleProvider({ apiKey: googleApiKey }));
   }
 
   const hasRealProvider = Boolean(config.ANTHROPIC_API_KEY || config.OPENAI_API_KEY || googleApiKey);
-  registry.register(new MockLLMProvider(), { asDefault: !hasRealProvider });
+  // ADR-013 says the mock must never serve traffic in production. It was implemented as a
+  // throw in MockLLMProvider's constructor — but this line constructed one unconditionally,
+  // so a production boot died here even WITH a valid real key: the deployed image sets
+  // NODE_ENV=production (apps/api/Dockerfile), which made every container un-bootable. Never
+  // caught because no image has ever been built or run (ADR-037). ADR-045 keeps the rule and
+  // fixes the enforcement: in production the mock is simply never constructed, and the
+  // no-real-provider case fails with a message that says what to do about it.
+  if (config.NODE_ENV === "production") {
+    if (!hasRealProvider) {
+      throw new Error(
+        "No real LLM provider is configured and the mock provider is refused when NODE_ENV=production " +
+          "(docs/26_DECISIONS.md ADR-013). Set ANTHROPIC_API_KEY, OPENAI_API_KEY or GOOGLE_API_KEY."
+      );
+    }
+  } else {
+    registry.register(new MockLLMProvider(), { asDefault: !hasRealProvider });
+  }
+
+  // ADR-045: without this, a reader who dropped a key into `.env` had no way to confirm it
+  // took effect short of sending a chat and inferring from the answer — the exact ambiguity
+  // that hid the alias bug above.
+  logger.info(
+    {
+      providers: registry.list().map((p) => p.name),
+      default: registry.getDefault().name,
+      real_provider_configured: hasRealProvider,
+    },
+    hasRealProvider ? "LLM providers registered" : "LLM providers registered — NO real provider key found, the mock will answer"
+  );
 
   const sandboxRoot = resolve(config.SANDBOX_ROOT);
   mkdirSync(sandboxRoot, { recursive: true });
@@ -207,10 +238,22 @@ async function main() {
     "asset store selected"
   );
   const imageGenerations = new PgImageGenerationRepository(db);
-  const imageProvider = new MockImageProvider();
   const videoProjects = new PgVideoProjectRepository(db);
   const videoScenes = new PgVideoSceneRepository(db);
-  const videoProvider = new MockVideoProvider();
+  // docs/26_DECISIONS.md ADR-045, same ADR-013 enforcement bug as the LLM mock above and with
+  // a sharper consequence: image and video generation are mock-ONLY (ADR-009), so there is no
+  // real provider to substitute. Constructing these unconditionally made every production boot
+  // throw. Refusing to boot at all would make one mocked feature block the whole deployment,
+  // so instead the capability is absent in production: no provider, no workers registered, and
+  // the routes answer 503 with a reason (below) rather than accepting work nothing will do.
+  const mediaGenerationAvailable = config.NODE_ENV !== "production";
+  const imageProvider = mediaGenerationAvailable ? new MockImageProvider() : null;
+  const videoProvider = mediaGenerationAvailable ? new MockVideoProvider() : null;
+  if (!mediaGenerationAvailable) {
+    logger.warn(
+      "IMAGE AND VIDEO GENERATION DISABLED — they are mock-only (ADR-009) and a mock provider may not serve production traffic (ADR-013); those routes will return 503"
+    );
+  }
 
   if (runs.workers) {
     if (scanner) {
@@ -242,6 +285,7 @@ async function main() {
         })
     );
 
+    if (imageProvider)
     await jobQueue.registerWorker<{ generationId: string; requestId?: string }>(
       "image.generate",
       async ({ generationId, requestId }) =>
@@ -276,6 +320,7 @@ async function main() {
         })
     );
 
+    if (videoProvider)
     await jobQueue.registerWorker<{ sceneId: string; requestId?: string }>(
       "video.generate_scene",
       async ({ sceneId, requestId }) =>
@@ -403,6 +448,7 @@ async function main() {
     quota,
     scanner,
     uploadScanRequired: config.UPLOAD_SCAN_REQUIRED,
+    mediaGenerationAvailable,
   };
 
   const app = await buildServer(config, ctx, logger);

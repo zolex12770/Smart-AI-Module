@@ -35,7 +35,27 @@ describe("estimateLlmCostUsd", () => {
     expect(estimateLlmCostUsd("anthropic", "claude-opus-5", { inputTokens: 100, outputTokens: 100 })).toBeNull();
   });
 
-  it("handles zero usage without dividing by zero or erroring", () => {
-    expect(estimateLlmCostUsd("anthropic", "claude-sonnet-5", { inputTokens: 0, outputTokens: 0 })).toBe(0);
+  // Was `.toBe(0)`. ADR-045 changed the answer deliberately: zero usage on a priced model is
+  // missing telemetry, not a free call, and "$0.00, priced" is a fabricated figure of exactly
+  // the kind the rest of this module refuses to produce. The original point of the test — no
+  // divide-by-zero, no throw — still holds.
+  it("returns null rather than a fabricated $0 for zero usage on a priced model", () => {
+    expect(estimateLlmCostUsd("anthropic", "claude-sonnet-5", { inputTokens: 0, outputTokens: 0 })).toBeNull();
   });
 });
+
+/**
+ * docs/26_DECISIONS.md ADR-045 — a real call always consumes tokens, so all-zero usage means
+ * the telemetry was missing, not that the call was free. Pricing it at $0 would write a
+ * confident "priced, $0.00" row into the usage ledger.
+ */
+describe("estimateLlmCostUsd with missing telemetry", () => {
+  it("returns null, not 0, for a priced model reporting zero tokens", () => {
+    expect(estimateLlmCostUsd("google", "gemini-3.5-flash", { inputTokens: 0, outputTokens: 0 })).toBeNull();
+  });
+
+  it("still prices a call that reported only output tokens", () => {
+    expect(estimateLlmCostUsd("google", "gemini-3.5-flash", { inputTokens: 0, outputTokens: 1_000_000 })).toBe(9);
+  });
+});
+

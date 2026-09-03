@@ -1,8 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { createVideoProject, orchestrateVideoProject } from "@ai-platform/media";
-import { NotFoundError, QuotaExceededError, ValidationError, videoProjectRequestSchema } from "@ai-platform/shared";
+import { NotFoundError, QuotaExceededError, ServiceUnavailableError, ValidationError, videoProjectRequestSchema } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
+import { MEDIA_UNAVAILABLE } from "./images.js";
 
 export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post(
@@ -14,6 +15,8 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
     async (request, reply) => {
       const parsed = videoProjectRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
+      // ADR-045 — see images.ts; video generation is mock-only too.
+      if (!ctx.mediaGenerationAvailable) throw new ServiceUnavailableError(MEDIA_UNAVAILABLE);
 
       // FR-063 — the whole project's requested duration is checked against the monthly
       // budget up front (docs/22_COST_AND_QUOTA_STRATEGY.md's long-form-video special case:

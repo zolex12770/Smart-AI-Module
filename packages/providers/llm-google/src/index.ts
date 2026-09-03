@@ -76,6 +76,14 @@ export class GoogleProvider implements LLMProvider {
     let content = "";
     let inputTokens = 0;
     let outputTokens = 0;
+    // docs/26_DECISIONS.md ADR-045 — everything needed to tell a genuinely empty answer from
+    // a swallowed failure. Gemini returns HTTP 200 for a safety block, an output-cap stop
+    // with no emitted text, and a frame this parser could not read; without these, all three
+    // ended as a `done` event with empty content, attributed to google, logged as a success.
+    let sawUsage = false;
+    let unparseableFrames = 0;
+    let finishReason: string | undefined;
+    let blockReason: string | undefined;
 
     // Google's SSE has no typed micro-events (docs/04 §3.4) — each `data:` frame is a
     // full, growing GenerateContentResponse chunk; there is no explicit stream-end
@@ -86,6 +94,7 @@ export class GoogleProvider implements LLMProvider {
       try {
         payload = JSON.parse(data);
       } catch {
+        unparseableFrames++;
         continue;
       }
 
@@ -94,13 +103,44 @@ export class GoogleProvider implements LLMProvider {
         content += text;
         yield { type: "token", delta: text };
       }
+      if (payload.candidates?.[0]?.finishReason) finishReason = payload.candidates[0].finishReason;
+      if (payload.promptFeedback?.blockReason) blockReason = payload.promptFeedback.blockReason;
       if (payload.usageMetadata) {
+        sawUsage = true;
         inputTokens = payload.usageMetadata.promptTokenCount ?? inputTokens;
-        outputTokens = payload.usageMetadata.candidatesTokenCount ?? outputTokens;
+        // Thinking tokens are billed as output but reported separately, so reading only
+        // candidatesTokenCount undercounts both the usage ledger and the cost estimate on
+        // every reasoning-capable model (ADR-045).
+        outputTokens =
+          (payload.usageMetadata.candidatesTokenCount ?? outputTokens) +
+          (payload.usageMetadata.thoughtsTokenCount ?? 0);
       }
       if (payload.error) {
         throw new ProviderError(`Google Gemini stream error: ${payload.error.message ?? "unknown error"}`);
       }
+    }
+
+    // A response that produced no text at all is a failure, not an empty success. Throwing
+    // here (rather than yielding an empty `done`) is what lets the router fall back — and,
+    // since ADR-044, log why — instead of recording a 0-token "successful" google call.
+    if (!content) {
+      const why = blockReason
+        ? `blocked by a safety filter (blockReason: ${blockReason})`
+        : finishReason && finishReason !== "STOP"
+          ? `stopped early (finishReason: ${finishReason})`
+          : unparseableFrames > 0
+            ? `${unparseableFrames} stream frame(s) could not be parsed`
+            : "the stream contained no text";
+      throw new ProviderError(`Google Gemini returned no content: ${why}.`);
+    }
+    if (unparseableFrames > 0 || !sawUsage) {
+      // Partial answers are still served — but the caller must not be told the token counts
+      // are authoritative when they are not. Zero usage flows through to a null cost estimate
+      // rather than a fabricated $0 (packages/model-router/src/cost-estimator.ts).
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[llm-google] response served with incomplete telemetry (unparseable_frames=${unparseableFrames}, usage_metadata_seen=${sawUsage}) — token counts may be understated.`
+      );
     }
 
     yield {
@@ -146,7 +186,14 @@ function truncate(text: string, max = 300): string {
 }
 
 interface GenerateContentResponseChunk {
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> }; finishReason?: string }>;
+  promptFeedback?: { blockReason?: string };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    /** Billed as output tokens but reported separately by reasoning-capable models. */
+    thoughtsTokenCount?: number;
+    totalTokenCount?: number;
+  };
   error?: { message?: string };
 }
