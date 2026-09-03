@@ -119,16 +119,10 @@ resource "google_storage_bucket" "uploads" {
   force_destroy               = false
 }
 
-resource "google_storage_bucket" "quarantine" {
-  name                        = "ai-platform-quarantine-${random_id.bucket_suffix.hex}"
-  location                    = var.region
-  uniform_bucket_level_access = true
-  force_destroy               = false
-  lifecycle_rule {
-    condition { age = 7 }
-    action { type = "Delete" }
-  }
-}
+# No `quarantine` bucket (docs/18 §1.4 sketched one): ADR-042 implements quarantine as a
+# document STATUS — an upload is held `scanning`, never ingested and never served, until the
+# worker's clamd scan clears it, and an infected upload's object is deleted outright. A second
+# bucket and a copy-on-promote step would add moving parts for no additional containment.
 
 # --- Secret Manager --------------------------------------------------------------
 resource "google_secret_manager_secret" "database_url" {
@@ -306,6 +300,19 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "ASSETS_BUCKET"
         value = google_storage_bucket.media.name
       }
+      # ADR-042 — CLAMD_HOST being set is what makes the upload route hold uploads for
+      # scanning; the API never scans anything itself (the worker pool does, via its sidecar),
+      # so clamd is expected to be unreachable from here — the boot log says so, by design.
+      # UPLOAD_SCAN_REQUIRED=true: a real deployment must fail closed if scanning is ever
+      # misconfigured, rather than quietly accepting unscanned uploads.
+      env {
+        name  = "CLAMD_HOST"
+        value = "127.0.0.1"
+      }
+      env {
+        name  = "UPLOAD_SCAN_REQUIRED"
+        value = "true"
+      }
       env {
         name = "DATABASE_URL"
         value_source {
@@ -463,9 +470,33 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
           }
         }
       }
+      env {
+        # ADR-042 — the clamd sidecar below shares this instance's network namespace.
+        name  = "CLAMD_HOST"
+        value = "127.0.0.1"
+      }
       # No LLM provider keys here on purpose: no job type calls an LLM today (document
       # ingestion, mock image/video generation, ffmpeg render) — least privilege. Mirror the
       # API service's dynamic env blocks the day a job type genuinely needs one.
+    }
+
+    # ADR-042 — the malware scanner, as a sidecar (Cloud Run multi-container). clamd speaks
+    # raw TCP on 3310, which a separate Cloud Run *service* could not expose (services are
+    # HTTP(S) only) — a sidecar on the one role that scans is the right home. The official
+    # `clamav/clamav` image ships with a signature database baked in and runs freshclam to
+    # keep it current (needs egress to database.clamav.net, which Cloud Run allows by
+    # default). clamd holds the whole database in memory: the 3 GiB limit is a real
+    # requirement, not headroom, and the image takes 1-2 minutes to become ready after a cold
+    # start — which is why document.scan retries with backoff rather than failing fast.
+    containers {
+      name  = "clamd"
+      image = "clamav/clamav:1.5"
+      resources {
+        limits = {
+          cpu    = "1"
+          memory = "3Gi"
+        }
+      }
     }
   }
 

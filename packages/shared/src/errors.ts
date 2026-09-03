@@ -38,6 +38,15 @@ export class ProviderError extends AppError {
   readonly statusCode = 502;
 }
 
+/** A required backing service is not configured/available and the operation cannot be
+ * performed safely without it — e.g. an upload when UPLOAD_SCAN_REQUIRED=true but no malware
+ * scanner is configured (docs/26_DECISIONS.md ADR-042). 503, not 500: it is an operator
+ * configuration state, not an unexpected failure, and clients may retry later. */
+export class ServiceUnavailableError extends AppError {
+  readonly code = "SERVICE_UNAVAILABLE";
+  readonly statusCode = 503;
+}
+
 /** FR-063 (docs/22_COST_AND_QUOTA_STRATEGY.md) — a configured usage quota would be
  * exceeded by this request. Distinct from RateLimitError: that's a per-time-window request
  * throttle (docs/26_DECISIONS.md ADR-032); this is a usage-budget check. */

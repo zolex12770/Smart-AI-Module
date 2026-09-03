@@ -41,7 +41,8 @@ import {
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/observability";
 import { QuotaManager } from "@ai-platform/quota";
-import { createRagTools, processDocumentIngestion } from "@ai-platform/rag";
+import { createRagTools, processDocumentIngestion, processDocumentScan } from "@ai-platform/rag";
+import { ClamAvScanner, type MalwareScanner } from "@ai-platform/scanning";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { MockVideoProvider } from "@ai-platform/video-mock";
 import { v4 as uuid } from "uuid";
@@ -138,6 +139,23 @@ async function main() {
     monthlyVideoSecondsLimit: config.MONTHLY_VIDEO_SECONDS_LIMIT,
   });
 
+  // docs/13 §12 / ADR-042 — upload malware scanning. Presence of CLAMD_HOST is what turns the
+  // scan step on for the upload route; the boot-time ping is a warning, not a gate, because
+  // in the api role clamd is expected to be unreachable (the sidecar lives on the worker
+  // pool, the only role that scans). A missing scanner is logged at WARN in capitals on
+  // purpose: it is the one security control in docs/13 §12 that can be silently absent.
+  let scanner: MalwareScanner | null = null;
+  if (config.CLAMD_HOST) {
+    scanner = new ClamAvScanner({ host: config.CLAMD_HOST, port: config.CLAMD_PORT });
+    const reachable = await scanner.ping();
+    logger.info({ scanner: scanner.name, reachable, role: config.ROLE }, reachable ? "malware scanner reachable" : "malware scanner configured but not reachable from this process");
+    if (!reachable && runs.workers) logger.warn({ scanner: scanner.name }, "worker role cannot reach clamd — document.scan jobs will fail and retry until it is");
+  } else if (config.UPLOAD_SCAN_REQUIRED) {
+    logger.warn("UPLOAD_SCAN_REQUIRED=true but no CLAMD_HOST is configured — uploads will be REFUSED (503) until a scanner is configured");
+  } else {
+    logger.warn("UPLOAD MALWARE SCANNING DISABLED — no CLAMD_HOST configured; uploads are accepted unscanned and marked scan_status=skipped_no_scanner (docs/13 §12, ADR-042)");
+  }
+
   for (const { definition, handler } of [
     ...createFilesystemTools(sandboxRoot),
     ...createTerminalTools(sandboxRoot),
@@ -160,6 +178,10 @@ async function main() {
   const jobQueue = new JobQueue(jobQueueOptions);
   await jobQueue.start();
   await jobQueue.ensureQueue("document.ingest", { retryLimit: 2, expireInSeconds: 120 });
+  // ADR-042: more retries, backoff — the common failure is clamd not (yet) reachable (e.g. the
+  // sidecar still loading its database), which resolves on its own; a scan that never runs
+  // leaves the document `scanning`, never `ready`.
+  await jobQueue.ensureQueue("document.scan", { retryLimit: 5, retryDelay: 15, retryBackoff: true, expireInSeconds: 120 });
   await jobQueue.ensureQueue("image.generate", { retryLimit: 1, expireInSeconds: 60 });
   await jobQueue.ensureQueue("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
   await jobQueue.ensureQueue("video.render", { retryLimit: 1, expireInSeconds: 300 });
@@ -191,6 +213,22 @@ async function main() {
   const videoProvider = new MockVideoProvider();
 
   if (runs.workers) {
+    if (scanner) {
+      const activeScanner = scanner;
+      await jobQueue.registerWorker<{ documentId: string; requestId?: string }>(
+        "document.scan",
+        async ({ documentId, requestId }) =>
+          runJob(logger, { queue: "document.scan", jobId: documentId, requestId }, async () => {
+            const outcome = await processDocumentScan(
+              { documentRepo: documents, assetRepo: assets, assetStore, scanner: activeScanner, jobQueue },
+              documentId,
+              requestId
+            );
+            logger.info({ request_id: requestId, job_id: documentId, scanner: activeScanner.name, outcome }, "upload scan completed");
+          })
+      );
+    }
+
     await jobQueue.registerWorker<{ documentId: string; requestId?: string }>(
       "document.ingest",
       async ({ documentId, requestId }) =>
@@ -353,6 +391,8 @@ async function main() {
     videoScenes,
     usage,
     quota,
+    scanner,
+    uploadScanRequired: config.UPLOAD_SCAN_REQUIRED,
   };
 
   const app = await buildServer(config, ctx, logger);

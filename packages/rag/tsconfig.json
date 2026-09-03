@@ -11,6 +11,7 @@
     { "path": "../shared" },
     { "path": "../database" },
     { "path": "../embeddings" },
-    { "path": "../tools" }
+    { "path": "../tools" },
+    { "path": "../scanning" }
   ]
 }

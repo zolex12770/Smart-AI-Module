@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { DrizzleDb } from "@ai-platform/database";
-import { processDocumentIngestion, searchDocuments } from "@ai-platform/rag";
+import { processDocumentIngestion, processDocumentScan, searchDocuments } from "@ai-platform/rag";
+import type { MalwareScanner, ScanVerdict } from "@ai-platform/scanning";
 import { buildTestApp, closeTestApp } from "../../test-app.js";
 import type { AppContext } from "../../context.js";
 import { UPLOAD_MAX_BYTES } from "../../server.js";
@@ -51,6 +52,7 @@ describe("files (RAG ingestion) + memory routes", () => {
       expect(res.statusCode).toBe(202);
       const { document } = res.json();
       expect(document.status).toBe("ingesting");
+      expect(document.scanStatus).toBe("skipped_no_scanner"); // ADR-042: fail-open, but durably marked
       expect(document.filename).toBe("remote-work-policy.txt");
       expect(document.sourcePath).toBeNull();
       expect(typeof document.assetId).toBe("string");
@@ -147,6 +149,56 @@ describe("files (RAG ingestion) + memory routes", () => {
       expect(asset.statusCode).toBe(200);
       expect(asset.headers["content-disposition"]).toContain("attachment");
       expect(asset.headers["content-disposition"]).not.toContain("handbook");
+    });
+  });
+
+  describe("malware scanning of uploads (ADR-042, docs/13 §12) — status-based quarantine + serve-gate", () => {
+    const scripted = (verdict: ScanVerdict): MalwareScanner => ({ name: "scripted", scan: async () => verdict, ping: async () => true });
+    const scanDeps = () => ({ documentRepo: ctx.documents, assetRepo: ctx.assets, assetStore: ctx.assetStore, scanner: ctx.scanner!, jobQueue: ctx.jobQueue });
+
+    it("with a scanner configured, an upload is held in `scanning` and its asset is NOT served until the scan clears it", async () => {
+      ctx.scanner = scripted({ verdict: "clean" });
+      const { document } = (await upload(app, "held.txt", "harmless text", "text/plain")).json();
+      expect(document.status).toBe("scanning");
+      expect(document.scanStatus).toBe("pending");
+
+      // Serve-gate: 404 while scanning, even though the bytes exist in the store.
+      expect((await app.inject({ method: "GET", url: `/api/v1/assets/${document.assetId}` })).statusCode).toBe(404);
+
+      // Run the real scan job (the test app registers no workers) → clean → ingesting.
+      expect(await processDocumentScan(scanDeps(), document.id)).toBe("clean");
+      const after = (await ctx.documents.get(document.id))!;
+      expect(after.status).toBe("ingesting");
+      expect(after.scanStatus).toBe("clean");
+      expect((await app.inject({ method: "GET", url: `/api/v1/assets/${document.assetId}` })).statusCode).toBe(200);
+    });
+
+    it("an infected verdict rejects the document, deletes its bytes and row, and the asset route 404s forever after", async () => {
+      ctx.scanner = scripted({ verdict: "infected", signature: "Eicar-Test-Signature" });
+      const { document } = (await upload(app, "bad.txt", "pretend this is malware", "text/plain")).json();
+      const assetId = document.assetId as string;
+      expect(await ctx.assets.get(assetId)).toBeDefined();
+
+      expect(await processDocumentScan(scanDeps(), document.id)).toBe("infected");
+
+      const after = (await ctx.documents.get(document.id))!;
+      expect(after.status).toBe("rejected");
+      expect(after.scanStatus).toBe("infected");
+      expect(after.errorMessage).toMatch(/Eicar-Test-Signature/);
+      expect(after.assetId).toBeNull();
+      expect(await ctx.assets.get(assetId)).toBeUndefined();
+      expect((await app.inject({ method: "GET", url: `/api/v1/assets/${assetId}` })).statusCode).toBe(404);
+      // The document is still listed — an operator can see WHAT was rejected and why.
+      expect((await app.inject({ method: "GET", url: `/api/v1/files/${document.id}` })).json().document.status).toBe("rejected");
+    });
+
+    it("UPLOAD_SCAN_REQUIRED with no scanner refuses the upload with a real 503 before reading any bytes (fail-closed)", async () => {
+      ctx.scanner = null;
+      ctx.uploadScanRequired = true;
+      const res = await upload(app, "anything.txt", "hello", "text/plain");
+      expect(res.statusCode).toBe(503);
+      expect(res.json().error.code).toBe("SERVICE_UNAVAILABLE");
+      expect((await app.inject({ method: "GET", url: "/api/v1/files" })).json().documents).toHaveLength(0);
     });
   });
 

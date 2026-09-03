@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ingestFile, listFiles, uploadFile, type DocumentRecord } from "../lib/api";
-import { StatusBadge } from "../lib/status-badge";
+import { badgeClass, StatusBadge } from "../lib/status-badge";
 
 export default function FilesPage() {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
@@ -104,7 +104,17 @@ export default function FilesPage() {
           <div key={d.id} className="card card-row">
             <div>
               <strong>{d.filename}</strong>
-              <div className="page-subtitle">{d.sourcePath ?? (d.assetId ? `uploaded · asset ${d.assetId.slice(0, 8)}…` : "")}</div>
+              <div className="page-subtitle">
+                {d.sourcePath ?? (d.assetId ? `uploaded · asset ${d.assetId.slice(0, 8)}…` : "uploaded")}
+                {d.scanStatus && (
+                  <>
+                    {" · scan: "}
+                    <span className={badgeClass(d.scanStatus === "clean" ? "ready" : d.scanStatus === "skipped_no_scanner" ? "" : d.scanStatus)}>
+                      {d.scanStatus === "skipped_no_scanner" ? "not scanned (no scanner configured)" : d.scanStatus}
+                    </span>
+                  </>
+                )}
+              </div>
               {d.errorMessage && <p className="error-text">{d.errorMessage}</p>}
             </div>
             <StatusBadge status={d.status} />

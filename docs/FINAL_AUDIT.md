@@ -85,3 +85,10 @@ closing section warned about.
   controls — which ADR-032 had recorded as "N/A, no upload endpoint" — are now implemented and
   tested, except malware scanning (a new [[27_RISKS_AND_LIMITATIONS]] row). What remains under
   `SANDBOX_ROOT` is the coding agent's per-run scratch directory, a legitimate use, not a gap.
+- **2026-09-03 — the last docs/13 §12 control built ([[26_DECISIONS]] ADR-042).** Upload malware
+  scanning via clamd's real `INSTREAM` protocol as a `document.scan` job with status-based
+  quarantine, a serve-gate, and delete-on-reject — verified against a real `clamd` and a real
+  EICAR sample end to end (tests + a live API run), never yet with the official signature set
+  or the Cloud Run sidecar (a [[27_RISKS_AND_LIMITATIONS]] row). The live run also caught a
+  real harness gap (the test app had not ensured the new queue) that the passing unit tests
+  could not have. docs/30's security box updated accordingly.

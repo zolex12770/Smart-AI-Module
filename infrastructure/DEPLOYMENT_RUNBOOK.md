@@ -125,7 +125,25 @@ against a real standalone Postgres for the first time.
   `assetId`; `gsutil ls gs://<media-bucket>/document/` lists `<assetId>.pdf`; polling
   `GET /api/v1/files/<id>` reaches `ready` (the worker pool's logs show the `document.ingest`
   job); then an `answer_from_documents` task can retrieve its content. A `400` naming the
-  allow-list or a sniff reason is the route working as designed, not a deploy problem.
+  allow-list or a sniff reason is the route working as designed, not a deploy problem. With
+  scanning on (it is, in this Terraform), the response is `"status":"scanning"` first and the
+  worker pool's logs show a `document.scan` job with `"outcome":"clean"` before the ingest.
+- **Malware scanning end to end (ADR-042) — the first time the real sidecar and the real
+  signature database are in the loop.** Both units' boot logs should show
+  `"scanner":"clamd@127.0.0.1:3310"`: `"reachable":true` on the worker pool, and (expected,
+  by design) not reachable on the API service, which never scans. Upload the standard EICAR
+  test string (the industry-standard, harmless antivirus test sample — see eicar.org) from
+  stdin so it never lands on your disk; it is written here in two halves, exactly as this
+  repo's tests assemble it, so that no file in a checkout ever contains the contiguous
+  signature for a host antivirus to quarantine:
+  `printf '%s%s' 'X5O!P%%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD' '-ANTIVIRUS-TEST-FILE!$H+H*' | curl -F "file=@-;filename=eicar.txt;type=text/plain" https://<api-service-url>/api/v1/files/upload`
+  → `202` with `"status":"scanning"`; within a minute `GET /api/v1/files/<id>` shows
+  `"status":"rejected"`, `"scanStatus":"infected"`, an `errorMessage` naming the signature,
+  and `"assetId":null`; `gsutil ls gs://<media-bucket>/document/` must NOT list the object;
+  `GET /api/v1/assets/<the assetId from the 202>` must be `404`. If the document stays
+  `scanning`: the sidecar is still starting (its log shows freshclam) or the worker cannot
+  reach `127.0.0.1:3310` — `document.scan` retries five times with backoff, then the job
+  dead-letters and the document remains `scanning` (never `ready`) — that is the design.
 
 ## Known gaps this runbook does not close
 
@@ -135,10 +153,14 @@ against a real standalone Postgres for the first time.
   `POST /api/v1/files` is dev-only on a deployment — nothing can place a file under
   `SANDBOX_ROOT` on a stateless instance. A coding-agent run's files last as long as its
   instance, which is fine for one run; nothing about a run is durable across instances.
-- **No malware scanning of uploads** (docs/13 §12, ADR-041): uploads pass an allow-list, a
-  declared-type check, and a real content sniff, then go straight to ingestion. The
-  `quarantine` bucket exists but nothing promotes through it. Acceptable for a single
-  operator; not for uploads from untrusted users.
+- **The clamd sidecar has never run on Cloud Run** (ADR-042): the scanner protocol, the scan
+  job, the serve-gate, and delete-on-reject were all verified locally against a real `clamd`
+  — but with a one-signature EICAR database, never the official signature set, and never as a
+  `clamav/clamav:1.5` sidecar. Its 3 GiB memory limit comes from ClamAV's documentation, not a
+  measurement here; its 1–2 minute cold start is why `document.scan` retries with backoff.
+  Step 5's EICAR check is the first time all of that is real. If uploads sit in `scanning`
+  for more than a few minutes, read the worker pool's logs for the sidecar's freshclam/startup
+  output before suspecting the application.
 - **The Cloud Storage asset store has only ever been exercised against an emulator**
   (ADR-040) — step 5's asset check is the first time real GCS, Application Default
   Credentials, and the Terraform IAM bindings will all be in the loop together.

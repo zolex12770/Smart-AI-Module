@@ -1,6 +1,6 @@
 import { basename, extname } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { NotFoundError, ValidationError } from "@ai-platform/shared";
+import { NotFoundError, ServiceUnavailableError, ValidationError } from "@ai-platform/shared";
 import { createPendingDocument, createPendingUploadedDocument, sniffDocumentBytes, UPLOAD_ALLOWED_TYPES } from "@ai-platform/rag";
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
@@ -42,6 +42,11 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
     "/api/v1/files/upload",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
+      // ADR-042 fail-closed switch, checked before reading a single byte of the upload.
+      if (!ctx.scanner && ctx.uploadScanRequired) {
+        throw new ServiceUnavailableError("Uploads require malware scanning, but no scanner is configured on this deployment.");
+      }
+
       const part = await request.file();
       if (!part) throw new ValidationError('Multipart body must include a "file" field.');
 
@@ -64,7 +69,18 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       if (!sniff.ok) throw new ValidationError(`Rejected: ${sniff.reason}`);
 
       const assetId = await ctx.assetStore.store(bytes, allowedMimes[0], ext.slice(1), "document");
-      const document = await createPendingUploadedDocument(ctx.documents, { filename: originalName, assetId });
+
+      // ADR-042: with a scanner configured the document is held in `scanning` (never ingested,
+      // never served) until the worker's document.scan job clears it; without one it goes
+      // straight to ingestion carrying a durable `skipped_no_scanner` mark — visible in the
+      // row and the API, never silently equivalent to "scanned clean".
+      if (ctx.scanner) {
+        const document = await createPendingUploadedDocument(ctx.documents, { filename: originalName, assetId, scanStatus: "pending" });
+        await ctx.jobQueue.enqueue("document.scan", { documentId: document.id, requestId: request.id });
+        reply.status(202).send({ document });
+        return;
+      }
+      const document = await createPendingUploadedDocument(ctx.documents, { filename: originalName, assetId, scanStatus: "skipped_no_scanner" });
       await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id, requestId: request.id });
       reply.status(202).send({ document });
     }

@@ -64,6 +64,7 @@ flowchart LR
 | `OPENAI_API_KEY` | Phase 2 (optional) | Enables real OpenAI adapter |
 | `GOOGLE_API_KEY` / `GOOGLE_APPLICATION_CREDENTIALS` + `GOOGLE_CLOUD_PROJECT` | Phase 2 (optional) | Enables real Gemini/Vertex adapter |
 | `ASSETS_ROOT` / `ASSETS_BUCKET` | Phase 8 / post-15 | As built ([[26_DECISIONS]] ADR-040): `ASSETS_ROOT` selects the local filesystem adapter (default); setting `ASSETS_BUCKET` selects the Cloud Storage adapter (Application Default Credentials). `GCS_API_ENDPOINT` exists only to point the real client at a local emulator and is never set in production |
+| `CLAMD_HOST` / `CLAMD_PORT` / `UPLOAD_SCAN_REQUIRED` | post-15 | As built ([[26_DECISIONS]] ADR-042): `CLAMD_HOST` set ⇒ uploads are held for a real clamd scan by the worker role (default port 3310; on Cloud Run `127.0.0.1`, the worker pool's sidecar). Unset ⇒ fail-open with a durable `skipped_no_scanner` mark, unless `UPLOAD_SCAN_REQUIRED=true` (fail-closed, 503) — which the deployed API sets |
 | `NODE_ENV` | always | Gates ADR-013's mock-provider production guard |
 
 ## Provisioning gate

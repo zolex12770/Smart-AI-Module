@@ -28,6 +28,9 @@ export interface CreateAssetInput {
 export interface AssetRepository {
   create(input: CreateAssetInput): Promise<Asset>;
   get(id: string): Promise<Asset | undefined>;
+  /** Removes the row only — the bytes are the AssetStore's to delete (docs/26_DECISIONS.md
+   * ADR-042). Callers must clear any `documents.asset_id` reference first (FK). */
+  delete(id: string): Promise<void>;
 }
 
 export class PgAssetRepository implements AssetRepository {
@@ -42,5 +45,9 @@ export class PgAssetRepository implements AssetRepository {
   async get(id: string): Promise<Asset | undefined> {
     const [row] = await this.db.select().from(assets).where(eq(assets.id, id));
     return row as Asset | undefined;
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.db.delete(assets).where(eq(assets.id, id));
   }
 }

@@ -26,6 +26,7 @@
     "@ai-platform/observability": "*",
     "@ai-platform/quota": "*",
     "@ai-platform/rag": "*",
+    "@ai-platform/scanning": "*",
     "@ai-platform/shared": "*",
     "@ai-platform/tools": "*",
     "@ai-platform/video-mock": "*",

@@ -18,6 +18,7 @@ import type { JobQueue } from "@ai-platform/jobs";
 import type { AssetStore } from "@ai-platform/media";
 import type { ModelRouter } from "@ai-platform/model-router";
 import type { QuotaManager } from "@ai-platform/quota";
+import type { MalwareScanner } from "@ai-platform/scanning";
 import type { ToolRegistry } from "@ai-platform/tools";
 
 /**
@@ -49,4 +50,9 @@ export interface AppContext {
   videoScenes: VideoSceneRepository;
   usage: UsageRecordRepository;
   quota: QuotaManager;
+  /** Null when no scanner is configured (docs/26_DECISIONS.md ADR-042). The upload route
+   * only checks presence; the worker role is what actually talks to it. */
+  scanner: MalwareScanner | null;
+  /** When true and `scanner` is null, uploads are refused (503) rather than accepted unscanned. */
+  uploadScanRequired: boolean;
 }

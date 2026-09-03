@@ -68,7 +68,10 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; db: Drizzl
 
   const jobQueue = new JobQueue({ db: fromPglite(db.$client), backend: "pglite" });
   await jobQueue.start();
-  for (const queue of ["document.ingest", "image.generate", "video.generate_scene", "video.render"]) {
+  // Must mirror every queue index.ts ensures — pg-boss's send() to a queue that was never
+  // created throws, which surfaced as a 500 from the upload route the first time a test
+  // configured a scanner (ADR-042) before `document.scan` was listed here.
+  for (const queue of ["document.scan", "document.ingest", "image.generate", "video.generate_scene", "video.render"]) {
     await jobQueue.ensureQueue(queue);
   }
 
@@ -97,6 +100,10 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; db: Drizzl
     // No limits configured by default — route tests exercise the unlimited (opt-in) path;
     // a dedicated quota test constructs its own QuotaManager with real limits.
     quota: new QuotaManager(new PgUsageRecordRepository(db), {}),
+    // No scanner by default (the fail-open path); tests that exercise scanning set ctx.scanner
+    // themselves — route handlers read it at request time.
+    scanner: null,
+    uploadScanRequired: false,
   };
 
   const { createLogger } = await import("@ai-platform/observability");

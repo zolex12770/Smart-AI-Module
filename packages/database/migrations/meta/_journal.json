@@ -36,6 +36,13 @@
       "when": 1788409361511,
       "tag": "0004_concerned_dreadnoughts",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788410611041,
+      "tag": "0005_good_living_tribunal",
+      "breakpoints": true
     }
   ]
 }

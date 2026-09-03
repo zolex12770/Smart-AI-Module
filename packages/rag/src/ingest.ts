@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { v4 as uuid } from "uuid";
-import type { Asset, AssetRepository, Document, DocumentChunkRepository, DocumentRepository } from "@ai-platform/database";
+import type { Asset, AssetRepository, Document, DocumentChunkRepository, DocumentRepository, DocumentScanStatus } from "@ai-platform/database";
 import { resolveSandboxedPath } from "@ai-platform/tools";
 import type { EmbeddingProvider } from "@ai-platform/embeddings";
 import { chunkText } from "./chunking.js";
@@ -64,9 +64,9 @@ export async function createPendingDocument(
  */
 export async function createPendingUploadedDocument(
   documentRepo: DocumentRepository,
-  input: { filename: string; assetId: string }
+  input: { filename: string; assetId: string; scanStatus: DocumentScanStatus }
 ): Promise<Document> {
-  return documentRepo.create({ id: uuid(), filename: input.filename, assetId: input.assetId });
+  return documentRepo.create({ id: uuid(), filename: input.filename, assetId: input.assetId, scanStatus: input.scanStatus });
 }
 
 /** Loads a document's raw bytes from whichever of its two sources is set. */

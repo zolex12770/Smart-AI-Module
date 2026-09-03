@@ -1,8 +1,9 @@
 const SUCCESS = new Set(["succeeded", "completed", "ready", "COMPLETED"]);
-const DANGER = new Set(["failed", "FAILED", "dead_letter", "CANCELLED", "cancelled"]);
+const DANGER = new Set(["failed", "FAILED", "dead_letter", "CANCELLED", "cancelled", "rejected", "infected"]);
 const WARNING = new Set([
   "processing",
   "pending",
+  "scanning",
   "generating_scenes",
   "assembling",
   "ingesting",

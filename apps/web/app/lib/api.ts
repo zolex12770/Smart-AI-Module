@@ -121,9 +121,12 @@ export interface DocumentRecord {
   filename: string;
   /** Set for the sandbox-path flow; null for uploads. */
   sourcePath: string | null;
-  /** Set for uploads (the bytes live in the asset store); null for the path flow. */
+  /** Set for uploads (the bytes live in the asset store); null for the path flow, and cleared
+   * again if an upload is rejected as infected. */
   assetId: string | null;
-  status: "ingesting" | "ready" | "failed";
+  status: "scanning" | "ingesting" | "ready" | "failed" | "rejected";
+  /** What the malware scan did (ADR-042): null for never-scanned path-based documents. */
+  scanStatus: "pending" | "clean" | "infected" | "skipped_no_scanner" | null;
   errorMessage: string | null;
   createdAt: string;
 }

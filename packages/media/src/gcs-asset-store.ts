@@ -72,6 +72,16 @@ export class CloudStorageAssetStore implements AssetStore {
     const [bytes] = await this.storage.bucket(bucket).file(objectName).download();
     return bytes;
   }
+
+  async delete(asset: Asset): Promise<void> {
+    const { bucket, objectName } = parseGsUri(asset.storagePath);
+    try {
+      // ignoreNotFound: an object already gone (a retried job) is success, not a failure.
+      await this.storage.bucket(bucket).file(objectName).delete({ ignoreNotFound: true });
+    } finally {
+      await this.assetRepo.delete(asset.id);
+    }
+  }
 }
 
 /** `gs://bucket/path/to/object` → its parts. Throws on anything else — a row written by

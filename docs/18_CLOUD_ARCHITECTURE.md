@@ -2,8 +2,8 @@
 
 **Status: planning document, now backed by real Dockerfiles + Terraform (Phase 14, 2026-09-02 —
 see [[26_DECISIONS]] ADR-037; §1.1's recommended Worker Pool for the job worker added 2026-09-03,
-ADR-039; §1.4's Cloud Storage now actually used for generated assets, ADR-040), still not
-provisioned.** No GCP project, billing account, or budget
+ADR-039; §1.4's Cloud Storage now actually used for generated assets, ADR-040; a `clamav/clamav`
+malware-scanning sidecar on the worker pool, ADR-042), still not provisioned.** No GCP project, billing account, or budget
 currently exists for this platform, and nothing described here (or in `infrastructure/`) should be
 provisioned until the team has both. Where the doc says "recommended," it means "recommended once
 you provision," not "provision now." **Two real divergences from this document's §1.5/§2, found
@@ -104,6 +104,11 @@ attachments), and coding-agent workspace artifacts that need to persist past a s
   distinct IAM bindings) for: generated media outputs, user-uploaded documents, and a
   short-lived quarantine bucket for uploads pending malware scanning (see
   `13_SECURITY_ARCHITECTURE.md` §12). Serve assets via signed URLs, not public buckets.
+  **As built ([[26_DECISIONS]] ADR-042):** no quarantine bucket — quarantine is a document
+  *status* (`scanning`: never ingested, never served) enforced in the application, and an
+  infected object is deleted outright rather than promoted anywhere; one media bucket with
+  per-kind prefixes suffices. Assets are streamed through the API rather than served via
+  signed URLs (ADR-040), a deliberate deferral until asset sizes justify it.
 
 ### 1.5 Pub/Sub vs. Cloud Tasks — **include Cloud Tasks now; add Pub/Sub only if a fan-out need appears**
 

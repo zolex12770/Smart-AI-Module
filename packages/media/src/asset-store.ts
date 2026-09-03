@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { v4 as uuid } from "uuid";
 import type { Asset, AssetKind, AssetRepository } from "@ai-platform/database";
@@ -20,6 +20,10 @@ export interface AssetStore {
   store(bytes: Buffer, mimeType: string, ext: string, kind?: AssetKind): Promise<string>;
   /** Reads an asset's bytes back — the only supported way to get at them. */
   read(asset: Asset): Promise<Buffer>;
+  /** Removes the bytes AND the `assets` row — the disposal path for an upload rejected as
+   * infected (docs/26_DECISIONS.md ADR-042). Idempotent: bytes already gone is success,
+   * so a retried job can't get stuck on a half-completed earlier attempt. */
+  delete(asset: Asset): Promise<void>;
 }
 
 /**
@@ -54,5 +58,13 @@ export class LocalAssetStore implements AssetStore {
 
   async read(asset: Asset): Promise<Buffer> {
     return readFile(asset.storagePath);
+  }
+
+  async delete(asset: Asset): Promise<void> {
+    try {
+      await rm(asset.storagePath, { force: true }); // force: a missing file is not an error
+    } finally {
+      await this.assetRepo.delete(asset.id);
+    }
   }
 }

@@ -101,7 +101,14 @@ export const documents = pgTable("documents", {
   // a stateless Cloud Run instance, where there is no sandbox directory to point at.
   sourcePath: text("source_path"),
   assetId: text("asset_id").references(() => assets.id),
-  status: text("status", { enum: ["ingesting", "ready", "failed"] }).notNull(),
+  // `scanning` → (clean) `ingesting` → `ready`/`failed`, or (infected) `rejected`
+  // (docs/26_DECISIONS.md ADR-042). Path-based documents skip straight to `ingesting`.
+  status: text("status", { enum: ["scanning", "ingesting", "ready", "failed", "rejected"] }).notNull(),
+  // Durable record of what the malware scan actually did (docs/13 §12) — null for path-based
+  // documents (never scanned; operator-placed, dev-only flow). `skipped_no_scanner` is the
+  // honest ADR-030-style marker for an upload that was accepted with no scanner configured,
+  // so a later audit can tell "scanned clean" from "never scanned" — never conflated.
+  scanStatus: text("scan_status", { enum: ["pending", "clean", "infected", "skipped_no_scanner"] }),
   errorMessage: text("error_message"),
   createdAt: timestamp("created_at").notNull(),
 });

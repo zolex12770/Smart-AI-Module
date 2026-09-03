@@ -65,6 +65,18 @@ jobs:
           tar -xzf /tmp/fgcs.tar.gz -C /tmp fake-gcs-server
           chmod +x /tmp/fake-gcs-server
           echo "FAKE_GCS_SERVER_BIN=/tmp/fake-gcs-server" >> "$GITHUB_ENV"
+      # packages/scanning's ClamAvScanner suite drives the real clamd TCP protocol against a
+      # real clamd process (docs/26_DECISIONS.md ADR-042). No virus database download is
+      # needed — the test starts clamd against a one-line EICAR-only signature file it writes
+      # itself. Without CLAMD_BIN the suite skips itself LOUDLY; this step makes CI run it.
+      - name: Install ClamAV (real clamd for the scanner suite)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clamav-daemon >/dev/null
+          # The packaged services want a full database we don't need here; stop them so they
+          # neither contend for the port range nor spend CI minutes on freshclam.
+          sudo systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
+          echo "CLAMD_BIN=$(command -v clamd)" >> "$GITHUB_ENV"
       - name: Test
         run: npm test
 

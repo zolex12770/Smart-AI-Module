@@ -46,6 +46,14 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
   app.get<{ Params: { id: string } }>("/api/v1/assets/:id", async (request, reply) => {
     const asset = await ctx.assets.get(request.params.id);
     if (!asset) throw new NotFoundError(`Asset "${request.params.id}" not found.`);
+    // ADR-042 serve-gate: an uploaded document's bytes are never handed out while the scan
+    // is pending or after it was rejected. 404, not 403 — existence isn't confirmed either way.
+    if (asset.kind === "document") {
+      const document = await ctx.documents.findByAssetId(asset.id);
+      if (!document || document.status === "scanning" || document.status === "rejected") {
+        throw new NotFoundError(`Asset "${request.params.id}" not found.`);
+      }
+    }
     // Through the store, never `readFile(asset.storagePath)` — the path may be a gs:// URI
     // (docs/26_DECISIONS.md ADR-040). Serving bytes through the API rather than redirecting
     // to a signed URL keeps the frontend's `<img src>` contract and CORS story unchanged;

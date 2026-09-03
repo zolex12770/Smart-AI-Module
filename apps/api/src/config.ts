@@ -30,6 +30,18 @@ const envSchema = z.object({
   // development/verification — never set in production (see CloudStorageAssetStore for why
   // this is an explicit option rather than the library's STORAGE_EMULATOR_HOST env var).
   GCS_API_ENDPOINT: z.string().url().optional(),
+  // docs/13 §12 / docs/26_DECISIONS.md ADR-042 — malware scanning of uploads via clamd's TCP
+  // protocol. CLAMD_HOST set ⇒ scanning is ENABLED: uploads are held in `scanning` and only
+  // ingested after a clean verdict from the worker-role process (which is what actually
+  // connects to clamd — on Cloud Run, a sidecar on the worker pool at 127.0.0.1). Unset ⇒
+  // uploads are accepted unscanned with a durable `skipped_no_scanner` mark and a loud boot
+  // warning (fail-OPEN, the right default for the single-operator dev loop) unless
+  // UPLOAD_SCAN_REQUIRED=true, which makes the upload route refuse with a 503 instead
+  // (fail-CLOSED, what a real deployment should set).
+  CLAMD_HOST: z.string().optional(),
+  CLAMD_PORT: z.coerce.number().int().positive().default(3310),
+  // Not z.coerce.boolean(): that treats the string "false" as true.
+  UPLOAD_SCAN_REQUIRED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   // docs/26_DECISIONS.md ADR-030: the long-form video render stage shells out to a system
   // ffmpeg binary rather than bundling one via npm. Defaults to resolving "ffmpeg" on PATH;
   // override for an environment where it's installed somewhere non-standard.

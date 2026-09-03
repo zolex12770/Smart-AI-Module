@@ -1,5 +1,5 @@
 {
-  "name": "@ai-platform/rag",
+  "name": "@ai-platform/scanning",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,17 +16,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": {
-    "@ai-platform/database": "*",
-    "@ai-platform/embeddings": "*",
-    "@ai-platform/scanning": "*",
-    "@ai-platform/shared": "*",
-    "@ai-platform/tools": "*",
-    "pdfjs-dist": "^6.3.289",
-    "uuid": "^11.0.4"
-  },
+  "dependencies": {},
   "devDependencies": {
-    "@ai-platform/media": "*",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }

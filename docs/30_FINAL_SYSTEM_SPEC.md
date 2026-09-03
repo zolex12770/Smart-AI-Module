@@ -33,8 +33,10 @@ flowchart TD
     ADR-040) behind one AssetStore interface;
     RAG uploads go through it too (ADR-041);
     coding-agent workspace = per-run scratch"]
-  api --> security["security: RBAC (target, not started),
-    prompt-injection guards (real)"]
+  api --> security["security: RBAC (target, not started);
+    prompt-injection guards, upload allow-list/
+    sniff/size caps, clamd malware scanning
+    (real, ADR-032/041/042)"]
   api --> observability[observability: logs, metrics, traces]
 ```
 

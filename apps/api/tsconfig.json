@@ -26,6 +26,7 @@
     { "path": "../../packages/providers/image-mock" },
     { "path": "../../packages/providers/video-mock" },
     { "path": "../../packages/agent-core" },
-    { "path": "../../packages/quota" }
+    { "path": "../../packages/quota" },
+    { "path": "../../packages/scanning" }
   ]
 }
