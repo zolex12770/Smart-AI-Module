@@ -40,6 +40,7 @@ import { MockVideoProvider } from "@ai-platform/video-mock";
 import { v4 as uuid } from "uuid";
 import { loadConfig, type AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
+import { roleRuns } from "./role.js";
 import { buildServer } from "./server.js";
 
 /**
@@ -70,12 +71,17 @@ async function connectDatabase(
 
 async function main() {
   const config = loadConfig();
+  const runs = roleRuns(config.ROLE);
 
   // docs/20_OBSERVABILITY.md — must happen before anything else logs or traces, so no
   // early-boot line is missed and the tracer provider is registered before any span-creating
   // code path (job workers registered below, request handlers once the server starts) runs.
-  initTracing("api");
-  const logger = createLogger("api");
+  // The service name follows the role (ADR-039) so a worker pool's logs/spans are attributable
+  // as "worker", not misfiled under "api", once the two run as separate Cloud Run units.
+  const serviceName = config.ROLE === "worker" ? "worker" : "api";
+  initTracing(serviceName);
+  const logger = createLogger(serviceName);
+  logger.info({ role: config.ROLE, http: runs.http, workers: runs.workers }, "booting");
 
   const { db, jobQueueOptions, close: closeDb } = await connectDatabase(config);
 
@@ -137,113 +143,133 @@ async function main() {
   // Real async job queue (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md, docs/26_DECISIONS.md
   // ADR-012/ADR-027/ADR-037) — pg-boss, either against the local PGlite instance via its
   // native `fromPglite` adapter, or (once DATABASE_URL is set) its own default connection
-  // pool built from that same connection string; connectDatabase above decides which. The
-  // worker still runs in-process here rather than in a separate apps/worker process even
-  // against a real standalone Postgres — that split is a real, currently-unbuilt follow-up
-  // (see ADR-037's deployment runbook), not something this env-var switch does by itself.
+  // pool built from that same connection string; connectDatabase above decides which.
+  //
+  // The queue is started and every queue is ensured in EVERY role (ADR-039): the api role
+  // must still be able to enqueue (pg-boss requires `start()` before `send()`), and
+  // `ensureQueue` is idempotent, so whichever process boots first creates the queues and
+  // the other finds them already there. Only the worker *registrations* below are gated —
+  // an `api`-role process never claims a job, a `worker`-role process never serves HTTP.
   const jobQueue = new JobQueue(jobQueueOptions);
   await jobQueue.start();
   await jobQueue.ensureQueue("document.ingest", { retryLimit: 2, expireInSeconds: 120 });
-  await jobQueue.registerWorker<{ documentId: string; requestId?: string }>(
-    "document.ingest",
-    async ({ documentId, requestId }) =>
-      runJob(logger, { queue: "document.ingest", jobId: documentId, requestId }, async () => {
-        const document = await documents.get(documentId);
-        if (!document) throw new Error(`document.ingest job referenced unknown document "${documentId}".`);
-        await processDocumentIngestion({ documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot }, document);
-      })
-  );
+  await jobQueue.ensureQueue("image.generate", { retryLimit: 1, expireInSeconds: 60 });
+  await jobQueue.ensureQueue("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
+  await jobQueue.ensureQueue("video.render", { retryLimit: 1, expireInSeconds: 300 });
 
   // Image generation (docs/05_IMAGE_GENERATION_RESEARCH.md) — mock-only until real
   // credentials exist (docs/26_DECISIONS.md ADR-009), but genuinely runs through the same
   // async job system a real (slow) provider would need, per docs/07 §1.6's "mock-provider
-  // parity" directive — never resolved inline.
+  // parity" directive — never resolved inline. Long-form video (docs/07 Part 2, ADR-030) —
+  // mock-only per the same policy; `video.generate_scene` runs with bounded concurrency
+  // (docs/07 §1.6: "not all 150 scenes fire at once"), `video.render` shells out to a system
+  // ffmpeg if one is present. The repositories/providers are constructed in every role
+  // (the api role's routes read them too); only the workers are role-gated.
   const assets = new PgAssetRepository(db);
   const assetStore = new LocalAssetStore(assetsRoot, assets);
   const imageGenerations = new PgImageGenerationRepository(db);
   const imageProvider = new MockImageProvider();
-  await jobQueue.ensureQueue("image.generate", { retryLimit: 1, expireInSeconds: 60 });
-  await jobQueue.registerWorker<{ generationId: string; requestId?: string }>(
-    "image.generate",
-    async ({ generationId, requestId }) =>
-      runJob(logger, { queue: "image.generate", jobId: generationId, requestId }, async () => {
-        await processImageGeneration({ generationRepo: imageGenerations, assetStore, provider: imageProvider }, generationId);
-        const generation = await imageGenerations.get(generationId);
-        logger.info(
-          {
-            request_id: requestId,
-            job_id: generationId,
-            provider: generation?.providerName ?? imageProvider.name,
-            status: generation?.status === "succeeded" ? "success" : "error",
-          },
-          "provider call completed"
-        );
-        // FR-061/FR-063 — recorded only on real success; a failed generation never happened,
-        // so it shouldn't consume the daily image quota. estimatedCostUsd is null (docs/22:
-        // image cost estimation needs a real image provider, ADR-009 — this stays mock-only).
-        if (generation?.status === "succeeded") {
-          await usage.create({
-            id: uuid(),
-            kind: "image",
-            provider: generation.providerName ?? imageProvider.name,
-            model: null,
-            inputTokens: null,
-            outputTokens: null,
-            units: 1,
-            estimatedCostUsd: null,
-            requestId: requestId ?? null,
-          });
-        }
-      })
-  );
-
-  // Long-form video pipeline (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md Part 2,
-  // docs/26_DECISIONS.md ADR-030) — mock-only per the same ADR-009 policy as images.
-  // `video.generate_scene` runs with bounded concurrency (docs/07 §1.6: "not all 150
-  // scenes fire at once"); `video.render` shells out to a system ffmpeg if one is present.
   const videoProjects = new PgVideoProjectRepository(db);
   const videoScenes = new PgVideoSceneRepository(db);
   const videoProvider = new MockVideoProvider();
-  await jobQueue.ensureQueue("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
-  await jobQueue.registerWorker<{ sceneId: string; requestId?: string }>(
-    "video.generate_scene",
-    async ({ sceneId, requestId }) =>
-      runJob(logger, { queue: "video.generate_scene", jobId: sceneId, requestId }, async () => {
-        await processVideoScene(
-          { projectRepo: videoProjects, sceneRepo: videoScenes, jobQueue, assetStore, provider: videoProvider },
-          sceneId,
-          requestId
-        );
-        // FR-061/FR-063 — recorded per scene (the real unit of work), only on real success,
-        // same reasoning as the image job above. estimatedCostUsd is null (mock-only, ADR-009).
-        const scene = await videoScenes.get(sceneId);
-        if (scene?.status === "succeeded") {
-          await usage.create({
-            id: uuid(),
-            kind: "video",
-            provider: videoProvider.name,
-            model: null,
-            inputTokens: null,
-            outputTokens: null,
-            units: scene.durationSeconds,
-            estimatedCostUsd: null,
-            requestId: requestId ?? null,
-          });
-        }
-      }),
-    { localConcurrency: 3 }
-  );
-  await jobQueue.ensureQueue("video.render", { retryLimit: 1, expireInSeconds: 300 });
-  await jobQueue.registerWorker<{ projectId: string; requestId?: string }>(
-    "video.render",
-    async ({ projectId, requestId }) =>
-      runJob(logger, { queue: "video.render", jobId: projectId, requestId }, async () => {
-        await processVideoRender(
-          { projectRepo: videoProjects, sceneRepo: videoScenes, assetRepo: assets, assetStore, ffmpegPath: config.FFMPEG_PATH },
-          projectId
-        );
-      })
-  );
+
+  if (runs.workers) {
+    await jobQueue.registerWorker<{ documentId: string; requestId?: string }>(
+      "document.ingest",
+      async ({ documentId, requestId }) =>
+        runJob(logger, { queue: "document.ingest", jobId: documentId, requestId }, async () => {
+          const document = await documents.get(documentId);
+          if (!document) throw new Error(`document.ingest job referenced unknown document "${documentId}".`);
+          await processDocumentIngestion({ documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot }, document);
+        })
+    );
+
+    await jobQueue.registerWorker<{ generationId: string; requestId?: string }>(
+      "image.generate",
+      async ({ generationId, requestId }) =>
+        runJob(logger, { queue: "image.generate", jobId: generationId, requestId }, async () => {
+          await processImageGeneration({ generationRepo: imageGenerations, assetStore, provider: imageProvider }, generationId);
+          const generation = await imageGenerations.get(generationId);
+          logger.info(
+            {
+              request_id: requestId,
+              job_id: generationId,
+              provider: generation?.providerName ?? imageProvider.name,
+              status: generation?.status === "succeeded" ? "success" : "error",
+            },
+            "provider call completed"
+          );
+          // FR-061/FR-063 — recorded only on real success; a failed generation never happened,
+          // so it shouldn't consume the daily image quota. estimatedCostUsd is null (docs/22:
+          // image cost estimation needs a real image provider, ADR-009 — this stays mock-only).
+          if (generation?.status === "succeeded") {
+            await usage.create({
+              id: uuid(),
+              kind: "image",
+              provider: generation.providerName ?? imageProvider.name,
+              model: null,
+              inputTokens: null,
+              outputTokens: null,
+              units: 1,
+              estimatedCostUsd: null,
+              requestId: requestId ?? null,
+            });
+          }
+        })
+    );
+
+    await jobQueue.registerWorker<{ sceneId: string; requestId?: string }>(
+      "video.generate_scene",
+      async ({ sceneId, requestId }) =>
+        runJob(logger, { queue: "video.generate_scene", jobId: sceneId, requestId }, async () => {
+          await processVideoScene(
+            { projectRepo: videoProjects, sceneRepo: videoScenes, jobQueue, assetStore, provider: videoProvider },
+            sceneId,
+            requestId
+          );
+          // FR-061/FR-063 — recorded per scene (the real unit of work), only on real success,
+          // same reasoning as the image job above. estimatedCostUsd is null (mock-only, ADR-009).
+          const scene = await videoScenes.get(sceneId);
+          if (scene?.status === "succeeded") {
+            await usage.create({
+              id: uuid(),
+              kind: "video",
+              provider: videoProvider.name,
+              model: null,
+              inputTokens: null,
+              outputTokens: null,
+              units: scene.durationSeconds,
+              estimatedCostUsd: null,
+              requestId: requestId ?? null,
+            });
+          }
+        }),
+      { localConcurrency: 3 }
+    );
+
+    await jobQueue.registerWorker<{ projectId: string; requestId?: string }>(
+      "video.render",
+      async ({ projectId, requestId }) =>
+        runJob(logger, { queue: "video.render", jobId: projectId, requestId }, async () => {
+          await processVideoRender(
+            { projectRepo: videoProjects, sceneRepo: videoScenes, assetRepo: assets, assetStore, ffmpegPath: config.FFMPEG_PATH },
+            projectId
+          );
+        })
+    );
+    logger.info({ queues: ["document.ingest", "image.generate", "video.generate_scene", "video.render"] }, "job workers registered");
+  } else {
+    logger.info("api role: job workers NOT registered in this process — jobs are enqueued here and processed by a worker-role process");
+  }
+
+  // Worker role (ADR-039): no HTTP listener, no agent engine, no MCP — a Cloud Run worker
+  // pool has no ingress, so there is nothing to listen for. The process stays alive on
+  // pg-boss's own polling loop until a shutdown signal arrives.
+  if (!runs.http) {
+    logger.info("worker role: no HTTP listener started");
+    installGracefulShutdown(logger, [() => jobQueue.stop(), closeDb]);
+    return;
+  }
 
   // Real external MCP server connection (docs/10_TOOL_AND_MCP_ARCHITECTURE.md §2/§3.2) —
   // the official reference filesystem server, scoped to the same sandbox root as our
@@ -312,23 +338,28 @@ async function main() {
 
   await app.listen({ port: config.PORT, host: "0.0.0.0" });
 
-  // Graceful shutdown — real, not decorative. PGlite (ADR-025) is a single embedded
-  // engine, not a client to a separately-managed server process: an ungraceful exit
-  // (e.g. a forceful `taskkill`/SIGKILL) can leave its on-disk state corrupted in a way
-  // that doesn't surface until a later operation touches the affected structures —
-  // discovered directly during this phase's own testing (PROJECT_STATUS.md), where a
-  // stray abandoned process from an earlier crash silently damaged the dev database and
-  // it only failed loudly once a new migration ran, well after the actual damage. A
-  // normal shutdown signal (SIGINT/SIGTERM, e.g. a plain `taskkill` without `/F`, or
-  // Ctrl+C) now closes the queue and the database cleanly instead of leaving that risk.
+  installGracefulShutdown(logger, [() => app.close(), () => jobQueue.stop(), closeDb]);
+}
+
+/**
+ * Graceful shutdown — real, not decorative. PGlite (ADR-025) is a single embedded
+ * engine, not a client to a separately-managed server process: an ungraceful exit
+ * (e.g. a forceful `taskkill`/SIGKILL) can leave its on-disk state corrupted in a way
+ * that doesn't surface until a later operation touches the affected structures —
+ * discovered directly during Phase 8's own testing (PROJECT_STATUS.md), where a stray
+ * abandoned process from an earlier crash silently damaged the dev database and it only
+ * failed loudly once a new migration ran, well after the actual damage. A normal shutdown
+ * signal (SIGINT/SIGTERM — which is exactly what Cloud Run sends before stopping an
+ * instance in either role) runs the given close steps in order instead of leaving that
+ * risk. Shared by both roles (ADR-039); only the list of things to close differs.
+ */
+function installGracefulShutdown(shutdownLogger: Logger, steps: Array<() => Promise<unknown>>): void {
   const shutdown = async (signal: string) => {
-    console.log(`Received ${signal}, shutting down gracefully...`);
+    shutdownLogger.info({ signal }, "shutting down gracefully");
     try {
-      await app.close();
-      await jobQueue.stop();
-      await closeDb();
+      for (const step of steps) await step();
     } catch (err) {
-      console.error("Error during graceful shutdown:", err);
+      shutdownLogger.error({ err }, "error during graceful shutdown");
     } finally {
       process.exit(0);
     }

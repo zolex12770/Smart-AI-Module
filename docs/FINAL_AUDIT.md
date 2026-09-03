@@ -63,3 +63,12 @@ specific question [[30_FINAL_SYSTEM_SPEC]] itself named, and found the codebase'
 self-documentation holds up well: the real divergences were concentrated in one document (docs/30)
 that had simply never been re-read against reality since Phase 0, exactly the risk its own
 closing section warned about.
+
+## Post-audit follow-ups (dated addenda; the audit above is the 2026-09-02 snapshot)
+
+- **2026-09-03 — finding #2's underlying gap closed ([[26_DECISIONS]] ADR-039).** The worker is now a
+  real separate deployable: the same `apps/api` image run with `ROLE=worker` as a Cloud Run worker
+  pool. Verified live in each role individually (including a real cross-process job hand-off
+  through pg-boss); the two roles have not yet run concurrently against one shared database —
+  this sandbox cannot (PGlite), which is now the row in [[27_RISKS_AND_LIMITATIONS]] that replaced
+  the "worker runs in-process" one. docs/30's diagram box was updated accordingly.

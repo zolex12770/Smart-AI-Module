@@ -19,9 +19,10 @@ flowchart TD
   agentcore --> memory[memory: conversation/user/project/semantic]
   agentcore --> rag[rag: chunking, embeddings, retrieval]
   api --> jobs[(pg-boss jobs on Postgres)]
-  jobs --> worker["apps/worker (target) —
-    actually runs in-process
-    within apps/api today, ADR-027"]
+  jobs --> worker["worker — the apps/api image
+    with ROLE=worker (a Cloud Run
+    worker pool), ADR-039; ROLE=all
+    runs it in-process locally"]
   worker --> media[media: image/video pipeline, long-form scene orchestration]
   media --> providers
   memory --> db[(PostgreSQL + pgvector)]
@@ -40,7 +41,7 @@ flowchart TD
 - **Real, provider-swappable:** text/reasoning chat, agent task execution, coding agent, tool calling, MCP, memory, RAG, jobs, observability, the API and web UI.
 - **Not started, single-operator scope for now ([[26_DECISIONS]] ADR-008):** authentication/authorization. This line originally read "auth" as a real, working component — corrected 2026-09-02 ([[FINAL_AUDIT]]) after an independent audit found no auth/session/JWT system exists anywhere in the codebase; [[29_FEATURE_MATRIX]] row 25 had this right all along ("NOT STARTED"), this file simply hadn't been re-validated against it until Phase 15's audit pass, exactly the drift this section exists to catch.
 - **Real interface, mock implementation until credentials exist ([[26_DECISIONS]] ADR-009):** image generation, video generation, long-form video. The orchestration (scene decomposition, job persistence, resumability, ffmpeg assembly) is real and fully exercised by the mock providers — only the actual pixel/video generation call is mocked.
-- **Documented, not provisioned ([[26_DECISIONS]] ADR-011, ADR-037):** cloud deployment. IaC and Dockerfiles are real, `terraform validate`/`plan`-checked artifacts; no live GCP environment exists until explicitly authorized. The job worker still runs in-process with the API (not the separate `apps/worker` the diagram below shows) and asset/sandbox storage is local-disk only (not the GCS the diagram shows) — both real, open, tracked gaps ([[27_RISKS_AND_LIMITATIONS]]), not yet closed.
+- **Documented, not provisioned ([[26_DECISIONS]] ADR-011, ADR-037):** cloud deployment. IaC and Dockerfiles are real, `terraform validate`/`plan`-checked artifacts; no live GCP environment exists until explicitly authorized. The job worker is now a separate deployable — the same image run with `ROLE=worker` as a Cloud Run worker pool (ADR-039), verified live in each role though never yet run concurrently with the API against one shared database (this sandbox can't, see [[27_RISKS_AND_LIMITATIONS]]). Asset/sandbox storage is still local-disk only (not the GCS the diagram shows) — a real, open, tracked gap, not yet closed.
 
 ## Known, accepted limitations at target state (see [[27_RISKS_AND_LIMITATIONS]] for the full list)
 

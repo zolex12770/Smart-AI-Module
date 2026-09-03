@@ -1,7 +1,8 @@
 # 18. Cloud Architecture (Google Cloud) — Plan, Not Yet Provisioned
 
 **Status: planning document, now backed by real Dockerfiles + Terraform (Phase 14, 2026-09-02 —
-see [[26_DECISIONS]] ADR-037), still not provisioned.** No GCP project, billing account, or budget
+see [[26_DECISIONS]] ADR-037; §1.1's recommended Worker Pool for the job worker added 2026-09-03,
+ADR-039), still not provisioned.** No GCP project, billing account, or budget
 currently exists for this platform, and nothing described here (or in `infrastructure/`) should be
 provisioned until the team has both. Where the doc says "recommended," it means "recommended once
 you provision," not "provision now." **Two real divergences from this document's §1.5/§2, found

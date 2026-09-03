@@ -230,11 +230,44 @@ resource "google_service_account" "web" {
   # (apps/web/app/lib/api.ts) and touches no GCP API directly.
 }
 
+# A separate identity for the worker pool (ADR-039) even though its bindings mirror the API
+# service's today — so either can be narrowed or revoked independently later (e.g. once a
+# CloudStorageAssetStore exists, the API may no longer need bucket write access at all).
+resource "google_service_account" "worker" {
+  account_id   = "ai-platform-worker"
+  display_name = "AI Platform job worker (Cloud Run worker pool)"
+}
+
+resource "google_project_iam_member" "worker_cloudsql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "worker_reads_database_url" {
+  secret_id = google_secret_manager_secret.database_url.id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_storage_bucket_iam_member" "worker_media_admin" {
+  bucket = google_storage_bucket.media.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.worker.email}"
+}
+
+resource "google_storage_bucket_iam_member" "worker_uploads_admin" {
+  bucket = google_storage_bucket.uploads.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${google_service_account.worker.email}"
+}
+
 # --- Cloud Run: API service ------------------------------------------------------
-# One service handling both HTTP requests and the pg-boss job worker loop, in-process —
-# the same topology already tested locally (docs/26_DECISIONS.md ADR-027). Splitting the
-# worker into its own Cloud Run Worker Pool is a real, deliberately deferred follow-up
-# (ADR-037), not something this file does.
+# ROLE=api (docs/26_DECISIONS.md ADR-039): HTTP, the agent engine, and MCP — it enqueues
+# jobs but never processes them; the worker pool below (same image, ROLE=worker) does.
+# This is docs/17_BACKEND_ARCHITECTURE.md's "why not one app for API + worker" boundary
+# made real: the two scale and restart independently, and a burst of slow jobs can no
+# longer starve request handling in the same event loop.
 resource "google_cloud_run_v2_service" "api" {
   name     = "ai-platform-api"
   location = var.region
@@ -263,6 +296,10 @@ resource "google_cloud_run_v2_service" "api" {
         mount_path = "/cloudsql"
       }
 
+      env {
+        name  = "ROLE"
+        value = "api"
+      }
       env {
         name = "DATABASE_URL"
         value_source {
@@ -360,4 +397,65 @@ resource "google_cloud_run_v2_service_iam_member" "web_public" {
   location = var.region
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+# --- Cloud Run: job worker pool -----------------------------------------------------
+# ROLE=worker (ADR-039) on the SAME image as the API service — docs/18_CLOUD_ARCHITECTURE.md
+# §1.1's recommended home for a non-HTTP queue consumer (Worker Pools, GA April 2026). No
+# ingress, no health checks, no IAM invoker binding: nothing can call it, it only polls
+# pg-boss. Same Cloud SQL Auth Proxy connector as the API — both talk to the one database,
+# which is exactly what pg-boss needs to hand work from one to the other.
+#
+# Cost note (docs/18 §4): a worker pool does NOT scale to zero — MANUAL scaling with one
+# always-on instance is the smallest viable configuration, and is a real standing cost
+# alongside Cloud SQL. Set manual_instance_count = 0 to pause processing without destroying
+# the pool; raise it (docs/07 §1.6) only in response to observed queue depth.
+resource "google_cloud_run_v2_worker_pool" "worker" {
+  name                = "ai-platform-worker"
+  location            = var.region
+  deletion_protection = false
+
+  scaling {
+    scaling_mode          = "MANUAL"
+    manual_instance_count = 1
+  }
+
+  template {
+    service_account = google_service_account.worker.email
+
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [google_sql_database_instance.postgres.connection_name]
+      }
+    }
+
+    containers {
+      image = var.api_image
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
+      }
+
+      env {
+        name  = "ROLE"
+        value = "worker"
+      }
+      env {
+        name = "DATABASE_URL"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.database_url.secret_id
+            version = "latest"
+          }
+        }
+      }
+      # No LLM provider keys here on purpose: no job type calls an LLM today (document
+      # ingestion, mock image/video generation, ffmpeg render) — least privilege. Mirror the
+      # API service's dynamic env blocks the day a job type genuinely needs one.
+    }
+  }
+
+  depends_on = [google_project_service.apis]
 }

@@ -2,6 +2,8 @@
 
 Two deployable backend units per [[24_PROJECT_STRUCTURE]]: `apps/api` (Fastify, handles all synchronous request/response and SSE streaming) and `apps/worker` (processes pg-boss jobs — media generation, long-form video pipeline steps, background summarization). Both import the same `packages/*` business-logic libraries; neither contains business logic itself beyond request wiring.
 
+**As built ([[26_DECISIONS]] ADR-039, 2026-09-02):** the two units are two *roles of one image*, not two packages. `apps/api`'s single entrypoint reads a `ROLE` env var (`all` | `api` | `worker`, see `apps/api/src/role.ts`) and starts only that role's responsibilities — the composition root (database, providers, repositories, job queue) is identical for both, so a separate `apps/worker` package would have meant maintaining two verbatim copies of it. The structure sketch below for `apps/worker` is therefore the *conceptual* split; the actual job handlers live in `apps/api/src/index.ts` behind `if (runs.workers)`. Locally, `ROLE=all` (the default) runs both in one process, because PGlite (ADR-025) permits only one process per data directory; on Cloud Run, the API service sets `ROLE=api` and a worker pool sets `ROLE=worker` against a shared standalone Postgres (`infrastructure/terraform/main.tf`).
+
 ## `apps/api` structure
 
 ```
@@ -43,3 +45,5 @@ No DI framework/container — plain constructor injection at the composition roo
 ## Why not one app for API + worker
 
 A single process handling both HTTP requests and long-running job processing would couple their scaling and failure characteristics — a burst of slow video-generation jobs would starve HTTP request handling in the same event loop. Separate `apps/api`/`apps/worker` processes (and, later, separate Cloud Run services per [[18_CLOUD_ARCHITECTURE]]) scale and restart independently, and a worker crash mid-job doesn't take down the API.
+
+This is why the split is a *deployment* decision made by `ROLE` rather than a *source* decision made by having two packages (ADR-039): what needs to be independent is the process, its scaling, and its failure domain — none of which require the code to be duplicated. Note that ADR-027 originally kept the worker in-process not by preference but because PGlite made a second process impossible; real standalone-Postgres connectivity (ADR-037) removed that constraint, and ADR-039 then made the split real.

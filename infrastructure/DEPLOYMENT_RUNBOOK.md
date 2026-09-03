@@ -71,8 +71,12 @@ terraform apply \
   # add -var="anthropic_api_key=..." etc. only if a real LLM key is actually being deployed
 ```
 
-Review the plan output before confirming — this creates real, billable resources (a Cloud SQL
-instance, most notably, which is not scale-to-zero).
+Review the plan output before confirming — this creates real, billable resources. Two of them are
+NOT scale-to-zero and are the ones to double-check against the approved budget (docs/18 §4): the
+Cloud SQL instance, and the job worker pool (docs/26_DECISIONS.md ADR-039 — `MANUAL` scaling with
+one always-on instance, the smallest configuration a worker pool supports; set
+`manual_instance_count = 0` in `terraform/main.tf` to pause processing without destroying it).
+The API and web services scale to zero.
 
 ## 4. Run database migrations
 
@@ -98,6 +102,16 @@ against a real standalone Postgres for the first time.
   own URL automatically by `terraform/main.tf`).
 - `gcloud logging read` or the Cloud Run service's Logs tab should show the same structured JSON
   log lines (`packages/observability`) seen in local dev.
+- **The api/worker split (ADR-039) — the one thing no local environment could verify, since it
+  needs two processes sharing one real Postgres.** The `ai-platform-api` service's logs should
+  show `"role":"api"` and `api role: job workers NOT registered in this process`; the
+  `ai-platform-worker` pool's logs should show `"name":"worker"`, `"role":"worker"`, and
+  `job workers registered`. Then `POST /api/v1/images` against the API and poll
+  `GET /api/v1/images/:id`: it should go `pending` → `succeeded`, and the `provider call
+  completed` / `job completed` lines for that id must appear in the *worker pool's* logs, not
+  the API service's. If the job stays `pending` forever, the worker pool cannot reach the
+  database (check its Cloud SQL volume mount and `DATABASE_URL` secret binding); if the API's
+  own logs show the job completing, `ROLE` is not set to `api` on the service.
 
 ## Known gaps this runbook does not close
 
@@ -111,12 +125,11 @@ against a real standalone Postgres for the first time.
   `SANDBOX_ROOT` means for a stateless container) is real, additional, currently-unbuilt work —
   Cloud Storage buckets are already provisioned by `terraform/main.tf` ahead of that code
   specifically so this is a code-only follow-up once undertaken, not also an infra change.
-- **The job worker still runs in-process with the API** (same topology as local dev,
-  docs/26_DECISIONS.md ADR-027) — Cloud Run scales the `api` service itself, including its
-  worker loop, rather than a dedicated Worker Pool. A real standalone Postgres removes the
-  technical reason the worker couldn't be separate, but actually separating it needs a small
-  code change (an env-gated "worker-only" boot mode that skips starting the HTTP listener) that
-  has not been made — a concrete, scoped follow-up, not a hidden defect in this runbook.
+- **The api and worker roles have never run concurrently** (docs/26_DECISIONS.md ADR-039):
+  the split itself is built and each role was verified live on its own, but the environment that
+  authored this could only run one process at a time (PGlite). Step 5's worker-pool check is the
+  first time the two will share a database simultaneously — treat a failure there as a real
+  finding, not a runbook typo.
 - **No CI/CD wiring**: this runbook is manual, start to finish. `.github/workflows/ci.yml`
   (docs/26_DECISIONS.md ADR-035) covers test/build/audit, not build-image-and-deploy — connecting
   the two (e.g. a deploy job gated on a git tag, using `google-github-actions/deploy-cloudrun`)

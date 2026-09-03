@@ -48,6 +48,8 @@ Concrete layout implementing the decisions in [[26_DECISIONS]] (npm workspaces m
 apps/web       → apps/api (HTTP/SSE only, no direct package imports of business logic)
 apps/api       → agent-core, model-router, tools, mcp, memory, rag, jobs, media, database, security, observability, shared
 apps/worker    → jobs, media, providers, database, observability, shared
+               (as built: not a separate package — the same apps/api image run with ROLE=worker,
+                which takes on exactly this subset of responsibilities; see docs/26 ADR-039)
 agent-core     → model-router, tools, memory, shared          (no direct provider imports)
 model-router   → providers/*, shared                          (only place that knows provider SDK shapes)
 tools, mcp     → shared                                        (no direct database imports — receive context via injection)

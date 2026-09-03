@@ -8,6 +8,11 @@ import { z } from "zod";
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(8787),
+  // docs/26_DECISIONS.md ADR-039 — which responsibilities this process takes on (see role.ts).
+  // Defaults to "all" so local dev (where PGlite permits only one process per data dir,
+  // ADR-025) keeps working unchanged; Cloud Run sets "api" on the service and "worker" on
+  // the worker pool (infrastructure/terraform/main.tf).
+  ROLE: z.enum(["all", "api", "worker"]).default("all"),
   // Real PostgreSQL via PGlite (docs/26_DECISIONS.md ADR-025) — a directory, not a
   // single file, since Postgres persists multiple files there.
   DATABASE_DIR: z.string().default("./data/pgdata"),
