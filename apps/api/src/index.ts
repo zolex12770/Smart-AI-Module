@@ -21,6 +21,8 @@ import {
   PgVideoProjectRepository,
   PgVideoSceneRepository,
   PgUsageRecordRepository,
+  projects as projectsTable,
+  users as usersTable,
 } from "@ai-platform/database";
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MemoryService } from "@ai-platform/memory";
@@ -32,7 +34,7 @@ import { GoogleProvider } from "@ai-platform/llm-google";
 import { LocalEmbeddingProvider, LocalOpenAICompatibleProvider } from "@ai-platform/llm-local";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { OpenAIProvider } from "@ai-platform/llm-openai";
-import { connectMcpServer } from "@ai-platform/mcp";
+import { McpManager, parseMcpServerConfigs } from "@ai-platform/mcp";
 import {
   CloudStorageAssetStore,
   LocalAssetStore,
@@ -50,6 +52,7 @@ import { AuthService, createSandbox, type ExecutionSandbox } from "@ai-platform/
 import { signupRequestSchema, type EmbeddingProvider } from "@ai-platform/shared";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { MockVideoProvider } from "@ai-platform/video-mock";
+import { sql } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import { loadConfig, type AppConfig } from "./config.js";
@@ -640,34 +643,41 @@ async function main() {
   // pool has no ingress, so there is nothing to listen for. The process stays alive on
   // pg-boss's own polling loop until a shutdown signal arrives.
   if (!runs.http) {
-    installGracefulShutdown(logger, [() => jobQueue.stop(), closeDb]);
+    installGracefulShutdown(logger, [
+    () => mcpManager.stopAll(),() => jobQueue.stop(), closeDb]);
     logger.info("worker role: no HTTP listener started");
     return;
   }
 
-  // Real external MCP server connection (docs/10_TOOL_AND_MCP_ARCHITECTURE.md §2/§3.2) —
-  // the official reference filesystem server, scoped to the same sandbox root as our
-  // native fs tools. Best-effort: if it fails to start, log and continue rather than
-  // block the whole platform on one optional integration.
-  try {
-    const serverEntry = fileURLToPath(
-      import.meta.resolve("@modelcontextprotocol/server-filesystem/dist/index.js")
-    );
-    const mcp = await connectMcpServer(toolRegistry, {
-      id: "reference-filesystem",
-      command: process.execPath,
-      args: [serverEntry, sandboxRoot],
-      cwd: sandboxRoot,
-    });
-    // Through the structured logger, not console.log: these two lines were the only boot
-    // output that never reached the log pipeline (docs/20 §1.1).
-    logger.info(
-      { server_id: mcp.serverId, tools: mcp.toolIds },
-      `connected MCP server "${mcp.serverId}" — ${mcp.toolIds.length} tool(s) discovered, registered disabled pending explicit enable`
-    );
-  } catch (err) {
-    logger.warn({ err }, "MCP reference server connection failed (continuing without it)");
+  /**
+   * MCP servers — docs/26_DECISIONS.md ADR-067.
+   *
+   * Configured servers come from `MCP_SERVERS` (a JSON array), so a deployment can run any set
+   * without a code change; the bundled reference filesystem server is added when nothing is
+   * configured, preserving the zero-configuration local loop. The manager isolates failures:
+   * one server that will not start is recorded as `failed` and the platform continues, because
+   * MCP is optional and an optional integration must never be able to stop a boot.
+   */
+  // Owns every MCP subprocess's lifetime, so the shutdown path can close them: the previous
+  // integration assigned its connection to a local and dropped it, leaking the child (ADR-067).
+  const mcpManager = new McpManager(toolRegistry, { logger });
+
+  const { configs: configuredMcp, errors: mcpConfigErrors } = parseMcpServerConfigs(config.MCP_SERVERS);
+  for (const error of mcpConfigErrors) {
+    logger.warn({ error }, "ignoring a malformed MCP_SERVERS entry");
   }
+  const mcpServers =
+    configuredMcp.length > 0
+      ? configuredMcp
+      : [
+          {
+            id: "reference-filesystem",
+            command: process.execPath,
+            args: [fileURLToPath(import.meta.resolve("@modelcontextprotocol/server-filesystem/dist/index.js")), sandboxRoot],
+            cwd: sandboxRoot,
+          },
+        ];
+  await mcpManager.startAll(mcpServers);
 
   const tasks = new PgTaskRepository(db);
   const taskNodes = new PgTaskNodeRepository(db);
@@ -802,6 +812,40 @@ async function main() {
     // so an operator can see and change the bound without editing agent code.
     agentLimits: { maxIterations: config.AGENT_MAX_ITERATIONS, maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN },
     semanticEmbeddingsAvailable,
+    registry,
+    mcp: mcpManager,
+    health: {
+      // A real readiness probe, unlike `/api/health`'s liveness literal: it actually asks the
+      // database and the queue whether they are reachable (ADR-066).
+      database: async () => {
+        try {
+          await db.execute(sql`select 1`);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      queue: async () => {
+        try {
+          await jobQueue.getJob("document.ingest", "health-probe");
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      stats: async () => {
+        const [projectCount, userCount] = await Promise.all([
+          db.select({ n: sql<number>`count(*)::int` }).from(projectsTable),
+          db.select({ n: sql<number>`count(*)::int` }).from(usersTable),
+        ]);
+        return {
+          projects: Number(projectCount[0]?.n ?? 0),
+          users: Number(userCount[0]?.n ?? 0),
+          providers: registry.list().length,
+          mcpServersConnected: mcpManager.status().filter((server) => server.status === "connected").length,
+        };
+      },
+    },
   };
 
   const app = await buildServer(config, ctx, logger);
@@ -813,7 +857,8 @@ async function main() {
   // database close (see `installGracefulShutdown` for why that specifically matters). Cloud
   // Run sends exactly that signal to an instance it decides to stop mid-rollout, so the
   // window was not hypothetical.
-  installGracefulShutdown(logger, [() => app.close(), () => jobQueue.stop(), closeDb]);
+  installGracefulShutdown(logger, [
+    () => mcpManager.stopAll(),() => app.close(), () => jobQueue.stop(), closeDb]);
 
   await app.listen({ port: config.PORT, host: "0.0.0.0" });
 }

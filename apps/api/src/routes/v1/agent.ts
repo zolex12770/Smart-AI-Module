@@ -208,26 +208,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
     return { ok: true };
   });
 
-  app.get("/api/v1/tools", async (request) => {
-    // The registry is process-wide, but its contents still describe what an agent run in
-    // this project can do, so listing it requires being a member of one.
-    await requireProject(request, ctx.auth, "project:read");
-    return { tools: ctx.toolRegistry.list() };
-  });
-
-  app.post<{ Params: { id: string } }>("/api/v1/tools/:id/enable", async (request) => {
-    // `tools:manage` is a project-admin permission (packages/shared/src/auth.ts): an editor
-    // may *run* tools, only an admin may change which ones exist. Note the registry is a
-    // single process-wide instance, so this takes effect for every project served by this
-    // API instance — which is precisely why it is gated on the strictest role available.
-    await requireProject(request, ctx.auth, "tools:manage");
-
-    const parsed = setToolEnabledSchema.safeParse(request.body ?? {});
-    if (!parsed.success) throw new ValidationError(parsed.error.message);
-
-    const tool = ctx.toolRegistry.setEnabled(decodeURIComponent(request.params.id), parsed.data.enabled);
-    return { tool };
-  });
+  // The tool routes live in platform.ts alongside the other introspection endpoints (ADR-066).
 }
 
 /**

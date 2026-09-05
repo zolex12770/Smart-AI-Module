@@ -22,7 +22,7 @@
     "@ai-platform/llm-local": "^0.1.0",
     "@ai-platform/llm-mock": "*",
     "@ai-platform/llm-openai": "*",
-    "@ai-platform/mcp": "*",
+    "@ai-platform/mcp": "^0.1.0",
     "@ai-platform/media": "*",
     "@ai-platform/memory": "^0.1.0",
     "@ai-platform/model-router": "*",

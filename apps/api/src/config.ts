@@ -123,6 +123,13 @@ const envSchema = z.object({
   IMAGE_SUPPORTS_NEGATIVE_PROMPT: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   IMAGE_SUPPORTS_SEED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 
+  // --- MCP (ADR-067) ---------------------------------------------------------------------
+  // A JSON array of server configs, e.g.
+  //   [{"id":"fs","command":"node","args":["/path/to/server.js","/workspace"]}]
+  // Unset falls back to the bundled reference filesystem server, so local development needs
+  // no configuration. A malformed entry is skipped with a warning, never fatal.
+  MCP_SERVERS: optionalString,
+
   // --- Security (ADR-049 / ADR-055) -----------------------------------------------------
   // Session cookies are Secure in production; this allows plain HTTP for local development.
   COOKIE_SECURE: z.enum(["true", "false"]).optional(),

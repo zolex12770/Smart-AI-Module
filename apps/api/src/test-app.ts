@@ -26,6 +26,7 @@ import { MemoryService } from "@ai-platform/memory";
 import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { LocalAssetStore } from "@ai-platform/media";
+import { McpManager } from "@ai-platform/mcp";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { QuotaManager } from "@ai-platform/quota";
 import { AuthService, ProcessSandbox, TEST_SCRYPT_PARAMS, generateCsrfToken } from "@ai-platform/security";
@@ -184,6 +185,15 @@ export async function buildTestApp(): Promise<{
     // not a semantic model (ADR-048). Reading it off the service rather than hardcoding it
     // means a harness that one day configures a real embedding runtime reports the change.
     semanticEmbeddingsAvailable: !embeddings.isDeterministicFallback,
+    registry,
+    // No MCP subprocess in tests (see the harness note above), but the manager still has to
+    // exist so routes that report server status have something honest to report: none.
+    mcp: new McpManager(toolRegistry, { healthIntervalMs: 0 }),
+    health: {
+      database: async () => true,
+      queue: async () => true,
+      stats: async () => ({ projects: 1, users: 1, providers: registry.list().length, mcpServersConnected: 0 }),
+    },
   };
 
   const { createLogger } = await import("@ai-platform/observability");

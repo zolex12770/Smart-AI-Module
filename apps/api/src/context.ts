@@ -16,7 +16,8 @@ import type {
 import type { EmbeddingService } from "@ai-platform/embeddings";
 import type { JobQueue } from "@ai-platform/jobs";
 import type { AssetStore } from "@ai-platform/media";
-import type { ModelRouter } from "@ai-platform/model-router";
+import type { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
+import type { McpManager } from "@ai-platform/mcp";
 import type { QuotaManager } from "@ai-platform/quota";
 import type { MalwareScanner } from "@ai-platform/scanning";
 import type { ToolRegistry } from "@ai-platform/tools";
@@ -85,4 +86,16 @@ export interface AppContext {
   /** True when a real (non-fallback) embedding model is configured, so RAG can report
    * honestly whether retrieval is semantic or lexical. */
   semanticEmbeddingsAvailable: boolean;
+
+  // --- platform introspection (ADR-066) --------------------------------------------------
+  /** The registry behind the router, so `/api/v1/models` can report capabilities honestly. */
+  registry: ModelRegistry;
+  /** Multi-server MCP lifecycle: status, reconnect, shutdown (ADR-067). */
+  mcp: McpManager;
+  /** Real readiness checks, unlike `/api/health`, which is a liveness literal. */
+  health: {
+    database(): Promise<boolean>;
+    queue(): Promise<boolean>;
+    stats(): Promise<Record<string, number>>;
+  };
 }

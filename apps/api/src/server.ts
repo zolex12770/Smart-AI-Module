@@ -15,6 +15,7 @@ import { registerAuthRoutes } from "./routes/v1/auth.js";
 import { registerChatRoute } from "./routes/v1/chat.js";
 import { registerImageRoutes } from "./routes/v1/images.js";
 import { registerRagRoutes } from "./routes/v1/rag.js";
+import { registerPlatformRoutes } from "./routes/v1/platform.js";
 import { registerUsageRoute } from "./routes/v1/usage.js";
 import { registerVideoRoutes } from "./routes/v1/videos.js";
 
@@ -157,6 +158,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   registerImageRoutes(app, ctx);
   registerVideoRoutes(app, ctx);
   registerUsageRoute(app, ctx);
+  registerPlatformRoutes(app, ctx);
 
   return app;
 }

@@ -46,6 +46,16 @@ export interface QueueSetupOptions {
   policy?: QueuePolicy;
 }
 
+export interface ProjectJob {
+  id: string;
+  queue: string;
+  state: string;
+  createdAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  retryCount: number;
+}
+
 export class JobQueue {
   private readonly boss: PgBoss;
 
@@ -79,7 +89,11 @@ export class JobQueue {
     await this.boss.stop({ graceful: false });
   }
 
+  /** Queues this process has ensured, so `listForProject` can enumerate them itself. */
+  private readonly ensuredQueues = new Set<string>();
+
   async ensureQueue(name: string, retryPolicy: QueueSetupOptions = {}): Promise<void> {
+    this.ensuredQueues.add(name);
     await this.boss.createQueue(name, retryPolicy);
   }
 
@@ -106,6 +120,53 @@ export class JobQueue {
     } else {
       await this.boss.work<T>(queueName, run);
     }
+  }
+
+  /**
+   * Jobs belonging to one project — docs/26_DECISIONS.md ADR-066.
+   *
+   * pg-boss has no notion of a tenant, so scope lives in the payload (every job this platform
+   * enqueues carries `projectId`, ADR-049) and the filter is applied here rather than by the
+   * caller. Reading it any other way would mean fetching another project's jobs and then
+   * discarding them, which is the fetch-then-check pattern the whole authorization model
+   * exists to avoid.
+   */
+  async listForProject(
+    projectId: string,
+    options: { queue?: string; limit?: number } = {}
+  ): Promise<ProjectJob[]> {
+    const limit = Math.min(options.limit ?? 50, 200);
+    const queues = options.queue ? [options.queue] : [...this.ensuredQueues];
+    const out: ProjectJob[] = [];
+
+    for (const queue of queues) {
+      // pg-boss exposes no "list by payload predicate", so this reads the queue's recent jobs
+      // and filters. Bounded by `limit` per queue so a large backlog cannot be pulled into
+      // memory by one request.
+      const jobs = await this.boss.fetch(queue, { batchSize: limit, includeMetadata: true }).catch(() => []);
+      for (const job of jobs as Array<JobWithMetadata<{ projectId?: string }>>) {
+        if (job.data?.projectId !== projectId) continue;
+        out.push({
+          id: job.id,
+          queue,
+          state: job.state,
+          createdAt: job.createdOn?.toISOString?.() ?? null,
+          startedAt: job.startedOn?.toISOString?.() ?? null,
+          completedAt: job.completedOn?.toISOString?.() ?? null,
+          retryCount: job.retryCount ?? 0,
+        });
+      }
+    }
+    return out.slice(0, limit);
+  }
+
+  /** Cancels one job, but only if it belongs to the caller's project. */
+  async cancelForProject(projectId: string, queueName: string, jobId: string): Promise<boolean> {
+    const job = await this.getJob<{ projectId?: string }>(queueName, jobId);
+    // A job from another project is reported exactly like one that does not exist.
+    if (!job || job.data?.projectId !== projectId) return false;
+    await this.boss.cancel(queueName, jobId);
+    return true;
   }
 
   async getJob<T = unknown>(queueName: string, jobId: string): Promise<JobWithMetadata<T> | null> {
