@@ -1,5 +1,22 @@
 # CURRENT_STATE.md — Repository Audit
 
+> **SUPERSEDED IN PART, 2026-09-05.** This audit describes commit `3989631`. The P0/P1 findings
+> below — deployment BROKEN, authentication MISSING, memory SKELETON, no model-driven agent, no
+> tool calling, no database indexes, no execution isolation — were acted on in commit `d8c7b46`.
+> See [FINAL_IMPLEMENTATION_REPORT.md](FINAL_IMPLEMENTATION_REPORT.md) for what changed and what
+> did not, [TEST_REPORT.md](TEST_REPORT.md) for the current suite (327 tests, 42 files, 0
+> failures), [ARCHITECTURE.md](ARCHITECTURE.md) and [SECURITY.md](SECURITY.md).
+>
+> **Statuses that changed:** Authentication MISSING -> IMPLEMENTED; Deployment BROKEN ->
+> boot verified 7/7; Security PARTIAL -> substantially hardened (isolation, CSRF, headers,
+> audit); Database IMPLEMENTED -> now with 42 indexes and transactions.
+>
+> **Statuses that did NOT change:** Frontend still PARTIALLY IMPLEMENTED with zero tests;
+> Memory still not injected into prompts; Image and Video generation still have no real
+> provider. The audit below remains accurate for everything it says about those.
+
+
+
 **Audit date:** 2026-09-05
 **Commit audited:** `3989631` (26 commits total, working tree clean at audit start)
 **Method:** read-only. Ten independent subsystem auditors read the real source, then adversarial
