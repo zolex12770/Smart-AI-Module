@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useSession } from "../lib/session-context";
 import { ApiError, login } from "../lib/auth-client";
 
 /**
@@ -11,6 +12,7 @@ import { ApiError, login } from "../lib/auth-client";
  */
 export default function LoginPage() {
   const router = useRouter();
+  const { refresh } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -22,8 +24,12 @@ export default function LoginPage() {
     setError(null);
     try {
       await login(email, password);
+      // The cookie now exists, but the session provider still holds the state it resolved
+      // when this page mounted — anonymous. Navigating first would let the provider's
+      // redirect effect bounce straight back to /login, which is exactly what the
+      // end-to-end suite caught on its first run (ADR-070).
+      await refresh();
       router.push("/chat");
-      router.refresh();
     } catch (err) {
       // The API deliberately returns one message for both "wrong password" and "no such
       // account" so the form cannot be used to enumerate users; show it verbatim.

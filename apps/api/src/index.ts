@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentEngine } from "@ai-platform/agent-core";
 import {
@@ -77,6 +77,16 @@ async function connectDatabase(
     await runPostgresMigrations(db);
     return { db, jobQueueOptions: { connectionString: config.DATABASE_URL }, close: () => db.$client.end() };
   }
+  // PGlite creates its data directory but not the parents, so a first boot with a nested
+  // DATABASE_DIR (the default `./data/pgdata`, or a per-environment one) fails with a bare
+  // ENOENT from `mkdir`. Creating the parent here makes a fresh checkout, a fresh container
+  // and a throwaway test database all boot without a manual `mkdir` first.
+  mkdirSync(dirname(resolve(config.DATABASE_DIR)), { recursive: true });
+  // PGlite creates its data directory but not the parents, so a first boot with a nested
+  // DATABASE_DIR (the default `./data/pgdata`, or a per-environment one) fails with a bare
+  // ENOENT from `mkdir`. Creating the parent here makes a fresh checkout, a fresh container
+  // and a throwaway test database all boot without a manual `mkdir` first.
+  mkdirSync(dirname(resolve(config.DATABASE_DIR)), { recursive: true });
   const db = await createDb(config.DATABASE_DIR);
   await runMigrations(db);
   return {
@@ -694,6 +704,8 @@ async function main() {
       ),
   });
 
+  const cookieSecure = config.COOKIE_SECURE ? config.COOKIE_SECURE === "true" : config.NODE_ENV === "production";
+
   const engine = new AgentEngine({
     // ADR-064 — ceilings for an autonomous `reasoning` node. Set by the operator, not by the
     // model: they are the harness's half of the bargain that lets the model drive execution.
@@ -806,7 +818,12 @@ async function main() {
     // A Secure cookie is mandatory over HTTPS and impossible over plain-HTTP localhost, so
     // the default follows NODE_ENV. COOKIE_SECURE exists only to override that for the
     // unusual case (a production-mode process behind a local TLS-terminating proxy).
-    cookieSecure: config.COOKIE_SECURE ? config.COOKIE_SECURE === "true" : config.NODE_ENV === "production",
+    cookieSecure,
+    authRateLimitMax: config.AUTH_RATE_LIMIT_MAX,
+    // Derived unless explicitly set: the deployed web app and API are different hostnames, so
+    // a Lax cookie would never be sent on the browser's API calls and nobody could sign in
+    // (ADR-070). `None` requires `Secure`, which is exactly when it is chosen.
+    cookieSameSite: config.COOKIE_SAMESITE ?? (cookieSecure ? "none" : "lax"),
     sandbox,
     // Ceilings the model cannot raise. They live on the context rather than inside the loop
     // so an operator can see and change the bound without editing agent code.

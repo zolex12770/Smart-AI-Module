@@ -1,3 +1,4 @@
+import { apiFetch } from "./auth-client";
 import type { GeneratedImage, ImageGenerationRequest, Task, TaskNode, TaskType, VideoProjectRequest } from "@ai-platform/shared";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
@@ -22,20 +23,28 @@ export interface Message {
   createdAt: string;
 }
 
+/**
+ * Every call in this module goes through `apiFetch` — docs/26_DECISIONS.md ADR-070.
+ *
+ * It used to call `fetch` directly, which was fine when the API had no authentication and
+ * became a real bug the moment it did: no session cookie, no CSRF header and no project scope
+ * meant every one of the 24 functions below returned 401 against the authenticated API. The
+ * end-to-end suite caught it on the first run — signup succeeded, then the very next call for
+ * the user's conversations was refused and the app bounced back to the login screen.
+ *
+ * Having exactly one place that talks to the backend is the point: a second one drifts.
+ * `apiFetch` still only declares a JSON content type when there is actually a body, because
+ * Fastify's parser rejects a bodyless request that claims `application/json` with
+ * FST_ERR_CTP_EMPTY_JSON_BODY — a real 400 originally found by driving a DELETE in a browser.
+ */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_URL}${path}`, {
-    ...init,
-    // Only declare a JSON content-type when there's actually a body — Fastify's default
-    // body parser rejects a bodyless request (e.g. DELETE) that claims application/json
-    // with FST_ERR_CTP_EMPTY_JSON_BODY, a real 400 caught only by driving this in a real
-    // browser (curl doesn't send Content-Type unless told to, so it never hit this).
-    headers: init?.body ? { "Content-Type": "application/json", ...init.headers } : init?.headers,
+  return apiFetch<T>(path, {
+    method: init?.method,
+    headers: init?.headers,
+    // `apiFetch` serialises; this module already holds JSON strings, so hand them back as
+    // parsed values rather than double-encoding them.
+    body: typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined,
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`${init?.method ?? "GET"} ${path} failed (${res.status}): ${body.slice(0, 300)}`);
-  }
-  return (await res.json()) as T;
 }
 
 // --- Conversations / chat history --------------------------------------------------

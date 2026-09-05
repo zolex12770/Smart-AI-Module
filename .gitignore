@@ -19,3 +19,7 @@ coverage/
 *.tfstate.*
 *.tfvars
 !*.tfvars.example
+
+# Playwright output
+apps/web/test-results/
+apps/web/playwright-report/

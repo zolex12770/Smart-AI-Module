@@ -15,23 +15,30 @@ import { CSRF_COOKIE, SESSION_COOKIE, requireProject, requireUser } from "../../
  * Identity, project and API-key endpoints — docs/26_DECISIONS.md ADR-049.
  *
  * Cookie policy: the session cookie is `httpOnly` (JavaScript cannot read it, so an XSS bug
- * cannot exfiltrate a session), `SameSite=Lax` (not sent on cross-site POSTs), and `Secure`
- * in production. The CSRF cookie is deliberately NOT httpOnly — the SPA must read it to echo
- * it back, which is the whole mechanism of a double-submit token.
+ * cannot exfiltrate a session) and `Secure` in production. Its `SameSite` is resolved by the
+ * composition root (ADR-070): `None` when Secure, because this platform deploys the web app
+ * and the API as separate services on different hostnames and a `Lax` cookie is never sent on
+ * a cross-site request — with `Lax` the deployed app could not authenticate at all. `Lax`
+ * locally, where the two share a host and `None` would be rejected for not being Secure.
+ *
+ * The CSRF cookie is deliberately NOT httpOnly — the SPA must read it to echo it back, which
+ * is the whole mechanism of a double-submit token. That is also why `SameSite=None` does not
+ * reintroduce CSRF risk here: an attacker's site can cause the cookie to be sent but still
+ * cannot read it to set the matching header.
  */
 export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void {
   const setSessionCookies = (reply: FastifyReply, token: string, expiresAt: Date) => {
     const csrf = generateCsrfToken();
     reply.setCookie(SESSION_COOKIE, token, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite: ctx.cookieSameSite,
       secure: ctx.cookieSecure,
       path: "/",
       expires: expiresAt,
     });
     reply.setCookie(CSRF_COOKIE, csrf, {
       httpOnly: false,
-      sameSite: "lax",
+      sameSite: ctx.cookieSameSite,
       secure: ctx.cookieSecure,
       path: "/",
       expires: expiresAt,
@@ -42,7 +49,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
   app.post(
     "/api/v1/auth/signup",
     // Tighter than the global limit: account creation is the classic abuse target.
-    { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } },
+    { config: { rateLimit: { max: ctx.authRateLimitMax, timeWindow: "10 minutes" } } },
     async (request, reply) => {
       const parsed = signupRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
@@ -66,7 +73,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
 
   app.post(
     "/api/v1/auth/login",
-    { config: { rateLimit: { max: 10, timeWindow: "10 minutes" } } },
+    { config: { rateLimit: { max: ctx.authRateLimitMax * 2, timeWindow: "10 minutes" } } },
     async (request, reply) => {
       const parsed = loginRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);

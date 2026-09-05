@@ -133,6 +133,28 @@ const envSchema = z.object({
   // --- Security (ADR-049 / ADR-055) -----------------------------------------------------
   // Session cookies are Secure in production; this allows plain HTTP for local development.
   COOKIE_SECURE: z.enum(["true", "false"]).optional(),
+  /**
+   * How the session cookie is scoped across sites — docs/26_DECISIONS.md ADR-070.
+   *
+   * This platform deploys the web app and the API as SEPARATE services on different
+   * hostnames, which makes every browser call to the API a cross-SITE request. `Lax` cookies
+   * are not sent on those, so a `Lax` session cookie means the deployed app can never
+   * authenticate at all. `None` is required there, and `None` requires `Secure`.
+   *
+   * Left unset, it is derived: `none` when cookies are Secure (production over HTTPS), `lax`
+   * otherwise (local development over plain HTTP, where the two run on the same host and
+   * `None` would be rejected for not being Secure).
+   */
+  COOKIE_SAMESITE: z.enum(["lax", "none", "strict"]).optional(),
+  /**
+   * Attempts per 10 minutes, per IP, for signup and login — docs/26_DECISIONS.md ADR-070.
+   *
+   * Configurable rather than hard-coded because the right value is deployment-specific: 5 is
+   * a sensible default for a public instance, and is far too low for an end-to-end suite that
+   * legitimately creates several accounts from one address in one run. Tuning it is an
+   * operator decision; removing the limit is not, so there is no "off".
+   */
+  AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1000).default(5),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().max(365).default(30),
   // `docker` gives real container isolation for agent-run commands; `process` is the
   // development fallback and is refused in production unless explicitly acknowledged.

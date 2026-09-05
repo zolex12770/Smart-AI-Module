@@ -78,6 +78,10 @@ export interface AppContext {
   auth: AuthService;
   /** Session cookies are Secure in production; false allows plain-HTTP local development. */
   cookieSecure: boolean;
+  /** Signup/login attempts per 10 minutes, per IP (ADR-070). */
+  authRateLimitMax: number;
+  /** Resolved SameSite policy for the session and CSRF cookies (ADR-070). */
+  cookieSameSite: "lax" | "none" | "strict";
   /** Container-isolated when configured; process-isolated (env-scrubbed, kill-on-timeout)
    * otherwise. Every agent-initiated command execution goes through this. */
   sandbox: ExecutionSandbox;

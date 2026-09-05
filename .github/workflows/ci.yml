@@ -71,6 +71,16 @@ jobs:
           sudo systemctl stop clamav-freshclam clamav-daemon || true
           echo "CLAMD_BIN=/usr/sbin/clamd" >> "$GITHUB_ENV"
 
+      # A general-purpose build, not a minimal one: the render pipeline needs a gif demuxer,
+      # libx264 and the mp4 muxer, and the integration test probes for exactly those before it
+      # will run (ADR-069).
+      - name: Install ffmpeg (video render integration tests)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          echo "FFMPEG_TEST_PATH=$(command -v ffmpeg)" >> "$GITHUB_ENV"
+
       - name: Test (all workspaces)
         run: npm test
 
@@ -80,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           npm test 2>&1 | tee /tmp/test-output.txt
-          if grep -qiE "skipping (clamd|fake-gcs)" /tmp/test-output.txt; then
+          if grep -qiE "SKIPPING the real (clamd|ffmpeg)|skipping (clamd|fake-gcs)" /tmp/test-output.txt; then
             echo "::error::An environment-gated suite skipped in CI. Those binaries are installed above, so a skip means the gate is broken."
             exit 1
           fi
@@ -103,6 +113,39 @@ jobs:
         run: npm test --workspace=@ai-platform/web --if-present
       - name: Build (web)
         run: npm run build --workspace=@ai-platform/web
+        env:
+          NEXT_PUBLIC_API_URL: http://127.0.0.1:8790
+
+  e2e:
+    name: End-to-end (real browser, real API, real database)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build everything the suite drives
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://127.0.0.1:8790
+      - name: Install the browser
+        run: npx playwright install --with-deps chromium
+        working-directory: apps/web
+      # Playwright starts both servers itself (see playwright.config.ts) so this exercises the
+      # real API against a real database and the real production build of the web app.
+      - name: Run E2E
+        run: npx playwright test
+        working-directory: apps/web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/test-results/
+          retention-days: 7
 
   security:
     name: Security checks

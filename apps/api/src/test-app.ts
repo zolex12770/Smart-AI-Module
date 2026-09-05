@@ -173,6 +173,8 @@ export async function buildTestApp(): Promise<{
     auth: authService,
     // Plain HTTP under `app.inject()`: a `Secure` cookie would simply not be sent back.
     cookieSecure: false,
+    authRateLimitMax: 1000,
+    cookieSameSite: "lax",
     // ADR-055's process isolation (scrubbed env, real termination, output caps) rooted at the
     // same throwaway directory the filesystem tools use, so a test that reaches the sandbox
     // gets the real containment check rather than a permissive double.

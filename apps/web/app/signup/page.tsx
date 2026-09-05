@@ -3,11 +3,13 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useSession } from "../lib/session-context";
 import { ApiError, signup } from "../lib/auth-client";
 
 /** Account creation. Signing up also creates the user's organization and first project. */
 export default function SignupPage() {
   const router = useRouter();
+  const { refresh } = useSession();
   const [form, setForm] = useState({ email: "", password: "", displayName: "", organizationName: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -26,8 +28,12 @@ export default function SignupPage() {
         displayName: form.displayName,
         organizationName: form.organizationName || undefined,
       });
+      // The cookie now exists, but the session provider still holds the state it resolved
+      // when this page mounted — anonymous. Navigating first would let the provider's
+      // redirect effect bounce straight back to /login, which is exactly what the
+      // end-to-end suite caught on its first run (ADR-070).
+      await refresh();
       router.push("/chat");
-      router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not reach the server.");
     } finally {
