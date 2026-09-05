@@ -8,6 +8,7 @@ import type { Logger } from "@ai-platform/observability";
 import type { AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
+import { PgRateLimitStore } from "./plugins/rate-limit-store.js";
 import { CSRF_HEADER, registerAuth } from "./plugins/auth.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerAgentRoutes } from "./routes/v1/agent.js";
@@ -109,14 +110,23 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   // or script, not to throttle normal use) plus stricter per-route overrides on the
   // genuinely expensive or abuse-prone endpoints (image/video generation, agent task
   // creation, signup/login — see routes/v1/{images,videos,agent,auth}.ts's `config.rateLimit`).
-  // In-memory store: correct for this single-instance deployment (ADR-025/027's same
-  // reasoning for not adding Redis before it's actually needed) — revisit if/when the API
-  // ever runs as more than one instance behind a shared load balancer, since each instance
-  // then enforces its own share of the limit.
+  //
+  // The counters live in Postgres, not in this process's memory (ADR-071). The default
+  // per-process store makes the effective limit N × max across N instances — and it fails in
+  // the worst direction, since the harder an endpoint is hammered the more instances the
+  // autoscaler adds and the higher the real limit climbs. `store` takes a constructor, and the
+  // plugin builds it with its own options, so this closure binds the database and logger while
+  // letting the plugin supply the window.
+  const RateLimitStoreForApp = class extends PgRateLimitStore {
+    constructor(pluginOptions: { timeWindow?: number }) {
+      super({ db: ctx.db, logger, timeWindowMs: pluginOptions.timeWindow ?? 60_000 });
+    }
+  };
   await app.register(rateLimit, {
     global: true,
     max: 300,
     timeWindow: "1 minute",
+    store: RateLimitStoreForApp as never,
     // @fastify/rate-limit's default error has a `statusCode` but no `code` property, so the
     // central error handler's generic fallback ("BAD_REQUEST") reported an accurate status
     // with a misleading label — this keeps the response shape consistent with every other

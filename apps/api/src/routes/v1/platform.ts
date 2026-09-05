@@ -151,6 +151,47 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
     return { ok: true };
   });
 
+  /**
+   * Work that was given up on, and why — docs/26_DECISIONS.md ADR-072.
+   *
+   * Separate from `/jobs` on purpose. A dead letter is not a job in progress; it is an incident
+   * with an owner and an action, and mixing the two would bury the handful of things that need
+   * attention among the hundreds that do not.
+   */
+  app.get("/api/v1/jobs/dead-letter", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "project:read");
+    const parsed = jobQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) throw new ValidationError(parsed.error.message);
+    return {
+      deadLettered: await ctx.jobQueue.listDeadLetteredForProject(authCtx.projectId!, {
+        queue: parsed.data.queue,
+        limit: parsed.data.limit,
+      }),
+    };
+  });
+
+  /**
+   * Re-runs a dead-lettered job. `project:write`, not `project:read`: this enqueues real work
+   * that spends the project's quota, so it needs the same permission as creating that work in
+   * the first place.
+   */
+  app.post<{ Params: { queue: string; id: string } }>(
+    "/api/v1/jobs/dead-letter/:queue/:id/replay",
+    async (request) => {
+      const authCtx = await requireProject(request, ctx.auth, "project:write");
+      const replayedId = await ctx.jobQueue.replayDeadLettered(
+        authCtx.projectId!,
+        request.params.queue,
+        request.params.id
+      );
+      // Another project's dead letter is indistinguishable from one that does not exist.
+      if (!replayedId) {
+        throw new NotFoundError(`Dead-lettered job "${request.params.id}" not found in "${request.params.queue}".`);
+      }
+      return { ok: true, jobId: replayedId };
+    }
+  );
+
   // --- administration --------------------------------------------------------------------
 
   /**

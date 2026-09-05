@@ -594,6 +594,35 @@ export const usageRecords = pgTable(
 );
 
 // ---------------------------------------------------------------------------------------
+// Rate limiting (ADR-071)
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Shared counters for the API rate limiter.
+ *
+ * Deliberately NOT project-scoped, and the only table here that isn't. Every other table
+ * carries `project_id` because it holds a tenant's content and the authorization model is a
+ * SQL predicate over that column (ADR-049). This holds no content: the key is whatever the
+ * limiter names — a client IP for the global limit, a user id for a per-user one — and it is
+ * infrastructure state that exists precisely to be shared across API instances, which is the
+ * whole point of moving it out of each instance's memory.
+ *
+ * The counter is advanced by a single atomic upsert (see PgRateLimitStore), so N instances
+ * enforce ONE limit rather than N copies of it. `expires_at` both bounds the window and marks
+ * rows for reaping; there is no separate "window start" column because a fixed window is fully
+ * described by when it ends.
+ */
+export const rateLimitCounters = pgTable(
+  "rate_limit_counters",
+  {
+    key: text("key").primaryKey(),
+    count: integer("count").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("rate_limit_expires_idx").on(t.expiresAt)]
+);
+
+// ---------------------------------------------------------------------------------------
 // Relations — enables drizzle's relational query API instead of hand-rolled joins.
 // ---------------------------------------------------------------------------------------
 

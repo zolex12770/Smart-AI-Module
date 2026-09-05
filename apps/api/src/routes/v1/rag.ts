@@ -90,7 +90,12 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       uploadedByUserId: authCtx.user.id,
     });
     // docs/20_OBSERVABILITY.md §3.2 — see routes/v1/images.ts for why.
-    await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id, requestId: request.id });
+    // See images.ts: `projectId` is what makes the job visible to its owner (ADR-072).
+    await ctx.jobQueue.enqueue("document.ingest", {
+      documentId: document.id,
+      projectId: scopeOf(authCtx),
+      requestId: request.id,
+    });
     reply.status(202).send({ document });
   });
 
@@ -159,6 +164,7 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       });
       await ctx.jobQueue.enqueue(ctx.scanner ? "document.scan" : "document.ingest", {
         documentId: document.id,
+        projectId: scopeOf(authCtx),
         requestId: request.id,
       });
       reply.status(202).send({ document });

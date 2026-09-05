@@ -12,6 +12,7 @@ import type {
   UsageRecordRepository,
   VideoProjectRepository,
   VideoSceneRepository,
+  DrizzleDb,
 } from "@ai-platform/database";
 import type { EmbeddingService } from "@ai-platform/embeddings";
 import type { JobQueue } from "@ai-platform/jobs";
@@ -72,6 +73,14 @@ export interface AppContext {
    */
   imageGenerationAvailable: boolean;
   videoGenerationAvailable: boolean;
+
+  /**
+   * The database handle itself, for the two consumers that are genuinely not repositories:
+   * the shared rate-limit store (ADR-071) and the readiness probe. Routes must keep using
+   * repositories — those are where the `project_id` predicate that IS the authorization model
+   * lives (ADR-049), and a route reaching past them would bypass it.
+   */
+  db: DrizzleDb;
 
   // --- identity, tenancy and isolation (ADR-049 / ADR-055) -------------------------------
   /** The single authentication and authorization decision point. */

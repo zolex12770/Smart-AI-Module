@@ -136,6 +136,7 @@ export async function buildTestApp(): Promise<{
   const memoryItemRepo = new PgMemoryItemRepository(db);
 
   const ctx: AppContext = {
+    db,
     router: modelRouter,
     conversations: new PgConversationRepository(db),
     messages: new PgMessageRepository(db),

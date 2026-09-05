@@ -59,6 +59,7 @@ import { loadConfig, type AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { roleRuns, type RoleResponsibilities } from "./role.js";
 import { buildServer } from "./server.js";
+import { reapExpiredRateLimits } from "./plugins/rate-limit-store.js";
 
 /**
  * Connects to whichever Postgres backend `config` selects (docs/26_DECISIONS.md ADR-037):
@@ -406,14 +407,23 @@ async function main() {
   // an `api`-role process never claims a job, a `worker`-role process never serves HTTP.
   const jobQueue = new JobQueue(jobQueueOptions);
   await jobQueue.start();
-  await jobQueue.ensureQueue("document.ingest", { retryLimit: 2, expireInSeconds: 120 });
+  // Every queue gets a dead-letter queue (ADR-072). Before this, a job that exhausted its
+  // retries stopped at `failed`, was archived on the maintenance schedule and then deleted —
+  // silent data loss, and for `document.scan` in particular it left the document stuck in
+  // `scanning` with no surviving record of why.
+  await jobQueue.ensureQueueWithDeadLetter("document.ingest", { retryLimit: 2, expireInSeconds: 120 });
   // ADR-042: more retries, backoff — the common failure is clamd not (yet) reachable (e.g. the
   // sidecar still loading its database), which resolves on its own; a scan that never runs
   // leaves the document `scanning`, never `ready`.
-  await jobQueue.ensureQueue("document.scan", { retryLimit: 5, retryDelay: 15, retryBackoff: true, expireInSeconds: 120 });
-  await jobQueue.ensureQueue("image.generate", { retryLimit: 1, expireInSeconds: 60 });
-  await jobQueue.ensureQueue("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
-  await jobQueue.ensureQueue("video.render", { retryLimit: 1, expireInSeconds: 300 });
+  await jobQueue.ensureQueueWithDeadLetter("document.scan", {
+    retryLimit: 5,
+    retryDelay: 15,
+    retryBackoff: true,
+    expireInSeconds: 120,
+  });
+  await jobQueue.ensureQueueWithDeadLetter("image.generate", { retryLimit: 1, expireInSeconds: 60 });
+  await jobQueue.ensureQueueWithDeadLetter("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
+  await jobQueue.ensureQueueWithDeadLetter("video.render", { retryLimit: 1, expireInSeconds: 300 });
 
   // Image generation (docs/05_IMAGE_GENERATION_RESEARCH.md) — mock-only until real
   // credentials exist (docs/26_DECISIONS.md ADR-009), but genuinely runs through the same
@@ -649,6 +659,28 @@ async function main() {
     logger.info("api role: job workers NOT registered in this process — jobs are enqueued here and processed by a worker-role process");
   }
 
+  /**
+   * Reaps closed rate-limit windows (ADR-071).
+   *
+   * Deliberately on the WORKER role and not on every API instance: expired rows are already
+   * harmless — the limiter's upsert treats one as a fresh window — so this is housekeeping,
+   * and running it on N instances would mean N concurrent DELETEs competing for the same rows
+   * to accomplish what one does. `unref` so it can never hold the process open during
+   * shutdown, and a rejection is logged rather than propagated, because failing to tidy is not
+   * a reason to take a worker down.
+   */
+  if (runs.workers) {
+    const reaper = setInterval(
+      () => {
+        void reapExpiredRateLimits(db).catch((error: unknown) => {
+          logger.warn({ error: error instanceof Error ? error.message : String(error) }, "rate limit reaper failed");
+        });
+      },
+      15 * 60_000
+    );
+    reaper.unref();
+  }
+
   // Worker role (ADR-039): no HTTP listener, no agent engine, no MCP — a Cloud Run worker
   // pool has no ingress, so there is nothing to listen for. The process stays alive on
   // pg-boss's own polling loop until a shutdown signal arrives.
@@ -785,6 +817,7 @@ async function main() {
   await engine.resumeAll();
 
   const ctx: AppContext = {
+    db,
     router: modelRouter,
     conversations: new PgConversationRepository(db),
     messages: new PgMessageRepository(db),
