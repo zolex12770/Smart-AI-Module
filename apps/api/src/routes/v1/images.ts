@@ -4,7 +4,7 @@ import {
   NotFoundError,
   PermissionError,
   QuotaExceededError,
-  ServiceUnavailableError,
+  CapabilityUnavailableError,
   ValidationError,
   type AuthContext,
 } from "@ai-platform/shared";
@@ -22,8 +22,14 @@ import { requireProject } from "../../plugins/auth.js";
  * the one that changed most: it used to take a bare UUID and hand back the bytes, which made
  * "knows an id" equivalent to "may read it" across every tenant on the deployment.
  */
-export const MEDIA_UNAVAILABLE =
-  "Image and video generation are mock-only (docs/26_DECISIONS.md ADR-009) and a mock provider may not serve production traffic (ADR-013), so this deployment has no provider for it. Nothing was queued.";
+/**
+ * 501, not 503: this is not a service that is temporarily down, it is a capability this
+ * deployment does not have. A client that retries a 503 forever would never succeed.
+ */
+export const IMAGE_UNAVAILABLE =
+  "Image generation is not available on this deployment: no image provider is configured. Set IMAGE_BASE_URL and IMAGE_MODEL to enable it. Nothing was queued.";
+export const VIDEO_UNAVAILABLE =
+  "Video generation is not available on this deployment: no real video provider is implemented (docs/26_DECISIONS.md ADR-065). Nothing was queued.";
 
 /**
  * Narrows the project scope `requireProject` always sets. See the identical helper in
@@ -51,7 +57,7 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
       // ADR-045 — refuse before doing anything, the same shape as the upload route's
       // fail-closed 503: queueing a job no worker is registered for would leave the caller
       // polling a `pending` generation forever.
-      if (!ctx.mediaGenerationAvailable) throw new ServiceUnavailableError(MEDIA_UNAVAILABLE);
+      if (!ctx.imageGenerationAvailable) throw new CapabilityUnavailableError(IMAGE_UNAVAILABLE);
 
       const parsed = imageGenerationRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);

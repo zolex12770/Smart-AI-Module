@@ -64,7 +64,13 @@ export interface AppContext {
   /** False in production, where the mock-only image/video providers (ADR-009) may not run
    * (ADR-013): the routes refuse with a 503 instead of queueing work no worker will do.
    * docs/26_DECISIONS.md ADR-045. */
-  mediaGenerationAvailable: boolean;
+  /**
+   * Image and video are separate capabilities with separate providers (ADR-065): a deployment
+   * can have a real image server and no video one, and reporting them through a single flag
+   * would either disable something that works or advertise something that does not.
+   */
+  imageGenerationAvailable: boolean;
+  videoGenerationAvailable: boolean;
 
   // --- identity, tenancy and isolation (ADR-049 / ADR-055) -------------------------------
   /** The single authentication and authorization decision point. */

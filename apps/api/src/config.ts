@@ -113,6 +113,16 @@ const envSchema = z.object({
   EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(1536).optional(),
   EMBEDDING_API_KEY: optionalString,
 
+  // --- Real image generation (ADR-065) --------------------------------------------------
+  // Any server speaking OpenAI-compatible `/v1/images/generations`: LocalAI over Stable
+  // Diffusion, a ComfyUI/Automatic1111 bridge, or a hosted account. Unset means the platform
+  // has no image capability and says so with a real error rather than inventing a picture.
+  IMAGE_BASE_URL: optionalString,
+  IMAGE_MODEL: optionalString,
+  IMAGE_API_KEY: optionalString,
+  IMAGE_SUPPORTS_NEGATIVE_PROMPT: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  IMAGE_SUPPORTS_SEED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+
   // --- Security (ADR-049 / ADR-055) -----------------------------------------------------
   // Session cookies are Secure in production; this allows plain HTTP for local development.
   COOKIE_SECURE: z.enum(["true", "false"]).optional(),

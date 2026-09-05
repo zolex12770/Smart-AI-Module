@@ -25,6 +25,7 @@ import {
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MemoryService } from "@ai-platform/memory";
 import { MockImageProvider } from "@ai-platform/image-mock";
+import { OpenAICompatibleImageProvider } from "@ai-platform/image-openai";
 import { fromPglite, JobQueue, type JobQueueOptions } from "@ai-platform/jobs";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
@@ -430,12 +431,62 @@ async function main() {
   // throw. Refusing to boot at all would make one mocked feature block the whole deployment,
   // so instead the capability is absent in production: no provider, no workers registered, and
   // the routes answer 503 with a reason (below) rather than accepting work nothing will do.
-  const mediaGenerationAvailable = config.NODE_ENV !== "production";
-  const imageProvider = mediaGenerationAvailable ? new MockImageProvider() : null;
-  const videoProvider = mediaGenerationAvailable ? new MockVideoProvider() : null;
-  if (!mediaGenerationAvailable) {
+  /**
+   * Image generation — ADR-065.
+   *
+   * A real provider is used whenever one is configured, in development as much as in
+   * production: there is no reason to run the mock against a working image server. The mock
+   * remains the zero-configuration development default and still refuses to exist in
+   * production (ADR-013), so the possible states are "real images", "mock images, clearly
+   * labelled, development only", or "no capability, reported honestly" — never a fake picture
+   * presented as a generation.
+   */
+  const realImageProvider =
+    config.IMAGE_BASE_URL && config.IMAGE_MODEL
+      ? new OpenAICompatibleImageProvider({
+          baseUrl: config.IMAGE_BASE_URL,
+          model: config.IMAGE_MODEL,
+          apiKey: config.IMAGE_API_KEY,
+          supportsNegativePrompt: config.IMAGE_SUPPORTS_NEGATIVE_PROMPT,
+          supportsSeed: config.IMAGE_SUPPORTS_SEED,
+        })
+      : null;
+  const imageProvider = realImageProvider ?? (config.NODE_ENV !== "production" ? new MockImageProvider() : null);
+  const imageGenerationAvailable = imageProvider !== null;
+
+  /**
+   * Video has no real provider yet, and this is the honest consequence — ADR-065.
+   *
+   * Unlike chat and images, there is no cross-vendor wire format for video generation: Runway,
+   * Luma, Veo and Replicate each expose a different asynchronous contract, so there is no
+   * single adapter that would make the platform vendor-neutral the way the OpenAI-compatible
+   * ones do. Rather than ship an adapter for one vendor and call the capability done, the
+   * `VideoProvider` interface stays the seam and production has no implementation of it: the
+   * routes report a real capability error. The GIF-producing mock remains development-only
+   * and, per ADR-013, cannot exist in production at all.
+   */
+  const videoProvider = config.NODE_ENV !== "production" ? new MockVideoProvider() : null;
+  const videoGenerationAvailable = videoProvider !== null;
+
+  logger.info(
+    {
+      image_provider: imageProvider?.name ?? null,
+      image_is_mock: imageProvider?.isMock ?? null,
+      video_provider: videoProvider?.name ?? null,
+      video_is_mock: videoProvider?.isMock ?? null,
+    },
+    imageGenerationAvailable || videoGenerationAvailable
+      ? "media providers registered"
+      : "MEDIA GENERATION UNAVAILABLE — no image or video provider is configured; those routes will report a capability error"
+  );
+  if (imageProvider?.isMock) {
     logger.warn(
-      "IMAGE AND VIDEO GENERATION DISABLED — they are mock-only (ADR-009) and a mock provider may not serve production traffic (ADR-013); those routes will return 503"
+      "IMAGE GENERATION IS MOCKED — output is a labelled placeholder, not a generated image (ADR-009). Set IMAGE_BASE_URL and IMAGE_MODEL for real generation"
+    );
+  }
+  if (videoProvider?.isMock) {
+    logger.warn(
+      "VIDEO GENERATION IS MOCKED — output is an animated GIF, not video (ADR-030). No real video provider is implemented"
     );
   }
 
@@ -737,7 +788,8 @@ async function main() {
     quota,
     scanner,
     uploadScanRequired: config.UPLOAD_SCAN_REQUIRED,
-    mediaGenerationAvailable,
+    imageGenerationAvailable,
+    videoGenerationAvailable,
 
     // --- identity, isolation and limits (ADR-049 / ADR-055 / ADR-057) --------------------
     auth: authService,

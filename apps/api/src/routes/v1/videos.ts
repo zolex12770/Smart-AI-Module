@@ -4,7 +4,7 @@ import {
   NotFoundError,
   PermissionError,
   QuotaExceededError,
-  ServiceUnavailableError,
+  CapabilityUnavailableError,
   ValidationError,
   videoProjectRequestSchema,
   type AuthContext,
@@ -12,7 +12,7 @@ import {
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
 import { requireProject } from "../../plugins/auth.js";
-import { MEDIA_UNAVAILABLE } from "./images.js";
+import { VIDEO_UNAVAILABLE } from "./images.js";
 
 /**
  * Long-form video — docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md Part 2, ADR-030/ADR-053.
@@ -48,7 +48,7 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
       const parsed = videoProjectRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
       // ADR-045 — see images.ts; video generation is mock-only too.
-      if (!ctx.mediaGenerationAvailable) throw new ServiceUnavailableError(MEDIA_UNAVAILABLE);
+      if (!ctx.videoGenerationAvailable) throw new CapabilityUnavailableError(VIDEO_UNAVAILABLE);
 
       // FR-063 — the whole project's requested duration is checked against the monthly
       // budget up front (docs/22_COST_AND_QUOTA_STRATEGY.md's long-form-video special case:
@@ -109,7 +109,7 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
   app.post<{ Params: { id: string } }>("/api/v1/videos/:id/retry", async (request, reply) => {
     const authCtx = await requireProject(request, ctx.auth, "media:generate");
     const projectId = scopeOf(authCtx);
-    if (!ctx.mediaGenerationAvailable) throw new ServiceUnavailableError(MEDIA_UNAVAILABLE);
+    if (!ctx.videoGenerationAvailable) throw new CapabilityUnavailableError(VIDEO_UNAVAILABLE);
 
     // Resolved here, before orchestration, so an unknown or cross-tenant id is a clean 404
     // rather than the orchestrator's internal "unknown video project" throw surfacing as 500.

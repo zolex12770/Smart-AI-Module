@@ -61,26 +61,26 @@ describe("image generation routes", () => {
    * routes must refuse rather than queue work no registered worker will ever pick up —
    * which would leave the caller polling a `pending` generation forever.
    */
-  it("POST /api/v1/images refuses with 503 when media generation is unavailable, and stores nothing", async () => {
-    ctx.mediaGenerationAvailable = false;
+  it("POST /api/v1/images refuses with a real capability error when image generation is unavailable, and stores nothing", async () => {
+    ctx.imageGenerationAvailable = false;
 
     const res = await app.inject({ headers: auth.headers, method: "POST", url: "/api/v1/images", payload: { prompt: "a lighthouse" } });
-    expect(res.statusCode).toBe(503);
-    expect(res.json().error.code).toBe("SERVICE_UNAVAILABLE");
-    expect(res.json().error.message).toMatch(/mock-only/);
+    expect(res.statusCode).toBe(501);
+    expect(res.json().error.code).toBe("CAPABILITY_UNAVAILABLE");
+    expect(res.json().error.message).toMatch(/no image provider is configured/);
 
     expect((await ctx.imageGenerations.list()).length).toBe(0);
   });
 
-  it("POST /api/v1/videos refuses with the same 503 when media generation is unavailable", async () => {
-    ctx.mediaGenerationAvailable = false;
+  it("POST /api/v1/videos refuses with a capability error when video generation is unavailable", async () => {
+    ctx.videoGenerationAvailable = false;
 
     const res = await app.inject({ headers: auth.headers,
       method: "POST",
       url: "/api/v1/videos",
       payload: { prompt: "a lighthouse at dawn", targetDurationSeconds: 10 },
     });
-    expect(res.statusCode).toBe(503);
-    expect(res.json().error.code).toBe("SERVICE_UNAVAILABLE");
+    expect(res.statusCode).toBe(501);
+    expect(res.json().error.code).toBe("CAPABILITY_UNAVAILABLE");
   });
 });

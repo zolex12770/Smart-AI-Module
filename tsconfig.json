@@ -18,6 +18,7 @@
     { "path": "packages/observability" },
     { "path": "packages/media" },
     { "path": "packages/providers/image-mock" },
+    { "path": "packages/providers/image-openai" },
     { "path": "packages/providers/video-mock" },
     { "path": "packages/agent-core" },
     { "path": "packages/quota" },

@@ -165,7 +165,8 @@ export async function buildTestApp(): Promise<{
     scanner: null,
     uploadScanRequired: false,
     // Tests run as development would: the mock media providers are available (ADR-045).
-    mediaGenerationAvailable: true,
+    imageGenerationAvailable: true,
+    videoGenerationAvailable: true,
 
     // --- identity, tenancy and isolation (ADR-049 / ADR-055) -----------------------------
     auth: authService,
