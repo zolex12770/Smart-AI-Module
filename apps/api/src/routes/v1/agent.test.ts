@@ -15,9 +15,13 @@ describe("agent task routes", () => {
   let app: FastifyInstance;
   let db: DrizzleDb;
   let ctx: AppContext;
+  /** Session cookie + CSRF pair + x-project-id for the seeded test user (ADR-049).
+   * Every request in these suites is authenticated and project-scoped, because every real
+   * request is — an unauthenticated inject would only ever assert a 401. */
+  let auth: Awaited<ReturnType<typeof buildTestApp>>["auth"];
 
   beforeEach(async () => {
-    ({ app, db, ctx } = await buildTestApp());
+    ({ app, db, ctx, auth } = await buildTestApp());
   });
 
   afterEach(async () => {
@@ -25,7 +29,7 @@ describe("agent task routes", () => {
   });
 
   it("POST /api/v1/agent/tasks creates a task and it completes for real", async () => {
-    const createRes = await app.inject({
+    const createRes = await app.inject({ headers: auth.headers,
       method: "POST",
       url: "/api/v1/agent/tasks",
       payload: { taskType: "echo_chat", input: { message: "http layer test" } },
@@ -35,31 +39,31 @@ describe("agent task routes", () => {
     expect(task.state).toBe("IDLE");
 
     await waitFor(async () => {
-      const r = await app.inject({ method: "GET", url: `/api/v1/agent/tasks/${task.id}` });
+      const r = await app.inject({ headers: auth.headers, method: "GET", url: `/api/v1/agent/tasks/${task.id}` });
       return r.json().task.state === "COMPLETED";
     });
 
-    const getRes = await app.inject({ method: "GET", url: `/api/v1/agent/tasks/${task.id}` });
+    const getRes = await app.inject({ headers: auth.headers, method: "GET", url: `/api/v1/agent/tasks/${task.id}` });
     const body = getRes.json();
     expect(body.task.output.content).toContain("http layer test");
     expect(body.nodes).toHaveLength(1);
   });
 
   it("POST /api/v1/agent/tasks rejects an invalid body with 400", async () => {
-    const res = await app.inject({ method: "POST", url: "/api/v1/agent/tasks", payload: { taskType: "not_a_real_type" } });
+    const res = await app.inject({ headers: auth.headers, method: "POST", url: "/api/v1/agent/tasks", payload: { taskType: "not_a_real_type" } });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.code).toBeDefined();
   });
 
   it("GET /api/v1/agent/tasks/:id 404s for an unknown task", async () => {
-    const res = await app.inject({ method: "GET", url: "/api/v1/agent/tasks/00000000-0000-0000-0000-000000000000" });
+    const res = await app.inject({ headers: auth.headers, method: "GET", url: "/api/v1/agent/tasks/00000000-0000-0000-0000-000000000000" });
     expect(res.statusCode).toBe(404);
   });
 
   it("GET /api/v1/agent/tasks lists created tasks", async () => {
-    await app.inject({ method: "POST", url: "/api/v1/agent/tasks", payload: { taskType: "echo_chat", input: { message: "a" } } });
-    await app.inject({ method: "POST", url: "/api/v1/agent/tasks", payload: { taskType: "echo_chat", input: { message: "b" } } });
-    const res = await app.inject({ method: "GET", url: "/api/v1/agent/tasks" });
+    await app.inject({ headers: auth.headers, method: "POST", url: "/api/v1/agent/tasks", payload: { taskType: "echo_chat", input: { message: "a" } } });
+    await app.inject({ headers: auth.headers, method: "POST", url: "/api/v1/agent/tasks", payload: { taskType: "echo_chat", input: { message: "b" } } });
+    const res = await app.inject({ headers: auth.headers, method: "GET", url: "/api/v1/agent/tasks" });
     expect(res.json().tasks.length).toBeGreaterThanOrEqual(2);
   });
 
@@ -69,7 +73,7 @@ describe("agent task routes", () => {
     const filePath = path.join(ctx.sandboxRoot, "http-delete-me.txt");
     fs.writeFileSync(filePath, "bye");
 
-    const createRes = await app.inject({
+    const createRes = await app.inject({ headers: auth.headers,
       method: "POST",
       url: "/api/v1/agent/tasks",
       payload: { taskType: "delete_sandbox_file", input: { path: "http-delete-me.txt" } },
@@ -77,14 +81,14 @@ describe("agent task routes", () => {
     const { task } = createRes.json();
 
     await waitFor(async () => {
-      const r = await app.inject({ method: "GET", url: `/api/v1/agent/tasks/${task.id}` });
+      const r = await app.inject({ headers: auth.headers, method: "GET", url: `/api/v1/agent/tasks/${task.id}` });
       return r.json().task.state === "WAITING_FOR_APPROVAL";
     });
 
-    const { nodes } = (await app.inject({ method: "GET", url: `/api/v1/agent/tasks/${task.id}` })).json();
+    const { nodes } = (await app.inject({ headers: auth.headers, method: "GET", url: `/api/v1/agent/tasks/${task.id}` })).json();
     expect(fs.existsSync(filePath)).toBe(true); // not touched yet
 
-    const approveRes = await app.inject({
+    const approveRes = await app.inject({ headers: auth.headers,
       method: "POST",
       url: `/api/v1/agent/tasks/${task.id}/approve`,
       payload: { nodeId: nodes[0].id, approvedBy: "http-test" },
@@ -92,7 +96,7 @@ describe("agent task routes", () => {
     expect(approveRes.statusCode).toBe(200);
 
     await waitFor(async () => {
-      const r = await app.inject({ method: "GET", url: `/api/v1/agent/tasks/${task.id}` });
+      const r = await app.inject({ headers: auth.headers, method: "GET", url: `/api/v1/agent/tasks/${task.id}` });
       return r.json().task.state === "COMPLETED";
     });
     expect(fs.existsSync(filePath)).toBe(false);

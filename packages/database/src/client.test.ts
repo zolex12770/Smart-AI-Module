@@ -13,11 +13,11 @@ import { createDb, createPostgresDb } from "./client.js";
  */
 describe("createPostgresDb (real node-postgres connection attempt)", () => {
   it("throws a real connection-refused error against an unreachable address", async () => {
-    await expect(createPostgresDb("postgres://user:pass@127.0.0.1:1/nonexistent")).rejects.toThrow(/ECONNREFUSED/);
+    await expect(createPostgresDb("postgres://user:pass@127.0.0.1:1/nonexistent", { connectAttempts: 1 })).rejects.toThrow(/ECONNREFUSED/);
   });
 
   it("throws a real DNS/host-resolution error against a nonexistent host", async () => {
-    await expect(createPostgresDb("postgres://user:pass@nonexistent.invalid:5432/db")).rejects.toThrow(
+    await expect(createPostgresDb("postgres://user:pass@nonexistent.invalid:5432/db", { connectAttempts: 1 })).rejects.toThrow(
       /ENOTFOUND|EAI_AGAIN/
     );
   });

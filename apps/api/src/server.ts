@@ -1,13 +1,17 @@
 import Fastify, { type FastifyBaseLogger } from "fastify";
+import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import type { Logger } from "@ai-platform/observability";
 import type { AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
+import { CSRF_HEADER, registerAuth } from "./plugins/auth.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerAgentRoutes } from "./routes/v1/agent.js";
+import { registerAuthRoutes } from "./routes/v1/auth.js";
 import { registerChatRoute } from "./routes/v1/chat.js";
 import { registerImageRoutes } from "./routes/v1/images.js";
 import { registerRagRoutes } from "./routes/v1/rag.js";
@@ -15,6 +19,21 @@ import { registerUsageRoute } from "./routes/v1/usage.js";
 import { registerVideoRoutes } from "./routes/v1/videos.js";
 
 export const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
+
+/**
+ * The only endpoints that may be reached without a credential — docs/26_DECISIONS.md ADR-049.
+ *
+ * Kept as an explicit, short list rather than a pattern, because "which routes are public" is
+ * a security decision that should be readable in one glance and hard to widen by accident. A
+ * route absent from this list requires authentication; there is no ambient authority anywhere
+ * else in the API.
+ */
+const PUBLIC_PATHS = [
+  "/api/health",
+  "/api/v1/auth/signup",
+  "/api/v1/auth/login",
+  "/api/v1/auth/logout",
+];
 
 export async function buildServer(config: AppConfig, ctx: AppContext, logger: Logger) {
   // docs/20_OBSERVABILITY.md §1.1 — a pre-built, shared Pino instance (not `logger: true`,
@@ -24,22 +43,75 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   // TypeScript friction, not a runtime concern: a Pino `Logger` implements everything
   // `FastifyBaseLogger` requires (Fastify's own default logger *is* a Pino instance), the
   // types just don't structurally line up on an optional `msgPrefix` field.
-  const app = Fastify({ loggerInstance: logger as unknown as FastifyBaseLogger });
+  const app = Fastify({
+    loggerInstance: logger as unknown as FastifyBaseLogger,
+    // Cloud Run (and any load balancer) terminates the connection itself, so without this
+    // every request appears to come from the proxy's address. That is not cosmetic: the
+    // per-IP rate limiter below keys on `request.ip`, so one shared address meant every
+    // client in the world shared a single 300/minute bucket — the limiter would have been
+    // simultaneously useless (one abusive client is diluted) and hostile (one busy client
+    // locks everyone out). `request.ip` now comes from X-Forwarded-For. Safe only because
+    // the platform is never exposed directly; behind a proxy that header is rewritten, and
+    // in front of one it would be client-controlled.
+    trustProxy: true,
+  });
+
+  // docs/13_SECURITY_ARCHITECTURE.md §4 — the API sent no security headers at all before
+  // ADR-049's audit. Most of helmet's defaults are aimed at HTML, but three matter here and
+  // cost nothing: `X-Content-Type-Options: nosniff` (a JSON error body containing
+  // attacker-supplied text must never be sniffed as HTML and executed), HSTS (once behind
+  // TLS, no downgrade), and the referrer policy.
+  await app.register(helmet, {
+    // This API serves JSON and binary assets, never a document — so the strictest possible
+    // policy is also the correct one. `frame-ancestors 'none'` is the modern replacement for
+    // X-Frame-Options and covers the same clickjacking case for any error page a browser
+    // might render.
+    contentSecurityPolicy: {
+      directives: { defaultSrc: ["'none'"], frameAncestors: ["'none'"], baseUri: ["'none'"] },
+    },
+    // The SPA is served from a different origin than this API (CORS_ORIGIN), and
+    // `GET /api/v1/assets/:id` returns images and video the browser must be able to load.
+    // helmet's `same-origin` default would block exactly that, so the relaxation is
+    // deliberate and narrow: CORS above still decides *which* origin may read a response.
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  });
+
+  // Cookies must be parsed before the auth plugin's preHandler can read the session cookie,
+  // and `reply.setCookie`/`clearCookie` (routes/v1/auth.ts) only exist once this is
+  // registered. No `secret`: the session cookie carries an opaque random token that is looked
+  // up by hash server-side (packages/security/tokens.ts), so there is nothing for cookie
+  // signing to add — it would only move trust into a key we would then have to manage.
+  await app.register(cookie);
 
   // @fastify/cors defaults `methods` to "GET,HEAD,POST" only — DELETE (used by
   // /api/v1/memory/:id) and PUT/PATCH would otherwise fail preflight in any real browser,
   // a real bug found only by actual browser-driven UI testing (docs/25 Phase 10), never by
   // curl (which doesn't enforce CORS at all) or by unit/integration tests.
-  await app.register(cors, { origin: config.CORS_ORIGIN, methods: ["GET", "POST", "PUT", "PATCH", "DELETE"] });
+  await app.register(cors, {
+    origin: config.CORS_ORIGIN,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    // Without this the browser drops the session cookie on every cross-origin call and the
+    // whole cookie-based session (ADR-049) silently degrades to "always logged out". It is
+    // also why `origin` must stay an explicit origin: the CORS spec forbids `*` with
+    // credentials, and a wildcard here would additionally let any site read authenticated
+    // responses.
+    credentials: true,
+    // Explicit rather than reflecting whatever the browser asks for, so the request headers
+    // this API accepts are auditable in one place: JSON bodies, bearer API keys, the
+    // double-submit CSRF token, and the project selector a session-authenticated caller uses
+    // to name its scope (see plugins/auth.ts's `extractProjectId`).
+    allowedHeaders: ["content-type", "authorization", CSRF_HEADER, "x-project-id"],
+  });
 
   // docs/13_SECURITY_ARCHITECTURE.md §4 "Layer 1 — edge/API rate limiting". A generous
   // global default (real requests aren't expensive; this exists to blunt a runaway client
   // or script, not to throttle normal use) plus stricter per-route overrides on the
-  // genuinely expensive endpoints (image/video generation, agent task creation) — see
-  // routes/v1/{images,videos,agent}.ts's `config.rateLimit`. In-memory store: correct for
-  // this single-instance deployment (ADR-025/027's same reasoning for not adding Redis
-  // before it's actually needed) — revisit if/when the API ever runs as more than one
-  // instance behind a shared load balancer.
+  // genuinely expensive or abuse-prone endpoints (image/video generation, agent task
+  // creation, signup/login — see routes/v1/{images,videos,agent,auth}.ts's `config.rateLimit`).
+  // In-memory store: correct for this single-instance deployment (ADR-025/027's same
+  // reasoning for not adding Redis before it's actually needed) — revisit if/when the API
+  // ever runs as more than one instance behind a shared load balancer, since each instance
+  // then enforces its own share of the limit.
   await app.register(rateLimit, {
     global: true,
     max: 300,
@@ -64,7 +136,21 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   await app.register(multipart, { limits: { files: 1, fileSize: UPLOAD_MAX_BYTES, fields: 5 } });
 
   registerErrorHandler(app);
+
+  // BEFORE any route. `registerAuth` installs a `preHandler` hook, and Fastify only applies a
+  // hook to routes registered after it in the same encapsulation context — registering it
+  // below the routes would compile, start, serve traffic, and authenticate nothing. The hook
+  // resolves identity for every request (cheap, indexed hash lookup) but grants nothing on its
+  // own: each route names the permission it needs via `requireProject`, so a route that names
+  // nothing gets nothing.
+  registerAuth(app, {
+    authService: ctx.auth,
+    cookieSecure: ctx.cookieSecure,
+    publicPaths: PUBLIC_PATHS,
+  });
+
   registerHealthRoute(app);
+  registerAuthRoutes(app, ctx);
   registerChatRoute(app, ctx);
   registerAgentRoutes(app, ctx);
   registerRagRoutes(app, ctx);

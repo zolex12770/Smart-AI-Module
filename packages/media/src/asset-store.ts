@@ -16,8 +16,15 @@ import type { Asset, AssetKind, AssetRepository } from "@ai-platform/database";
  */
 export interface AssetStore {
   /** Persists `bytes` and records a real `assets` row in the same step, so an asset id
-   * always resolves to something that actually exists. Returns the new asset's id. */
-  store(bytes: Buffer, mimeType: string, ext: string, kind?: AssetKind): Promise<string>;
+   * always resolves to something that actually exists. Returns the new asset's id.
+   *
+   * `projectId` is the tenant project the bytes belong to (ADR-049) and is threaded in from
+   * whoever asked for them — the uploading request, the image generation's row, the video
+   * project's row. It is required rather than defaulted because an unowned asset is
+   * unreachable: every read goes through `AssetRepository.get(projectId, id)`, whose scope
+   * predicate lives in the SQL `WHERE`, so bytes written under the wrong project (or none)
+   * could never be served back. */
+  store(projectId: string, bytes: Buffer, mimeType: string, ext: string, kind?: AssetKind): Promise<string>;
   /** Reads an asset's bytes back — the only supported way to get at them. */
   read(asset: Asset): Promise<Buffer>;
   /** Removes the bytes AND the `assets` row — the disposal path for an upload rejected as
@@ -37,7 +44,13 @@ export class LocalAssetStore implements AssetStore {
     private readonly assetRepo: AssetRepository
   ) {}
 
-  async store(bytes: Buffer, mimeType: string, ext: string, kind: AssetKind = "image"): Promise<string> {
+  async store(
+    projectId: string,
+    bytes: Buffer,
+    mimeType: string,
+    ext: string,
+    kind: AssetKind = "image"
+  ): Promise<string> {
     await mkdir(this.assetsRoot, { recursive: true });
     const id = uuid();
     const filename = `${id}.${ext}`;
@@ -47,6 +60,7 @@ export class LocalAssetStore implements AssetStore {
     const checksum = createHash("sha256").update(bytes).digest("hex");
     const asset = await this.assetRepo.create({
       id,
+      projectId,
       kind,
       mimeType,
       sizeBytes: bytes.length,
@@ -64,7 +78,11 @@ export class LocalAssetStore implements AssetStore {
     try {
       await rm(asset.storagePath, { force: true }); // force: a missing file is not an error
     } finally {
-      await this.assetRepo.delete(asset.id);
+      // Scoped by the row's own `projectId` (ADR-049) — the caller already resolved this
+      // asset under its tenant scope, so re-deriving the scope here cannot widen it, and a
+      // pre-ADR-049 row (`projectId === null`) still deletes through the legacy scope
+      // rather than silently matching nothing.
+      await this.assetRepo.delete(asset.projectId, asset.id);
     }
   }
 }

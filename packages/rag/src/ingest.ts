@@ -1,9 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { v4 as uuid } from "uuid";
-import type { Asset, AssetRepository, Document, DocumentChunkRepository, DocumentRepository, DocumentScanStatus } from "@ai-platform/database";
+import type {
+  Asset,
+  AssetRepository,
+  Document,
+  DocumentChunkRepository,
+  DocumentRepository,
+  DocumentScanStatus,
+  NewDocumentChunk,
+} from "@ai-platform/database";
 import { resolveSandboxedPath } from "@ai-platform/tools";
-import type { EmbeddingProvider } from "@ai-platform/embeddings";
+import type { EmbeddingService } from "@ai-platform/embeddings";
 import { chunkText } from "./chunking.js";
 import { extractDocxText } from "./parsers/docx.js";
 import { extractPdfText } from "./parsers/pdf.js";
@@ -32,12 +40,40 @@ export interface AssetBytesReader {
 export interface IngestDeps {
   documentRepo: DocumentRepository;
   chunkRepo: DocumentChunkRepository;
-  embeddings: EmbeddingProvider;
+  /**
+   * The embedding *service*, not a raw provider (docs/26_DECISIONS.md ADR-048): it
+   * zero-pads every vector to the width of the `vector(1536)` column and carries the model
+   * tag that has to be stored with each chunk, so retrieval can refuse to compare vectors
+   * that were produced by two different models.
+   */
+  embeddings: EmbeddingService;
   sandboxRoot: string;
   /** Required to ingest an uploaded document (`document.assetId` set, ADR-041); the
    * sandbox-path flow never touches them, so existing callers/tests need not supply them. */
   assetRepo?: AssetRepository;
   assetStore?: AssetBytesReader;
+}
+
+/**
+ * Everything needed to create a document row. `projectId` is the tenant boundary (ADR-049)
+ * and is required in both creation paths: it is threaded from the caller's own authenticated
+ * scope — the API route's `AuthContext`, or the job payload that carried it — and never
+ * defaulted here, because a document that belongs to no project cannot be authorized on read.
+ */
+export interface CreatePendingDocumentInput {
+  projectId: string;
+  /** Sandbox-relative path. Its basename becomes the document's display filename. */
+  relativePath: string;
+  /** Null for a path-based ingest run by the platform itself rather than by a person. */
+  uploadedByUserId?: string | null;
+}
+
+export interface CreatePendingUploadedDocumentInput {
+  projectId: string;
+  filename: string;
+  assetId: string;
+  scanStatus: DocumentScanStatus;
+  uploadedByUserId?: string | null;
 }
 
 /**
@@ -50,10 +86,16 @@ export interface IngestDeps {
  */
 export async function createPendingDocument(
   documentRepo: DocumentRepository,
-  relativePath: string
+  input: CreatePendingDocumentInput
 ): Promise<Document> {
-  const filename = relativePath.split(/[/\\]/).pop() ?? relativePath;
-  return documentRepo.create({ id: uuid(), filename, sourcePath: relativePath });
+  const filename = input.relativePath.split(/[/\\]/).pop() ?? input.relativePath;
+  return documentRepo.create({
+    id: uuid(),
+    projectId: input.projectId,
+    uploadedByUserId: input.uploadedByUserId ?? null,
+    filename,
+    sourcePath: input.relativePath,
+  });
 }
 
 /**
@@ -64,9 +106,16 @@ export async function createPendingDocument(
  */
 export async function createPendingUploadedDocument(
   documentRepo: DocumentRepository,
-  input: { filename: string; assetId: string; scanStatus: DocumentScanStatus }
+  input: CreatePendingUploadedDocumentInput
 ): Promise<Document> {
-  return documentRepo.create({ id: uuid(), filename: input.filename, assetId: input.assetId, scanStatus: input.scanStatus });
+  return documentRepo.create({
+    id: uuid(),
+    projectId: input.projectId,
+    uploadedByUserId: input.uploadedByUserId ?? null,
+    filename: input.filename,
+    assetId: input.assetId,
+    scanStatus: input.scanStatus,
+  });
 }
 
 /** Loads a document's raw bytes from whichever of its two sources is set. */
@@ -75,7 +124,11 @@ async function loadDocumentBytes(deps: IngestDeps, document: Document): Promise<
     if (!deps.assetRepo || !deps.assetStore) {
       throw new Error(`Document "${document.id}" is an upload (asset ${document.assetId}) but this ingestion worker has no asset store configured.`);
     }
-    const asset = await deps.assetRepo.get(document.assetId);
+    // Scoped to the document's own project (ADR-049). An asset reachable from this row is by
+    // construction in the same tenant, so re-deriving the scope here cannot widen it — and
+    // asking for it unscoped would be exactly the cross-tenant read the repository exists to
+    // make impossible.
+    const asset = await deps.assetRepo.get(document.projectId, document.assetId);
     if (!asset) throw new Error(`Document "${document.id}" references missing asset "${document.assetId}".`);
     return deps.assetStore.read(asset);
   }
@@ -92,6 +145,15 @@ async function loadDocumentBytes(deps: IngestDeps, document: Document): Promise<
  * given document's status in place. Handles plain text/.md, real PDF text extraction, and
  * real DOCX text extraction (see extractText above); CSV/code-aware chunking (docs/09 §2's
  * remaining rows) are not yet implemented.
+ *
+ * The write is `replaceForDocument`, not `createMany`, on a first pass as much as on a
+ * re-ingest (ADR-049): it drops whatever chunks an earlier pass left behind and writes the
+ * new set *and* the parent document's `ready` status in ONE transaction. An untransactional
+ * delete-then-insert leaves the document silently unsearchable in the gap — permanently, if
+ * the process dies there — and lets a poller see `ready` next to a half-written index.
+ *
+ * Scope comes from `document.projectId`: the row was fetched under the caller's tenant scope,
+ * so it *is* the caller's project, and nothing here invents one.
  */
 export async function processDocumentIngestion(deps: IngestDeps, document: Document): Promise<void> {
   try {
@@ -106,31 +168,48 @@ export async function processDocumentIngestion(deps: IngestDeps, document: Docum
       );
     }
 
-    const embeddings = await deps.embeddings.embed(chunks);
-    await deps.chunkRepo.createMany(
-      chunks.map((content, i) => ({
-        id: uuid(),
-        documentId: document.id,
-        chunkIndex: i,
-        content,
-        embedding: embeddings[i],
-      }))
-    );
+    // Each chunk records which model produced its vector and that model's true width before
+    // zero-padding (ADR-048). Without the tag a later model switch would leave these rows
+    // being compared against vectors from a different space — a distance with no meaning,
+    // silently degrading every ranking instead of failing loudly.
+    const embedded = await deps.embeddings.embed(chunks);
+    const rows: NewDocumentChunk[] = chunks.map((content, i) => ({
+      id: uuid(),
+      chunkIndex: i,
+      content,
+      embedding: embedded[i].vector,
+      embeddingModel: embedded[i].model,
+      embeddingDims: embedded[i].dimensions,
+    }));
 
-    await deps.documentRepo.updateStatus(document.id, "ready");
+    await deps.chunkRepo.replaceForDocument(document.id, document.projectId, rows, {
+      status: "ready",
+      // `documents.version` is the ingest generation: 1 means "created, not yet ingested",
+      // and every completed pass increments it, so the row still answers "which pass wrote
+      // the chunks that are in the index right now" after the fact.
+      bumpVersion: true,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await deps.documentRepo.updateStatus(document.id, "failed", message);
+    // Deliberately does NOT drop the existing chunks: if a *re*-ingest fails, the previous
+    // generation is still the best index this document has, and deleting it would make a
+    // working document unsearchable because a later pass failed. `failed` is how an operator
+    // learns the index is stale.
+    await deps.documentRepo.updateStatus(document.projectId, document.id, "failed", message);
     throw err;
   }
 }
 
-export async function ingestDocument(deps: IngestDeps, relativePath: string): Promise<Document> {
-  const document = await createPendingDocument(deps.documentRepo, relativePath);
+export async function ingestDocument(deps: IngestDeps, input: CreatePendingDocumentInput): Promise<Document> {
+  const document = await createPendingDocument(deps.documentRepo, input);
   try {
     await processDocumentIngestion(deps, document);
-    return { ...document, status: "ready" };
   } catch (err) {
     return { ...document, status: "failed", errorMessage: err instanceof Error ? err.message : String(err) };
   }
+  // Read back rather than projecting the expected result: the status and the version bump
+  // happened inside `replaceForDocument`'s transaction, so the stored row is the only
+  // accurate answer. It can legitimately be gone — a concurrent soft delete — and then the
+  // in-memory projection is still a truthful account of what this call did.
+  return (await deps.documentRepo.get(input.projectId, document.id)) ?? { ...document, status: "ready" };
 }

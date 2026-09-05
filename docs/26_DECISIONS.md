@@ -821,3 +821,131 @@ A reader who dropped a key into `.env` had no way to confirm it took effect shor
 
 **Date:** 2026-09-03
 **Impact:** `packages/agent-core/src/engine.ts` (`ModelCallMeter`, optional `meter` dep, pre-call check and post-call record on `model_call`, `runModelToCompletion` now returns the usage it used to discard) + 2 tests; `apps/api/src/index.ts` (meter wired to the real `QuotaManager` and `PgUsageRecordRepository`, with a structured `provider call completed` line carrying task and node ids). 189 tests now pass across 35 files (up from 187/35).
+
+---
+
+## ADR-047: Tool calling in the provider contract — the change that makes a model-driven agent possible
+
+**Decision:** `ChatMessage` gained `toolCalls`/`toolCallId`, `ChatStreamEvent` gained a `tool_call` variant and a required `finishReason` on `done`, `ChatRequest` gained `tools`/`toolChoice`/`maxOutputTokens`/`temperature`, and `LLMProvider` gained `model` and `capabilities()`. Every adapter — Anthropic, OpenAI, Google, the self-hosted runtime, and the mock — implements real tool calling in its own idiom.
+
+**Why this is the root change.** The ADR-047 audit's sharpest finding was that the model was never given tools at all: a repo-wide grep for `tool` across `packages/providers` returned nothing. Tools existed, and a deterministic planner invoked them, but no model ever chose one. Every downstream claim about autonomy rested on that gap. Adding tool calling to the *contract* rather than to one adapter is what lets the agent loop be provider-neutral: the loop emits `ToolSpec`s and consumes `tool_call` events, and which vendor produced them is not its concern.
+
+`finishReason` is required, not optional, for the same reason ADR-045 made an empty answer an error: `length` (truncated) and `tool_calls` (the model wants to act) are not the same outcome as `stop`, and a contract that lets an adapter omit the distinction guarantees some adapter will.
+
+**Date:** 2026-09-05
+**Impact:** `packages/shared/src/chat.ts` rewritten; all five provider adapters; `packages/model-router`; `packages/agent-core`.
+
+---
+
+## ADR-048: Real semantic embeddings, with width normalization and model tagging
+
+**Decision:** `EmbeddingProvider` moved into `packages/shared`; a new `EmbeddingService` wraps any provider, zero-pads its output to the column's 1536 width, and exposes a `modelTag`. Every stored vector records `embedding_model` and `embedding_dims`, retrieval filters on the model tag, and both vector columns gained an HNSW index.
+
+**Three defects this closes, all from the audit.** (1) Retrieval was lexical feature-hashing presented as semantic search. (2) There was no ANN index anywhere, so every query was a sequential scan of every chunk in the database. (3) Nothing prevented comparing vectors produced by two different models, which is meaningless.
+
+**Why zero-padding rather than a per-model column.** Providers output 384, 768, 1536 or 3072 dimensions. Padding with zeros is *exact* for cosine similarity — it changes neither the dot product nor either norm — so one column serves every model without distorting distances within a model. A vector wider than the column is a hard error, never a truncation, because truncating would silently distort every distance. The model tag is what stops cross-model comparison: switching models makes old rows invisible until re-embedded, rather than corrupting results.
+
+The deterministic hash provider remains as an explicit, `isDeterministicFallback`-marked zero-configuration default, and the API reports which mode is active rather than implying semantic search it is not doing. A real defect in it was also fixed: bucket and sign were derived from the same hash, so with a power-of-two dimension the signed-hashing trick delivered none of its intended benefit.
+
+**Date:** 2026-09-05
+**Impact:** `packages/embeddings`, `packages/rag`, `packages/database` schema, `packages/providers/llm-local`.
+
+---
+
+## ADR-049: Identity, tenancy and authorization — enforced in SQL, not after the fetch
+
+**Decision:** A full identity model (`users`, `organizations`, `organization_members`, `projects`, `project_members`, `sessions`, `api_keys`, `audit_log`) and a `packages/security` that owns every authentication and authorization decision. **Every row of user content now carries `project_id`, and every read filters on it in the SQL `WHERE`.**
+
+**The rule that matters.** Authorization is applied as a query predicate, never as a check on a row that has already been fetched. There is deliberately no `documents.get(id)` left to call — the signature is `get(projectId, id)` — so the ownership check a route might forget cannot be forgotten. A resource in another project is reported exactly like one that does not exist.
+
+**A project the caller cannot see is a 404, not a 403.** Telling an outsider that a project id exists is itself a disclosure.
+
+**Sessions and API keys store only a SHA-256.** A database dump cannot be replayed as live credentials. Passwords use scrypt from Node's own crypto (memory-hard, RFC 7914, no native addon) with the cost parameters encoded in the hash so they can be raised later without invalidating anything. Login returns one error for both a wrong password and an unknown email, and does comparable work in both cases, so the endpoint is not a user-enumeration oracle.
+
+**Date:** 2026-09-05
+**Impact:** New `packages/security`; `packages/shared/src/auth.ts`; the entire database schema; every repository; every route; `apps/web`.
+
+---
+
+## ADR-055: Execution isolation — a timeout that kills, and an environment that does not leak
+
+**Decision:** A pluggable `ExecutionSandbox` with two implementations. `DockerSandbox` (the production posture) runs each command in a container with `--network none`, a read-only root, a tmpfs `/tmp`, `--cap-drop ALL`, `no-new-privileges`, a pid limit and memory/CPU caps. `ProcessSandbox` (development) shares the same API, scrubs the environment and genuinely terminates the process tree. Production refuses process isolation unless explicitly acknowledged — and only for a process that actually runs the agent engine.
+
+**Two real vulnerabilities this fixes**, both found by the audit: the previous terminal tool spawned with no `env` option, so every command inherited the API process's entire environment — provider API keys, `DATABASE_URL`, everything; and its "timeout" only rejected a promise while the child kept running. Both are now asserted against by tests that run real processes.
+
+**Date:** 2026-09-05
+**Impact:** `packages/security/src/sandbox.ts` + 9 tests; `packages/tools`; `apps/api` composition root.
+
+---
+
+## ADR-056: Provider independence through an OpenAI-compatible runtime
+
+**Decision:** A `LocalOpenAICompatibleProvider` speaking `/v1/chat/completions` with streaming and tool calling, plus a matching embedding provider. When `LLM_BASE_URL`/`LLM_MODEL` are set it registers as the **default**, ahead of any hosted key.
+
+**Why that wire format.** It is the de facto standard for self-hosted inference — Ollama, vLLM, llama.cpp's server, LM Studio and every OpenAI-compatible gateway implement it. One adapter therefore gives the platform a complete local AI runtime with no third-party account, and it is the *same code path* production uses, so there is no "local mode" that behaves differently.
+
+Registering it as the default rather than a fallback is the architectural statement: independence from a vendor is only real if the independent path is the one that actually runs.
+
+**Date:** 2026-09-05
+**Impact:** New `packages/providers/llm-local` + 12 tests; `apps/api` config and composition root; `.env.example`.
+
+---
+
+## ADR-057: The model-driven agent loop
+
+**Decision:** `runReasoningLoop` implements observe → reason → act → observe, where the **model** decides whether a tool is needed, which one, with what arguments, whether the result suffices, whether to call another, and when the task is done. The harness decides only what the model may not: the iteration ceiling, the token budget, which tools exist, whether a call needs approval, argument validity, isolation and cancellation.
+
+**A tool error is an observation, not a termination.** Recovering from a failed call is exactly the reasoning worth having; only harness-level failures (budget, cancellation, provider outage) stop the run. One self-correction round runs when verification fails — one, because an unbounded correct-then-recheck cycle is how agents burn budget.
+
+This replaces a deterministic `switch` over six hardcoded task types (ADR-018), which is retained for those task types but is no longer the only way work happens.
+
+**Date:** 2026-09-05
+**Impact:** `packages/agent-core/src/reasoning-loop.ts` + 18 tests.
+
+---
+
+## ADR-058: Capability-based routing, retry, backoff and circuit breaking
+
+**Decision:** The registry became a real capability registry (tool calling, vision, context window, cost/quality/latency hints) and `select()` returns an ordered candidate list. The router gained per-provider retry with exponential backoff and full jitter, honours `Retry-After` as a floor, classifies errors as retryable or fatal, and opens a circuit after repeated failures.
+
+**Also closed:** a provider that yielded nothing was skipped *without* calling `onFallback` — a real hole in ADR-044's "a fallback is never silent" claim. And a request carrying tools can now only be routed to a provider that can call them, rather than discovering that mid-stream.
+
+**Date:** 2026-09-05
+**Impact:** `packages/model-router` rewritten + 16 tests.
+
+---
+
+## ADR-059: The tool registry actually enforces what it declares
+
+**Decision:** `ToolRegistry.call` validates arguments against the tool's `inputSchema` before the handler runs, all four `requiresApproval` modes have distinct behaviour, handlers receive a `ToolInvocationContext` carrying project/user scope and a cancellation signal, and re-registering a tool id is refused rather than silently replacing it.
+
+**Why validation matters more now.** `inputSchema` was decorative — nothing checked arguments against it. That was tolerable when a deterministic planner supplied them; it is not when a *model* does. The validator is a deliberately small, dependency-free subset of JSON Schema so that a model's mistake produces a precise, actionable message.
+
+**Date:** 2026-09-05
+**Impact:** `packages/tools/src/registry.ts`, `packages/shared/src/tools.ts` + tests.
+
+---
+
+## ADR-060: The production boot blocker
+
+**Decision:** The mock provider is never constructed in production; a process refuses to start for lack of a chat provider **only if it actually serves chat**; and the sandbox-isolation guard applies only to a process that runs the agent engine.
+
+**What was broken.** `apps/api/Dockerfile` sets `NODE_ENV=production`; ADR-013's guard threw whenever no LLM key was present; and the Cloud Run worker pool deliberately has no LLM key. The worker pool therefore crash-looped on every boot, and in the configuration `terraform.tfvars.example` advertises (no key at all), so did the API. ADR-045 had fixed the API-with-a-key case and verified only that case — this is the regression that audit caught.
+
+`scripts/verify-boot.sh` now exercises all five configurations against the real built entrypoint, so this class of defect fails loudly instead of silently.
+
+**Date:** 2026-09-05
+**Impact:** `apps/api/src/index.ts`; `scripts/verify-boot.sh`; `.github/workflows/ci.yml` (which now builds the image and asserts it starts).
+
+---
+
+## ADR-062: A real coding agent — unified diffs, search, and no directives
+
+**Decision:** `code.parse_fix_directive`/`code.apply_literal_fix` are replaced by `code.apply_patch` (a real unified-diff applier), `code.read_lines`, `fs.search` and `fs.glob`.
+
+**What was wrong.** The previous "coding agent" matched a `FIX_NEEDED path=… find=… replace=…` string that the failing test printed *about itself*, then performed one whitespace-free literal replacement. The fix was authored by the test, not the agent, and §37 of the product brief forbids calling that an autonomous coding agent. There was also no search capability at all, so FR-010 ("where is X defined?") was unmeetable.
+
+**Why the patcher is hand-written.** Applying a patch is the most destructive thing this platform does to a user's files, and the failure that matters is silent: a hunk applied to *nearly* the right place. Owning the matching strategy makes it explicit and testable — exact match at the stated line, then a bounded search outward, then refusal. A multi-file patch is atomic: every file is patched in memory first and nothing is written unless every hunk applied.
+
+**Date:** 2026-09-05
+**Impact:** `packages/tools/src/native/{patch,search,coding}.ts` + 26 tests.

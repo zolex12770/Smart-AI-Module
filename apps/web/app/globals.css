@@ -407,3 +407,142 @@ label {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* --- Authentication screens (ADR-049) ------------------------------------------------- */
+.auth-shell {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 2rem 1rem;
+}
+.auth-card {
+  width: 100%;
+  max-width: 24rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 2rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.auth-card h1 {
+  margin: 0 0 1rem;
+  font-size: 1.4rem;
+}
+.auth-card label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-top: 0.6rem;
+}
+.auth-card input {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.auth-card button {
+  margin-top: 1.2rem;
+  padding: 0.65rem 1rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-card button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+.auth-error {
+  margin: 0.8rem 0 0;
+  padding: 0.6rem 0.7rem;
+  border-radius: 8px;
+  background: var(--danger-bg, #fee);
+  color: var(--danger-fg, #900);
+  font-size: 0.9rem;
+}
+.auth-hint {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+.auth-alt {
+  margin: 1rem 0 0;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+/* --- App chrome: project switcher and account controls (ADR-049) ---------------------- */
+.app-nav-account {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+.project-switcher select {
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.85rem;
+}
+.app-nav-user {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+.app-nav-signout {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.app-nav-link.is-active {
+  font-weight: 600;
+  text-decoration: underline;
+}
+.page-state {
+  padding: 2rem;
+  opacity: 0.75;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* --- Usage screen (FR-061) ------------------------------------------------------------ */
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1rem;
+  margin: 1rem 0 2rem;
+}
+.usage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.usage-card-label { font-size: 0.85rem; opacity: 0.75; }
+.usage-card-value { font-size: 1.6rem; font-weight: 600; }
+.usage-card-limit { font-size: 0.8rem; opacity: 0.7; }
+.usage-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; margin-top: 0.4rem; }
+.usage-bar-fill { height: 100%; background: var(--accent); }
+.usage-cost { font-size: 1.6rem; font-weight: 600; margin: 0.2rem 0; }
+.page-subtitle { opacity: 0.75; margin-top: 0.2rem; }

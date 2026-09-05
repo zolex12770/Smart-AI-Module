@@ -13,13 +13,15 @@ import type {
   VideoProjectRepository,
   VideoSceneRepository,
 } from "@ai-platform/database";
-import type { EmbeddingProvider } from "@ai-platform/embeddings";
+import type { EmbeddingService } from "@ai-platform/embeddings";
 import type { JobQueue } from "@ai-platform/jobs";
 import type { AssetStore } from "@ai-platform/media";
 import type { ModelRouter } from "@ai-platform/model-router";
 import type { QuotaManager } from "@ai-platform/quota";
 import type { MalwareScanner } from "@ai-platform/scanning";
 import type { ToolRegistry } from "@ai-platform/tools";
+import type { AuthService } from "@ai-platform/security";
+import type { ExecutionSandbox } from "@ai-platform/security";
 
 /**
  * Composition-root context passed into route registration — plain constructor
@@ -37,7 +39,7 @@ export interface AppContext {
   documents: DocumentRepository;
   documentChunks: DocumentChunkRepository;
   memoryItems: MemoryItemRepository;
-  embeddings: EmbeddingProvider;
+  embeddings: EmbeddingService;
   sandboxRoot: string;
   jobQueue: JobQueue;
   assets: AssetRepository;
@@ -59,4 +61,18 @@ export interface AppContext {
    * (ADR-013): the routes refuse with a 503 instead of queueing work no worker will do.
    * docs/26_DECISIONS.md ADR-045. */
   mediaGenerationAvailable: boolean;
+
+  // --- identity, tenancy and isolation (ADR-049 / ADR-055) -------------------------------
+  /** The single authentication and authorization decision point. */
+  auth: AuthService;
+  /** Session cookies are Secure in production; false allows plain-HTTP local development. */
+  cookieSecure: boolean;
+  /** Container-isolated when configured; process-isolated (env-scrubbed, kill-on-timeout)
+   * otherwise. Every agent-initiated command execution goes through this. */
+  sandbox: ExecutionSandbox;
+  /** Hard ceilings the model cannot raise (ADR-057). */
+  agentLimits: { maxIterations: number; maxTokensPerRun: number };
+  /** True when a real (non-fallback) embedding model is configured, so RAG can report
+   * honestly whether retrieval is semantic or lexical. */
+  semanticEmbeddingsAvailable: boolean;
 }

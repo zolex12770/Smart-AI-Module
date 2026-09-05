@@ -22,11 +22,12 @@ import {
   PgVideoSceneRepository,
   PgUsageRecordRepository,
 } from "@ai-platform/database";
-import { HashEmbeddingProvider } from "@ai-platform/embeddings";
+import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MockImageProvider } from "@ai-platform/image-mock";
 import { fromPglite, JobQueue, type JobQueueOptions } from "@ai-platform/jobs";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
+import { LocalEmbeddingProvider, LocalOpenAICompatibleProvider } from "@ai-platform/llm-local";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { OpenAIProvider } from "@ai-platform/llm-openai";
 import { connectMcpServer } from "@ai-platform/mcp";
@@ -43,12 +44,15 @@ import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/o
 import { QuotaManager } from "@ai-platform/quota";
 import { createRagTools, processDocumentIngestion, processDocumentScan } from "@ai-platform/rag";
 import { ClamAvScanner, type MalwareScanner } from "@ai-platform/scanning";
+import { AuthService, createSandbox, type ExecutionSandbox } from "@ai-platform/security";
+import { signupRequestSchema, type EmbeddingProvider } from "@ai-platform/shared";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { MockVideoProvider } from "@ai-platform/video-mock";
 import { v4 as uuid } from "uuid";
+import { z } from "zod";
 import { loadConfig, type AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
-import { roleRuns } from "./role.js";
+import { roleRuns, type RoleResponsibilities } from "./role.js";
 import { buildServer } from "./server.js";
 
 /**
@@ -77,28 +81,78 @@ async function connectDatabase(
   };
 }
 
-async function main() {
-  const config = loadConfig();
-  const runs = roleRuns(config.ROLE);
+// --- job payloads -----------------------------------------------------------------------
 
-  // docs/20_OBSERVABILITY.md — must happen before anything else logs or traces, so no
-  // early-boot line is missed and the tracer provider is registered before any span-creating
-  // code path (job workers registered below, request handlers once the server starts) runs.
-  // The service name follows the role (ADR-039) so a worker pool's logs/spans are attributable
-  // as "worker", not misfiled under "api", once the two run as separate Cloud Run units.
-  const serviceName = config.ROLE === "worker" ? "worker" : "api";
-  initTracing(serviceName);
-  const logger = createLogger(serviceName);
-  logger.info({ role: config.ROLE, http: runs.http, workers: runs.workers }, "booting");
+/**
+ * Every job payload now carries the tenant `projectId` — docs/26_DECISIONS.md ADR-049.
+ *
+ * This is not decoration. Every repository a worker touches takes `projectId` as its first
+ * argument and puts it in the SQL `WHERE` (see PgDocumentRepository's own docstring): there
+ * is deliberately no longer a `documents.get(id)` to call, so the ownership check a worker
+ * might forget cannot be forgotten. But a background job has no request and no session to
+ * derive scope from, so the scope has to travel *with* the job — the enqueueing route
+ * resolved it from the caller's `AuthContext`, and it is carried through verbatim.
+ *
+ * `userId` travels for the same reason: `usage_records.user_id` attributes spend to the
+ * person who asked for it, and a worker cannot otherwise know who that was. It is nullable
+ * because some work genuinely has no user behind it (a scheduled re-index, say).
+ *
+ * These are parsed with zod rather than trusted as a typed generic. A job payload is
+ * persisted JSON written by a *different* process — possibly an older deployment mid-rollout
+ * — so it is exactly as untrusted as an HTTP body. A payload missing its scope fails here
+ * with a message that names the field, instead of reaching Drizzle as `undefined` and
+ * surfacing as an opaque SQL error several frames away.
+ */
+const jobScopeSchema = z.object({
+  projectId: z.string().min(1, "job payload is missing projectId (ADR-049 tenant scope)"),
+  /** Present when a user asked for this work; null/absent for platform-initiated jobs. */
+  userId: z.string().min(1).nullish(),
+  /** docs/20_OBSERVABILITY.md §3.2 — the enqueueing request, for log/trace correlation. */
+  requestId: z.string().min(1).optional(),
+});
 
-  const { db, jobQueueOptions, close: closeDb } = await connectDatabase(config);
+const documentJobSchema = jobScopeSchema.extend({ documentId: z.string().min(1) });
+const imageJobSchema = jobScopeSchema.extend({ generationId: z.string().min(1) });
+/**
+ * `videoProjectId` is the long-form video, NOT the tenant project — ADR-049 renamed that
+ * column precisely because the two would otherwise collide on the one table where `projectId`
+ * meant something else (see `VideoScene.videoProjectId`). Both ids are needed on the payload:
+ * one selects the parent, the other proves the caller may see it.
+ */
+const videoSceneJobSchema = jobScopeSchema.extend({
+  videoProjectId: z.string().min(1),
+  sceneId: z.string().min(1),
+});
+const videoRenderJobSchema = jobScopeSchema.extend({ videoProjectId: z.string().min(1) });
 
-  const registry = new ModelRegistry();
+/**
+ * Registers the platform's LLM providers, in priority order — docs/26_DECISIONS.md ADR-056.
+ *
+ * The order is the architectural statement. A self-hosted OpenAI-compatible runtime is the
+ * *default* when one is configured, not a fallback for when the hosted keys are missing: the
+ * platform's independence from any single vendor is only real if the independent path is the
+ * one that actually runs (product brief §7). A hosted key present alongside it is an escape
+ * hatch for capabilities the local model lacks, not a silent upgrade.
+ */
+function registerLlmProviders(config: AppConfig, registry: ModelRegistry, logger: Logger): void {
+  // 1. Self-hosted runtime — Ollama, vLLM, llama.cpp's server, LM Studio, or any
+  //    OpenAI-compatible gateway. No third-party account involved.
+  if (config.LLM_BASE_URL && config.LLM_MODEL) {
+    registry.register(
+      new LocalOpenAICompatibleProvider({
+        baseUrl: config.LLM_BASE_URL,
+        model: config.LLM_MODEL,
+        apiKey: config.LLM_API_KEY,
+        contextWindow: config.LLM_CONTEXT_WINDOW,
+        supportsTools: config.LLM_SUPPORTS_TOOLS,
+      }),
+      { asDefault: true }
+    );
+  }
 
-  // Real adapters register only when their API key is present (docs/26_DECISIONS.md
-  // ADR-010); each has been fixture-tested and confirmed to reach its live endpoint
-  // correctly, not full-success-tested (ADR-023/024) — the mock registers
-  // unconditionally as both the zero-credential default and a safety net.
+  // 2-4. Hosted adapters, each registering only when its key is present (ADR-010). Each has
+  // been fixture-tested and confirmed to reach its live endpoint correctly, not
+  // full-success-tested (ADR-023/024).
   if (config.ANTHROPIC_API_KEY) {
     registry.register(new AnthropicProvider({ apiKey: config.ANTHROPIC_API_KEY }));
   }
@@ -119,49 +173,169 @@ async function main() {
     registry.register(new GoogleProvider({ apiKey: googleApiKey }));
   }
 
-  const hasRealProvider = Boolean(config.ANTHROPIC_API_KEY || config.OPENAI_API_KEY || googleApiKey);
-  // ADR-013 says the mock must never serve traffic in production. It was implemented as a
-  // throw in MockLLMProvider's constructor — but this line constructed one unconditionally,
-  // so a production boot died here even WITH a valid real key: the deployed image sets
-  // NODE_ENV=production (apps/api/Dockerfile), which made every container un-bootable. Never
-  // caught because no image has ever been built or run (ADR-037). ADR-045 keeps the rule and
-  // fixes the enforcement: in production the mock is simply never constructed, and the
-  // no-real-provider case fails with a message that says what to do about it.
-  if (config.NODE_ENV === "production") {
-    if (!hasRealProvider) {
-      throw new Error(
-        "No real LLM provider is configured and the mock provider is refused when NODE_ENV=production " +
-          "(docs/26_DECISIONS.md ADR-013). Set ANTHROPIC_API_KEY, OPENAI_API_KEY or GOOGLE_API_KEY."
-      );
-    }
+  // 5. The mock. ADR-013 says it must never serve production traffic; ADR-045 turned that
+  // from a constructor throw (which killed every production boot, even with a valid key) into
+  // "never constructed in production". Outside production it stays the zero-configuration
+  // default so the platform runs with no credentials at all — but only as the default when
+  // nothing real is registered, so a configured runtime is never shadowed by it.
+  if (config.NODE_ENV !== "production") {
+    registry.register(new MockLLMProvider(), { asDefault: registry.list().length === 0 });
   } else {
-    registry.register(new MockLLMProvider(), { asDefault: !hasRealProvider });
+    logger.info("mock LLM provider NOT registered — NODE_ENV=production (ADR-013)");
+  }
+}
+
+async function main() {
+  const config = loadConfig();
+  const runs = roleRuns(config.ROLE);
+
+  // docs/20_OBSERVABILITY.md — must happen before anything else logs or traces, so no
+  // early-boot line is missed and the tracer provider is registered before any span-creating
+  // code path (job workers registered below, request handlers once the server starts) runs.
+  // The service name follows the role (ADR-039) so a worker pool's logs/spans are attributable
+  // as "worker", not misfiled under "api", once the two run as separate Cloud Run units.
+  const serviceName = config.ROLE === "worker" ? "worker" : "api";
+  initTracing(serviceName);
+  const logger = createLogger(serviceName);
+  logger.info({ role: config.ROLE, http: runs.http, workers: runs.workers }, "booting");
+
+  const { db, jobQueueOptions, close: closeDb } = await connectDatabase(config);
+
+  // --- identity and tenancy (ADR-049) ----------------------------------------------------
+  // The single authentication/authorization decision point for this process, constructed
+  // before anything that can serve or process user data. After ADR-049 there is no such thing
+  // as unattributed work: the hardcoded `local-user` owner every row used to carry is gone,
+  // and ownership now comes from an AuthContext resolved here, or from nowhere at all.
+  const authService = new AuthService(db, { sessionTtlMs: config.SESSION_TTL_DAYS * 86_400_000 });
+  await bootstrapFirstAdmin(config, authService, runs, logger);
+
+  const registry = new ModelRegistry();
+  registerLlmProviders(config, registry, logger);
+  const chatProviderCount = registry.list().length;
+
+  /**
+   * The production boot gate — narrowed to the processes it actually applies to (ADR-056).
+   *
+   * The previous rule was "production with no hosted LLM key cannot boot". That crash-looped
+   * the deployed worker pool, which deliberately has no LLM key and needs none: a worker
+   * serves no chat, runs no agent engine, and never asks the router for anything — it ingests
+   * documents and renders media. Refusing to start it over a capability it never exercises is
+   * the same class of bug ADR-045 fixed for the mock provider: a check placed where a
+   * capability is *configured* rather than where it is *needed*.
+   *
+   * `runs.http` is that place. Only a process that will serve chat and run the agent loop
+   * requires a provider to serve it with.
+   */
+  if (config.NODE_ENV === "production" && runs.http && chatProviderCount === 0) {
+    throw new Error(
+      "This process serves chat but no LLM provider is configured, and the mock provider may not run in " +
+        "production (docs/26_DECISIONS.md ADR-013/ADR-056). Either point the platform at a self-hosted " +
+        "OpenAI-compatible runtime by setting LLM_BASE_URL and LLM_MODEL (Ollama, vLLM, llama.cpp, LM Studio " +
+        "or any compatible gateway — no third-party account required), or supply one of ANTHROPIC_API_KEY, " +
+        "OPENAI_API_KEY or GOOGLE_API_KEY."
+    );
   }
 
   // ADR-045: without this, a reader who dropped a key into `.env` had no way to confirm it
   // took effect short of sending a chat and inferring from the answer — the exact ambiguity
-  // that hid the alias bug above.
+  // that hid the alias bug above. `getDefault()` is only consulted when something is
+  // registered: the worker role legitimately boots with zero providers, and it throws on empty.
   logger.info(
     {
       providers: registry.list().map((p) => p.name),
-      default: registry.getDefault().name,
-      real_provider_configured: hasRealProvider,
+      default: chatProviderCount > 0 ? registry.getDefault().name : null,
+      self_hosted_runtime: Boolean(config.LLM_BASE_URL && config.LLM_MODEL),
+      serves_chat: runs.http,
     },
-    hasRealProvider ? "LLM providers registered" : "LLM providers registered — NO real provider key found, the mock will answer"
+    chatProviderCount > 0
+      ? "LLM providers registered"
+      : "no LLM provider registered — expected for a worker-role process, fatal for one that serves chat"
   );
 
   const sandboxRoot = resolve(config.SANDBOX_ROOT);
   mkdirSync(sandboxRoot, { recursive: true });
   const assetsRoot = resolve(config.ASSETS_ROOT);
   mkdirSync(assetsRoot, { recursive: true });
+
+  // --- command execution isolation (ADR-055) ---------------------------------------------
+  // Every command the agent chooses to run goes through this one object. `createSandbox`
+  // refuses to downgrade silently: asking for docker and not getting it is an error, never a
+  // quiet fall back to a weaker sandbox nobody asked for.
+  const sandbox: ExecutionSandbox = await createSandbox({
+    root: sandboxRoot,
+    runtime: config.SANDBOX_RUNTIME,
+    image: config.SANDBOX_IMAGE,
+  });
+  // Role-scoped, for the same reason the provider gate is: this guard asks "will THIS process
+  // execute a command a model chose?", and only a process running the agent engine does. The
+  // engine lives behind the HTTP role (`runs.http`); the worker pool runs ingestion, scanning
+  // and media jobs, none of which execute arbitrary commands, so demanding container isolation
+  // there would block a deployment on a risk that unit genuinely does not carry. A worker that
+  // one day gains a command-executing job type gets this guard the moment it also gains the
+  // engine.
+  if (
+    config.NODE_ENV === "production" &&
+    runs.http &&
+    sandbox.isolation === "process" &&
+    !config.SANDBOX_ALLOW_PROCESS_IN_PRODUCTION
+  ) {
+    throw new Error(
+      "Refusing to start in production with process-level sandbox isolation. The agent executes commands " +
+        "chosen by a model; process isolation scrubs the environment and really does kill the process tree " +
+        "on timeout, but it shares the host's network and filesystem, so a command that escapes the " +
+        "workspace reaches the host (docs/13_SECURITY_ARCHITECTURE.md §6, ADR-055). Set SANDBOX_RUNTIME=docker " +
+        "for real container isolation, or SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true to accept this explicitly."
+    );
+  }
+  logger.info(
+    { isolation: sandbox.isolation, image: sandbox.isolation === "docker" ? config.SANDBOX_IMAGE : null, sandboxRoot },
+    sandbox.isolation === "docker"
+      ? "sandbox: container isolation (no network, read-only root, dropped capabilities, pid/memory caps)"
+      : "SANDBOX: PROCESS ISOLATION ONLY — model-chosen commands share the host network and filesystem (ADR-055)"
+  );
+
   const toolRegistry = new ToolRegistry();
 
   const documents = new PgDocumentRepository(db);
   const documentChunks = new PgDocumentChunkRepository(db);
-  const embeddings = new HashEmbeddingProvider();
 
-  // FR-063 (docs/22_COST_AND_QUOTA_STRATEGY.md) — single-operator scope (ADR-008), so these
-  // are global limits read straight from config; all optional (unset = no limit).
+  // --- embeddings (ADR-048 / ADR-056) ----------------------------------------------------
+  // Two providers behind one boundary. The hash provider is a real, deterministic *lexical*
+  // embedding (ADR-026) — it finds chunks that share vocabulary, not chunks that mean the same
+  // thing — and the platform must never imply otherwise, which is why the choice is logged in
+  // capitals and surfaced to callers as `semanticEmbeddingsAvailable`. Pointing
+  // EMBEDDING_BASE_URL at the same self-hosted runtime that serves chat gives real semantic
+  // retrieval with no hosted provider at all.
+  const embeddingProvider: EmbeddingProvider =
+    config.EMBEDDING_BASE_URL && config.EMBEDDING_MODEL
+      ? new LocalEmbeddingProvider({
+          baseUrl: config.EMBEDDING_BASE_URL,
+          model: config.EMBEDDING_MODEL,
+          // The declared width is metadata only: EmbeddingService zero-pads every vector to
+          // the column width, which is exact for cosine distance. 768 is the most common
+          // self-hosted default (nomic-embed-text, all-mpnet-base-v2).
+          dimensions: config.EMBEDDING_DIMENSIONS ?? 768,
+          apiKey: config.EMBEDDING_API_KEY,
+        })
+      : new HashEmbeddingProvider();
+  const embeddings = new EmbeddingService(embeddingProvider);
+  const semanticEmbeddingsAvailable = !embeddingProvider.isDeterministicFallback;
+  logger.info(
+    {
+      provider: embeddingProvider.name,
+      model: embeddingProvider.model,
+      dimensions: embeddingProvider.dimensions,
+      semantic: semanticEmbeddingsAvailable,
+    },
+    semanticEmbeddingsAvailable
+      ? "embeddings: a real semantic model is configured"
+      : "EMBEDDINGS ARE LEXICAL, NOT SEMANTIC — the deterministic feature-hash fallback is active (ADR-026), so " +
+          "retrieval matches shared vocabulary rather than meaning. Set EMBEDDING_BASE_URL and EMBEDDING_MODEL for real semantics"
+  );
+
+  // FR-063 (docs/22_COST_AND_QUOTA_STRATEGY.md) — the limits are still deployment-wide values
+  // read from config; what ADR-049 changed is that the *usage* they are measured against is
+  // counted per project, so one tenant can no longer exhaust another tenant's budget.
   const usage = new PgUsageRecordRepository(db);
   const quota = new QuotaManager(usage, {
     dailyTokenLimit: config.DAILY_TOKEN_LIMIT,
@@ -187,11 +361,14 @@ async function main() {
     logger.warn("UPLOAD MALWARE SCANNING DISABLED — no CLAMD_HOST configured; uploads are accepted unscanned and marked scan_status=skipped_no_scanner (docs/13 §12, ADR-042)");
   }
 
+  // The RAG tools take the EmbeddingService, not the raw provider: a query vector must be
+  // padded to the column width and tagged with the same model as the stored vectors, or the
+  // cosine comparison is against a different space entirely (ADR-048).
   for (const { definition, handler } of [
     ...createFilesystemTools(sandboxRoot),
     ...createTerminalTools(sandboxRoot),
     ...createCodingTools(sandboxRoot),
-    ...createRagTools({ chunkRepo: documentChunks, embeddings }),
+    ...createRagTools({ chunkRepo: documentChunks, documentRepo: documents, embeddings }),
   ]) {
     toolRegistry.register(definition, handler);
   }
@@ -258,55 +435,78 @@ async function main() {
   if (runs.workers) {
     if (scanner) {
       const activeScanner = scanner;
-      await jobQueue.registerWorker<{ documentId: string; requestId?: string }>(
-        "document.scan",
-        async ({ documentId, requestId }) =>
-          runJob(logger, { queue: "document.scan", jobId: documentId, requestId }, async () => {
-            const outcome = await processDocumentScan(
-              { documentRepo: documents, assetRepo: assets, assetStore, scanner: activeScanner, jobQueue },
-              documentId,
-              requestId
-            );
-            logger.info({ request_id: requestId, job_id: documentId, scanner: activeScanner.name, outcome }, "upload scan completed");
-          })
-      );
+      await jobQueue.registerWorker<unknown>("document.scan", async (raw) => {
+        const { projectId, documentId, requestId } = documentJobSchema.parse(raw);
+        await runJob(logger, { queue: "document.scan", jobId: documentId, projectId, requestId }, async () => {
+          const outcome = await processDocumentScan(
+            { documentRepo: documents, assetRepo: assets, assetStore, scanner: activeScanner, jobQueue },
+            projectId,
+            documentId,
+            requestId
+          );
+          logger.info(
+            { request_id: requestId, job_id: documentId, project_id: projectId, scanner: activeScanner.name, outcome },
+            "upload scan completed"
+          );
+        });
+      });
     }
 
-    await jobQueue.registerWorker<{ documentId: string; requestId?: string }>(
-      "document.ingest",
-      async ({ documentId, requestId }) =>
-        runJob(logger, { queue: "document.ingest", jobId: documentId, requestId }, async () => {
-          const document = await documents.get(documentId);
-          if (!document) throw new Error(`document.ingest job referenced unknown document "${documentId}".`);
-          await processDocumentIngestion(
-            { documentRepo: documents, chunkRepo: documentChunks, embeddings, sandboxRoot, assetRepo: assets, assetStore },
-            document
-          );
-        })
-    );
+    await jobQueue.registerWorker<unknown>("document.ingest", async (raw) => {
+      const { projectId, documentId, requestId } = documentJobSchema.parse(raw);
+      await runJob(logger, { queue: "document.ingest", jobId: documentId, projectId, requestId }, async () => {
+        // Scoped read (ADR-049). A document id belonging to another project resolves to "not
+        // found" right here rather than being fetched and then checked, so a job whose payload
+        // names the wrong project simply finds nothing — there is no ownership comparison for
+        // this worker to get wrong.
+        const document = await documents.get(projectId, documentId);
+        if (!document) {
+          throw new Error(`document.ingest job referenced unknown document "${documentId}" in project "${projectId}".`);
+        }
+        await processDocumentIngestion(
+          {
+            documentRepo: documents,
+            chunkRepo: documentChunks,
+            embeddings,
+            sandboxRoot,
+            assetRepo: assets,
+            assetStore,
+          },
+          document
+        );
+      });
+    });
 
     if (imageProvider)
-    await jobQueue.registerWorker<{ generationId: string; requestId?: string }>(
-      "image.generate",
-      async ({ generationId, requestId }) =>
-        runJob(logger, { queue: "image.generate", jobId: generationId, requestId }, async () => {
-          await processImageGeneration({ generationRepo: imageGenerations, assetStore, provider: imageProvider }, generationId);
-          const generation = await imageGenerations.get(generationId);
+      await jobQueue.registerWorker<unknown>("image.generate", async (raw) => {
+        const { projectId, userId, generationId, requestId } = imageJobSchema.parse(raw);
+        await runJob(logger, { queue: "image.generate", jobId: generationId, projectId, requestId }, async () => {
+          await processImageGeneration(
+            { generationRepo: imageGenerations, assetStore, provider: imageProvider },
+            projectId,
+            generationId
+          );
+          const generation = await imageGenerations.get(projectId, generationId);
           logger.info(
             {
               request_id: requestId,
               job_id: generationId,
+              project_id: projectId,
               provider: generation?.providerName ?? imageProvider.name,
               status: generation?.status === "succeeded" ? "success" : "error",
             },
             "provider call completed"
           );
           // FR-061/FR-063 — recorded only on real success; a failed generation never happened,
-          // so it shouldn't consume the daily image quota. estimatedCostUsd is null (docs/22:
-          // image cost estimation needs a real image provider, ADR-009 — this stays mock-only).
+          // so it shouldn't consume the project's daily image quota. estimatedCostUsd is null
+          // (docs/22: image cost estimation needs a real image provider, ADR-009 — this stays
+          // mock-only). The generation id is the natural key (ADR-054): a job retried after its
+          // usage row was already written cannot charge the project a second time.
           if (generation?.status === "succeeded") {
             await usage.create({
               id: uuid(),
+              projectId,
+              userId: userId ?? null,
               kind: "image",
               provider: generation.providerName ?? imageProvider.name,
               model: null,
@@ -315,52 +515,65 @@ async function main() {
               units: 1,
               estimatedCostUsd: null,
               requestId: requestId ?? null,
+              idempotencyKey: `image.generate:${generationId}`,
             });
           }
-        })
-    );
+        });
+      });
 
     if (videoProvider)
-    await jobQueue.registerWorker<{ sceneId: string; requestId?: string }>(
-      "video.generate_scene",
-      async ({ sceneId, requestId }) =>
-        runJob(logger, { queue: "video.generate_scene", jobId: sceneId, requestId }, async () => {
-          await processVideoScene(
-            { projectRepo: videoProjects, sceneRepo: videoScenes, jobQueue, assetStore, provider: videoProvider },
-            sceneId,
-            requestId
-          );
-          // FR-061/FR-063 — recorded per scene (the real unit of work), only on real success,
-          // same reasoning as the image job above. estimatedCostUsd is null (mock-only, ADR-009).
-          const scene = await videoScenes.get(sceneId);
-          if (scene?.status === "succeeded") {
-            await usage.create({
-              id: uuid(),
-              kind: "video",
-              provider: videoProvider.name,
-              model: null,
-              inputTokens: null,
-              outputTokens: null,
-              units: scene.durationSeconds,
-              estimatedCostUsd: null,
-              requestId: requestId ?? null,
-            });
-          }
-        }),
-      { localConcurrency: 3 }
-    );
+      await jobQueue.registerWorker<unknown>(
+        "video.generate_scene",
+        async (raw) => {
+          const { projectId, userId, videoProjectId, sceneId, requestId } = videoSceneJobSchema.parse(raw);
+          await runJob(logger, { queue: "video.generate_scene", jobId: sceneId, projectId, requestId }, async () => {
+            await processVideoScene(
+              { projectRepo: videoProjects, sceneRepo: videoScenes, jobQueue, assetStore, provider: videoProvider },
+              { projectId, videoProjectId },
+              sceneId,
+              requestId
+            );
+            // FR-061/FR-063 — recorded per scene (the real unit of work), only on real success,
+            // for the same reason as the image job above. A scene is read through its parent
+            // video project *and* the tenant project: scenes carry no project_id of their own
+            // (ADR-049), so the scope object is what turns this read into an access control.
+            const scene = await videoScenes.get({ projectId, videoProjectId }, sceneId);
+            if (scene?.status === "succeeded") {
+              await usage.create({
+                id: uuid(),
+                projectId,
+                userId: userId ?? null,
+                kind: "video",
+                provider: videoProvider.name,
+                model: null,
+                inputTokens: null,
+                outputTokens: null,
+                units: scene.durationSeconds,
+                estimatedCostUsd: null,
+                requestId: requestId ?? null,
+                // ADR-054's own worked example: re-running orchestration re-enqueues `pending`
+                // scenes, and this key is what stops that from billing the project twice.
+                idempotencyKey: `video.scene:${sceneId}`,
+              });
+            }
+          });
+        },
+        { localConcurrency: 3 }
+      );
 
-    await jobQueue.registerWorker<{ projectId: string; requestId?: string }>(
-      "video.render",
-      async ({ projectId, requestId }) =>
-        runJob(logger, { queue: "video.render", jobId: projectId, requestId }, async () => {
-          await processVideoRender(
-            { projectRepo: videoProjects, sceneRepo: videoScenes, assetRepo: assets, assetStore, ffmpegPath: config.FFMPEG_PATH },
-            projectId
-          );
-        })
+    await jobQueue.registerWorker<unknown>("video.render", async (raw) => {
+      const { projectId, videoProjectId, requestId } = videoRenderJobSchema.parse(raw);
+      await runJob(logger, { queue: "video.render", jobId: videoProjectId, projectId, requestId }, async () => {
+        await processVideoRender(
+          { projectRepo: videoProjects, sceneRepo: videoScenes, assetRepo: assets, assetStore, ffmpegPath: config.FFMPEG_PATH },
+          { projectId, videoProjectId }
+        );
+      });
+    });
+    logger.info(
+      { queues: ["document.scan", "document.ingest", "image.generate", "video.generate_scene", "video.render"] },
+      "job workers registered"
     );
-    logger.info({ queues: ["document.ingest", "image.generate", "video.generate_scene", "video.render"] }, "job workers registered");
   } else {
     logger.info("api role: job workers NOT registered in this process — jobs are enqueued here and processed by a worker-role process");
   }
@@ -369,8 +582,8 @@ async function main() {
   // pool has no ingress, so there is nothing to listen for. The process stays alive on
   // pg-boss's own polling loop until a shutdown signal arrives.
   if (!runs.http) {
-    logger.info("worker role: no HTTP listener started");
     installGracefulShutdown(logger, [() => jobQueue.stop(), closeDb]);
+    logger.info("worker role: no HTTP listener started");
     return;
   }
 
@@ -388,12 +601,14 @@ async function main() {
       args: [serverEntry, sandboxRoot],
       cwd: sandboxRoot,
     });
-    console.log(
-      `Connected MCP server "${mcp.serverId}" — discovered ${mcp.toolIds.length} tool(s), ` +
-        `registered disabled pending explicit enable: ${mcp.toolIds.join(", ")}`
+    // Through the structured logger, not console.log: these two lines were the only boot
+    // output that never reached the log pipeline (docs/20 §1.1).
+    logger.info(
+      { server_id: mcp.serverId, tools: mcp.toolIds },
+      `connected MCP server "${mcp.serverId}" — ${mcp.toolIds.length} tool(s) discovered, registered disabled pending explicit enable`
     );
   } catch (err) {
-    console.warn("MCP reference server connection failed (continuing without it):", err);
+    logger.warn({ err }, "MCP reference server connection failed (continuing without it)");
   }
 
   const tasks = new PgTaskRepository(db);
@@ -415,10 +630,34 @@ async function main() {
     // docs/26_DECISIONS.md ADR-046 — the same quota gate and usage ledger the chat route
     // uses, so a real key's spend through agent tasks is bounded and visible too.
     meter: {
-      checkTokens: (estimatedTokens) => quota.checkLlmTokens(estimatedTokens),
+      checkTokens: async (estimatedTokens, { taskId }) => {
+        // Quota is per-project (ADR-049) and the meter is handed only ids, so the task row is
+        // the authority for which project is about to spend — the same resolution `record`
+        // does below, kept deliberately identical so the two can never disagree.
+        const task = await tasks.getUnscoped(taskId);
+        if (!task) return { allowed: false, reason: `Task "${taskId}" no longer exists.` };
+        return quota.checkLlmTokens(task.projectId, estimatedTokens);
+      },
       record: async ({ provider, model, inputTokens, outputTokens, taskId, nodeId }) => {
+        // ADR-049: a usage row must name the project that spent. The meter callback carries
+        // only task and node ids — a task node is not an HTTP request and has no AuthContext
+        // to read — so the task row is the authority. `getUnscoped` exists for exactly this
+        // case: a system-internal read whose id came from the engine's own execution, never
+        // from a caller, and which by definition spans every project.
+        const task = await tasks.getUnscoped(taskId);
+        if (!task) {
+          // Real spend we cannot attribute. Dropping it silently would understate a project's
+          // usage and quietly widen its quota, so it is surfaced at error level instead.
+          logger.error(
+            { task_id: taskId, node_id: nodeId, provider, model, tokens_input: inputTokens, tokens_output: outputTokens },
+            "model call could not be charged: its task row is gone, so the spending project is unknown"
+          );
+          return;
+        }
         await usage.create({
           id: uuid(),
+          projectId: task.projectId,
+          userId: task.createdByUserId,
           kind: "llm",
           provider,
           model,
@@ -429,9 +668,21 @@ async function main() {
           // No HTTP request id here: the call originates from a task node, not a request.
           // The node id is the durable identifier an operator would trace it back by.
           requestId: nodeId,
+          // ADR-054 — one model call per model_call node, so the node is the natural key for
+          // this charge: a node re-executed by crash recovery cannot bill the project twice.
+          idempotencyKey: `agent.node:${nodeId}`,
         });
         logger.info(
-          { task_id: taskId, node_id: nodeId, provider, model, tokens_input: inputTokens, tokens_output: outputTokens, status: "success" },
+          {
+            task_id: taskId,
+            node_id: nodeId,
+            project_id: task.projectId,
+            provider,
+            model,
+            tokens_input: inputTokens,
+            tokens_output: outputTokens,
+            status: "success",
+          },
           "provider call completed"
         );
       },
@@ -473,13 +724,79 @@ async function main() {
     scanner,
     uploadScanRequired: config.UPLOAD_SCAN_REQUIRED,
     mediaGenerationAvailable,
+
+    // --- identity, isolation and limits (ADR-049 / ADR-055 / ADR-057) --------------------
+    auth: authService,
+    // A Secure cookie is mandatory over HTTPS and impossible over plain-HTTP localhost, so
+    // the default follows NODE_ENV. COOKIE_SECURE exists only to override that for the
+    // unusual case (a production-mode process behind a local TLS-terminating proxy).
+    cookieSecure: config.COOKIE_SECURE ? config.COOKIE_SECURE === "true" : config.NODE_ENV === "production",
+    sandbox,
+    // Ceilings the model cannot raise. They live on the context rather than inside the loop
+    // so an operator can see and change the bound without editing agent code.
+    agentLimits: { maxIterations: config.AGENT_MAX_ITERATIONS, maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN },
+    semanticEmbeddingsAvailable,
   };
 
   const app = await buildServer(config, ctx, logger);
 
-  await app.listen({ port: config.PORT, host: "0.0.0.0" });
-
+  // Installed BEFORE `listen()`, not after — an audit finding, not a style preference. This
+  // used to be the last statement in `main()`, which left a real window: a SIGTERM arriving
+  // while the server was still binding hit Node's default handler and killed the process
+  // outright — no `app.close()`, no `jobQueue.stop()`, and, worst of all for PGlite, no clean
+  // database close (see `installGracefulShutdown` for why that specifically matters). Cloud
+  // Run sends exactly that signal to an instance it decides to stop mid-rollout, so the
+  // window was not hypothetical.
   installGracefulShutdown(logger, [() => app.close(), () => jobQueue.stop(), closeDb]);
+
+  await app.listen({ port: config.PORT, host: "0.0.0.0" });
+}
+
+/**
+ * Creates the first administrator on an empty database — docs/26_DECISIONS.md ADR-049.
+ *
+ * ADR-049 removed the hardcoded `local-user` owner, which means a freshly migrated database
+ * has no accounts at all and every endpoint answers 401. Without this there would be no way
+ * in except leaving signup open to the world. This closes that bootstrap gap without opening
+ * one: the account is created only when the users table is genuinely empty, so the two
+ * variables are inert on every subsequent boot and cannot be used to graft an administrator
+ * onto a live installation.
+ *
+ * The credential is validated by the same schema the signup endpoint uses, so a bootstrap
+ * password that would be rejected from outside is rejected here too — loudly, at boot —
+ * rather than silently creating a weak permanent administrator. It is never logged.
+ */
+async function bootstrapFirstAdmin(
+  config: AppConfig,
+  authService: AuthService,
+  runs: RoleResponsibilities,
+  logger: Logger
+): Promise<void> {
+  if (!config.BOOTSTRAP_ADMIN_EMAIL || !config.BOOTSTRAP_ADMIN_PASSWORD) return;
+  // Only the process that serves HTTP bootstraps. A worker pool cannot log anyone in, and two
+  // roles racing to create the same first account is a conflict with nothing to gain.
+  if (!runs.http) return;
+  if ((await authService.userCount()) > 0) return;
+
+  const parsed = signupRequestSchema.safeParse({
+    email: config.BOOTSTRAP_ADMIN_EMAIL,
+    password: config.BOOTSTRAP_ADMIN_PASSWORD,
+    displayName: "Administrator",
+  });
+  if (!parsed.success) {
+    throw new Error(
+      "BOOTSTRAP_ADMIN_EMAIL/BOOTSTRAP_ADMIN_PASSWORD are set but are not usable credentials (passwords must " +
+        `be at least 12 characters): ${parsed.error.issues.map((i) => `${i.path.join(".") || "value"}: ${i.message}`).join("; ")}`
+    );
+  }
+
+  const { user, projectId } = await authService.signup(parsed.data);
+  // Email and ids only. The password is never written anywhere, including here.
+  logger.warn(
+    { user_id: user.id, email: user.email, project_id: projectId },
+    "BOOTSTRAPPED THE FIRST ADMINISTRATOR from BOOTSTRAP_ADMIN_EMAIL/PASSWORD on an empty database — log in, " +
+      "then remove those variables from the environment"
+  );
 }
 
 /**
@@ -520,27 +837,50 @@ main().catch((err) => {
  * enqueueing HTTP request — see routes/v1/images.ts, videos.ts, rag.ts) is threaded through
  * both the trace and every log line the job produces, closing the "API → worker →
  * provider-call" correlation the roadmap's Phase 12 exit criterion asks for.
+ *
+ * `project_id` joined it with ADR-049: once more than one tenant exists, "which job failed"
+ * is not an answerable question without knowing whose job it was.
  */
 async function runJob<T>(
   jobLogger: Logger,
-  params: { queue: string; jobId: string; requestId?: string },
+  params: { queue: string; jobId: string; projectId: string; requestId?: string },
   fn: () => Promise<T>
 ): Promise<T> {
   const startedAt = Date.now();
   return withSpan(
     "job.process",
-    { "job.queue": params.queue, job_id: params.jobId, request_id: params.requestId ?? "" },
+    {
+      "job.queue": params.queue,
+      job_id: params.jobId,
+      project_id: params.projectId,
+      request_id: params.requestId ?? "",
+    },
     async () => {
       try {
         const result = await fn();
         jobLogger.info(
-          { request_id: params.requestId, job_id: params.jobId, queue: params.queue, latency_ms: Date.now() - startedAt, status: "success" },
+          {
+            request_id: params.requestId,
+            job_id: params.jobId,
+            project_id: params.projectId,
+            queue: params.queue,
+            latency_ms: Date.now() - startedAt,
+            status: "success",
+          },
           "job completed"
         );
         return result;
       } catch (err) {
         jobLogger.error(
-          { request_id: params.requestId, job_id: params.jobId, queue: params.queue, err, latency_ms: Date.now() - startedAt, status: "error" },
+          {
+            request_id: params.requestId,
+            job_id: params.jobId,
+            project_id: params.projectId,
+            queue: params.queue,
+            err,
+            latency_ms: Date.now() - startedAt,
+            status: "error",
+          },
           "job failed"
         );
         throw err;

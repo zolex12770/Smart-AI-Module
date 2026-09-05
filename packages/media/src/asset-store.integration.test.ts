@@ -3,8 +3,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Storage } from "@google-cloud/storage";
+import { v4 as uuid } from "uuid";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, PgAssetRepository, runMigrations, type PgliteDb } from "@ai-platform/database";
+import {
+  createDb,
+  organizations,
+  PgAssetRepository,
+  projects,
+  runMigrations,
+  type DrizzleDb,
+  type PgliteDb,
+} from "@ai-platform/database";
 import { LocalAssetStore } from "./asset-store.js";
 import { CloudStorageAssetStore, parseGsUri } from "./gcs-asset-store.js";
 
@@ -26,14 +35,32 @@ const EMULATOR_URL = `http://127.0.0.1:${EMULATOR_PORT}`;
 
 const PNG_LIKE_BYTES = Buffer.from("\x89PNG\r\n\x1a\n" + "x".repeat(2048), "latin1");
 
+/**
+ * A real tenant project to own the stored bytes (ADR-049). `assets.project_id` is a real FK,
+ * so this is not test decoration: without the row the insert the store performs would be
+ * rejected by Postgres.
+ */
+async function seedProject(db: DrizzleDb, name: string): Promise<string> {
+  const now = new Date();
+  const organizationId = uuid();
+  const projectId = uuid();
+  await db.insert(organizations).values({ id: organizationId, name: `${name} org`, createdAt: now, updatedAt: now });
+  await db.insert(projects).values({ id: projectId, organizationId, name, createdAt: now, updatedAt: now });
+  return projectId;
+}
+
 describe("LocalAssetStore (real disk + real assets row)", () => {
   let db: PgliteDb;
   let assetsRoot: string;
+  let projectId: string;
+  let otherProjectId: string;
 
   beforeAll(async () => {
     db = await createDb(":memory:");
     await runMigrations(db);
     assetsRoot = mkdtempSync(join(tmpdir(), "asset-store-test-"));
+    projectId = await seedProject(db, "asset-store");
+    otherProjectId = await seedProject(db, "another tenant");
   });
 
   afterAll(async () => {
@@ -41,17 +68,43 @@ describe("LocalAssetStore (real disk + real assets row)", () => {
     rmSync(assetsRoot, { recursive: true, force: true });
   });
 
-  it("stores bytes, records a row, and reads the same bytes back through the store", async () => {
+  it("stores bytes, records a row owned by the caller's project, and reads the same bytes back", async () => {
     const repo = new PgAssetRepository(db);
     const store = new LocalAssetStore(assetsRoot, repo);
 
-    const id = await store.store(PNG_LIKE_BYTES, "image/png", "png", "image");
-    const asset = await repo.get(id);
+    const id = await store.store(projectId, PNG_LIKE_BYTES, "image/png", "png", "image");
+    const asset = await repo.get(projectId, id);
 
     expect(asset).toBeDefined();
+    expect(asset!.projectId).toBe(projectId);
     expect(asset!.sizeBytes).toBe(PNG_LIKE_BYTES.length);
     expect(asset!.storagePath.startsWith(assetsRoot)).toBe(true);
     expect((await store.read(asset!)).equals(PNG_LIKE_BYTES)).toBe(true);
+  });
+
+  it("does not hand the row to another tenant's scope — the threaded projectId is what makes the read an access control", async () => {
+    const repo = new PgAssetRepository(db);
+    const store = new LocalAssetStore(assetsRoot, repo);
+
+    const id = await store.store(projectId, PNG_LIKE_BYTES, "image/png", "png", "image");
+
+    expect(await repo.get(otherProjectId, id)).toBeUndefined();
+    expect(await repo.get(null, id)).toBeUndefined(); // nor the pre-ADR-049 legacy scope
+  });
+
+  it("delete removes the bytes and the row under the row's own scope", async () => {
+    const repo = new PgAssetRepository(db);
+    const store = new LocalAssetStore(assetsRoot, repo);
+
+    const id = await store.store(projectId, PNG_LIKE_BYTES, "image/png", "png", "image");
+    const asset = (await repo.get(projectId, id))!;
+
+    await store.delete(asset);
+
+    expect(await repo.get(projectId, id)).toBeUndefined();
+    await expect(store.read(asset)).rejects.toThrow();
+    // Idempotent: a retried disposal job must not fail on bytes that are already gone.
+    await expect(store.delete(asset)).resolves.toBeUndefined();
   });
 });
 
@@ -79,10 +132,12 @@ describe.skipIf(!FAKE_GCS_BIN)("CloudStorageAssetStore (real client against a re
   let db: PgliteDb;
   let emulator: ChildProcess;
   let storage: Storage;
+  let projectId: string;
 
   beforeAll(async () => {
     db = await createDb(":memory:");
     await runMigrations(db);
+    projectId = await seedProject(db, "gcs-asset-store");
 
     emulator = spawn(
       FAKE_GCS_BIN as string,
@@ -126,10 +181,11 @@ describe.skipIf(!FAKE_GCS_BIN)("CloudStorageAssetStore (real client against a re
     const repo = new PgAssetRepository(db);
     const store = new CloudStorageAssetStore({ bucketName, storage }, repo);
 
-    const id = await store.store(PNG_LIKE_BYTES, "image/png", "png", "image");
-    const asset = await repo.get(id);
+    const id = await store.store(projectId, PNG_LIKE_BYTES, "image/png", "png", "image");
+    const asset = await repo.get(projectId, id);
 
     expect(asset).toBeDefined();
+    expect(asset!.projectId).toBe(projectId);
     expect(asset!.storagePath).toBe(`gs://${bucketName}/image/${id}.png`);
     expect(asset!.sizeBytes).toBe(PNG_LIKE_BYTES.length);
 
@@ -147,7 +203,7 @@ describe.skipIf(!FAKE_GCS_BIN)("CloudStorageAssetStore (real client against a re
     const repo = new PgAssetRepository(db);
     const store = new CloudStorageAssetStore({ bucketName: "no-such-bucket-xyz", storage }, repo);
 
-    await expect(store.store(PNG_LIKE_BYTES, "image/png", "png", "image")).rejects.toThrow();
+    await expect(store.store(projectId, PNG_LIKE_BYTES, "image/png", "png", "image")).rejects.toThrow();
   });
 
   it("round-trips through the exact production constructor path (apiEndpoint option, no injected client)", async () => {
@@ -158,8 +214,8 @@ describe.skipIf(!FAKE_GCS_BIN)("CloudStorageAssetStore (real client against a re
     const repo = new PgAssetRepository(db);
     const store = new CloudStorageAssetStore({ bucketName, apiEndpoint: EMULATOR_URL }, repo);
 
-    const id = await store.store(PNG_LIKE_BYTES, "image/png", "png", "image");
-    const asset = await repo.get(id);
+    const id = await store.store(projectId, PNG_LIKE_BYTES, "image/png", "png", "image");
+    const asset = await repo.get(projectId, id);
     expect((await store.read(asset!)).equals(PNG_LIKE_BYTES)).toBe(true);
   });
 
@@ -167,7 +223,7 @@ describe.skipIf(!FAKE_GCS_BIN)("CloudStorageAssetStore (real client against a re
     const repo = new PgAssetRepository(db);
     const store = new CloudStorageAssetStore({ bucketName, storage }, repo);
 
-    const id = await store.store(Buffer.from("GIF89a-ish"), "image/gif", "gif", "video");
-    expect((await repo.get(id))!.storagePath).toBe(`gs://${bucketName}/video/${id}.gif`);
+    const id = await store.store(projectId, Buffer.from("GIF89a-ish"), "image/gif", "gif", "video");
+    expect((await repo.get(projectId, id))!.storagePath).toBe(`gs://${bucketName}/video/${id}.gif`);
   });
 });

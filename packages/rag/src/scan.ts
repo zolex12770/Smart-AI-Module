@@ -7,8 +7,15 @@ export interface ScanAssetStore {
   read(asset: Asset): Promise<Buffer>;
   delete(asset: Asset): Promise<void>;
 }
+
+/** The `document.ingest` payload carries `projectId` too (ADR-049): the worker that picks the
+ * job up has no request context, so the tenant scope has to travel *in* the job — the only
+ * alternative is an unscoped read on the other side, which is the IDOR this closes. */
 export interface JobEnqueuer {
-  enqueue(queueName: string, payload: { documentId: string; requestId?: string }): Promise<unknown>;
+  enqueue(
+    queueName: string,
+    payload: { projectId: string; documentId: string; requestId?: string }
+  ): Promise<unknown>;
 }
 
 export interface ScanDeps {
@@ -35,32 +42,43 @@ export type ScanOutcome = "clean" | "infected" | "already_handled";
  * reached or errors, `scanner.scan` throws: the document stays `scanning`, pg-boss retries
  * per the queue's policy, and a scan that could not run is never reported as clean.
  * Idempotent on retry: a document no longer `scanning` is left alone.
+ *
+ * `projectId` comes from the job payload the upload route wrote, and every read and write
+ * below is scoped by it (ADR-049). An id from another project resolves to "unknown document"
+ * here rather than to a row this job would then be trusted to reject — and that matters more
+ * on this path than most, because the mutation at the end of it deletes bytes.
  */
-export async function processDocumentScan(deps: ScanDeps, documentId: string, requestId?: string): Promise<ScanOutcome> {
-  const document = await deps.documentRepo.get(documentId);
+export async function processDocumentScan(
+  deps: ScanDeps,
+  projectId: string,
+  documentId: string,
+  requestId?: string
+): Promise<ScanOutcome> {
+  const document = await deps.documentRepo.get(projectId, documentId);
   if (!document) throw new Error(`document.scan job referenced unknown document "${documentId}".`);
   if (document.status !== "scanning") return "already_handled";
   if (!document.assetId) throw new Error(`Document "${documentId}" is marked scanning but has no asset to scan.`);
 
-  const asset = await deps.assetRepo.get(document.assetId);
+  const asset = await deps.assetRepo.get(projectId, document.assetId);
   if (!asset) throw new Error(`Document "${documentId}" references missing asset "${document.assetId}".`);
 
   const bytes = await deps.assetStore.read(asset);
   const verdict = await deps.scanner.scan(bytes);
 
   if (verdict.verdict === "clean") {
-    await deps.documentRepo.updateScan(documentId, "clean", "ingesting");
-    await deps.jobQueue.enqueue("document.ingest", { documentId, requestId });
+    await deps.documentRepo.updateScan(projectId, documentId, "clean", "ingesting");
+    await deps.jobQueue.enqueue("document.ingest", { projectId, documentId, requestId });
     return "clean";
   }
 
   await deps.documentRepo.updateScan(
+    projectId,
     documentId,
     "infected",
     "rejected",
     `Rejected by malware scan (${deps.scanner.name}): ${verdict.signature}. The uploaded file has been deleted.`
   );
-  await deps.documentRepo.clearAsset(documentId);
+  await deps.documentRepo.clearAsset(projectId, documentId);
   await deps.assetStore.delete(asset);
   return "infected";
 }

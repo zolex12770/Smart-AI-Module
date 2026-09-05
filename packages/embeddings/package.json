@@ -16,7 +16,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@ai-platform/shared": "*",
+    "@ai-platform/database": "*"
+  },
   "devDependencies": {
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"

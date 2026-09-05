@@ -1,29 +1,94 @@
 import { basename, extname } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { NotFoundError, ServiceUnavailableError, ValidationError } from "@ai-platform/shared";
-import { createPendingDocument, createPendingUploadedDocument, sniffDocumentBytes, UPLOAD_ALLOWED_TYPES } from "@ai-platform/rag";
+import {
+  NotFoundError,
+  PermissionError,
+  ServiceUnavailableError,
+  ValidationError,
+  type AuthContext,
+} from "@ai-platform/shared";
+import {
+  createPendingDocument,
+  createPendingUploadedDocument,
+  sniffDocumentBytes,
+  UPLOAD_ALLOWED_TYPES,
+} from "@ai-platform/rag";
 import { v4 as uuid } from "uuid";
+import { z } from "zod";
 import type { AppContext } from "../../context.js";
+import { requireProject } from "../../plugins/auth.js";
 
 /**
- * Document ingestion + memory endpoints — docs/15_API_ARCHITECTURE.md. No auth system
- * exists yet (docs/26_DECISIONS.md ADR-008 is Phase 1 scope, not built), so memory
- * items use a fixed single-operator owner id, consistent with docs/00_PROJECT_VISION.md's
- * stated initial single-operator/small-team scope — this is a real, if temporary,
- * simplification, not a hidden gap: multi-user ownership needs real auth first.
+ * Document ingestion + memory endpoints — docs/15_API_ARCHITECTURE.md.
+ *
+ * This file used to open with a hardcoded single-operator owner id and hang every memory item
+ * off that one string. It is gone (docs/26_DECISIONS.md ADR-049): there is real identity now,
+ * so ownership comes from the authenticated caller and tenancy from the project their
+ * credential resolves to. Three consequences run through every route below:
+ *
+ * - **Nothing is read by id alone.** Every repository call takes `projectId` first and puts
+ *   it in the SQL `WHERE`, so another tenant's document id resolves to "not found" rather
+ *   than to a row this handler would then have to be trusted to reject.
+ * - **Permissions are named at the route.** `files:read` / `files:write` for documents,
+ *   `memory:read` / `memory:write` for memory — declared at the route, not inferred.
+ * - **Bodies are parsed by zod, never by truthiness.** The memory POST in particular used to
+ *   check `if (!scope || !content)` and then write `scope` straight into an enum-constrained
+ *   column; an unrecognised value became a 500 from Postgres instead of a 400 from us.
  */
-const SINGLE_OPERATOR_OWNER_ID = "local-user";
+
+const ingestRequestSchema = z.object({
+  /** Sandbox-relative path (docs/13 §11 — `resolveSandboxedPath` rejects any escape). */
+  path: z.string().min(1).max(1024),
+  /** Scope selector for a cookie-authenticated caller; read by `requireProject`, not here. */
+  projectId: z.string().optional(),
+});
+
+const memoryScopeSchema = z.enum(["conversation", "task", "user", "project", "semantic"]);
+
+const createMemoryRequestSchema = z.object({
+  scope: memoryScopeSchema,
+  content: z.string().min(1).max(8000),
+  /** The conversation/task this fact belongs to — the short-term levels of docs/08 §2. */
+  subjectId: z.string().max(200).optional(),
+  projectId: z.string().optional(),
+});
+
+const listMemoryQuerySchema = z.object({
+  scope: memoryScopeSchema.optional(),
+  subjectId: z.string().max(200).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+  projectId: z.string().optional(),
+});
+
+/**
+ * `AuthContext.projectId` is optional on the type because an unscoped context exists (the
+ * bare `requireUser` path used by GET /api/v1/auth/me). Anything that came back from
+ * `requireProject` always carries one. Narrowing it through a function rather than a `!`
+ * assertion means a broken invariant surfaces as a refused request, never as `undefined`
+ * silently reaching a repository's `WHERE` clause — where it would widen the query rather
+ * than fail it.
+ */
+function scopeOf(authCtx: AuthContext): string {
+  if (!authCtx.projectId) throw new PermissionError("This request is not scoped to a project.");
+  return authCtx.projectId;
+}
 
 export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
   // Real async job (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md, docs/25_IMPLEMENTATION_ROADMAP.md
   // Phase 7) — returns immediately with the document in "ingesting" status; poll
-  // GET /api/v1/files/:id (or watch it complete) to see it flip to "ready"/"failed" once
-  // the job worker (registered in apps/api/src/index.ts) actually processes it.
-  app.post<{ Body: { path: string } }>("/api/v1/files", async (request, reply) => {
-    const path = request.body?.path;
-    if (!path) throw new ValidationError("Body must include a sandbox-relative \"path\".");
+  // GET /api/v1/files/:id to see it flip to "ready"/"failed" once the job worker
+  // (registered in apps/api/src/index.ts) actually processes it.
+  app.post("/api/v1/files", async (request, reply) => {
+    const authCtx = await requireProject(request, ctx.auth, "files:write");
+    const parsed = ingestRequestSchema.safeParse(request.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.message);
 
-    const document = await createPendingDocument(ctx.documents, path);
+    const document = await createPendingDocument(ctx.documents, {
+      projectId: scopeOf(authCtx),
+      relativePath: parsed.data.path,
+      // Attribution comes from the credential, never from the body (ADR-049).
+      uploadedByUserId: authCtx.user.id,
+    });
     // docs/20_OBSERVABILITY.md §3.2 — see routes/v1/images.ts for why.
     await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id, requestId: request.id });
     reply.status(202).send({ document });
@@ -36,13 +101,20 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
   // checked against that extension, a hard size cap (the multipart plugin's own limit, a
   // real 413), a real CONTENT sniff (not just the header), and "rename on upload" — the
   // bytes are stored under a generated key by the AssetStore, the original filename is
-  // reduced to a basename and kept for display only. NOT done: malware scanning / the
-  // quarantine-bucket promotion docs/13 §12 also calls for — tracked openly in docs/27.
+  // reduced to a basename and kept for display only.
   app.post(
     "/api/v1/files/upload",
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      // ADR-042 fail-closed switch, checked before reading a single byte of the upload.
+      // Authorization first, before a single byte is read: an unauthenticated caller must not
+      // be able to make this process buffer 25 MiB. Note that a multipart request has no JSON
+      // body for `requireProject` to read a `projectId` out of, so a cookie-authenticated
+      // caller sends it as `?projectId=` or the `x-project-id` header; an API key is already
+      // bound to exactly one project and needs neither.
+      const authCtx = await requireProject(request, ctx.auth, "files:write");
+      const projectId = scopeOf(authCtx);
+
+      // ADR-042 fail-closed switch, also checked before reading a byte.
       if (!ctx.scanner && ctx.uploadScanRequired) {
         throw new ServiceUnavailableError("Uploads require malware scanning, but no scanner is configured on this deployment.");
       }
@@ -68,48 +140,127 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       const sniff = sniffDocumentBytes(ext, bytes);
       if (!sniff.ok) throw new ValidationError(`Rejected: ${sniff.reason}`);
 
-      const assetId = await ctx.assetStore.store(bytes, allowedMimes[0], ext.slice(1), "document");
+      // The bytes are stamped with the tenant at the moment they are written (ADR-049):
+      // `assets.project_id` is the predicate `GET /api/v1/assets/:id` filters on, so an asset
+      // stored without one could never legitimately be served back.
+      const assetId = await ctx.assetStore.store(projectId, bytes, allowedMimes[0], ext.slice(1), "document");
 
       // ADR-042: with a scanner configured the document is held in `scanning` (never ingested,
       // never served) until the worker's document.scan job clears it; without one it goes
       // straight to ingestion carrying a durable `skipped_no_scanner` mark — visible in the
-      // row and the API, never silently equivalent to "scanned clean".
-      if (ctx.scanner) {
-        const document = await createPendingUploadedDocument(ctx.documents, { filename: originalName, assetId, scanStatus: "pending" });
-        await ctx.jobQueue.enqueue("document.scan", { documentId: document.id, requestId: request.id });
-        reply.status(202).send({ document });
-        return;
-      }
-      const document = await createPendingUploadedDocument(ctx.documents, { filename: originalName, assetId, scanStatus: "skipped_no_scanner" });
-      await ctx.jobQueue.enqueue("document.ingest", { documentId: document.id, requestId: request.id });
+      // row and in the API, never silently equivalent to "scanned clean". The repository
+      // derives the initial status from `scanStatus`, so the two can never disagree.
+      const document = await createPendingUploadedDocument(ctx.documents, {
+        projectId,
+        filename: originalName,
+        assetId,
+        scanStatus: ctx.scanner ? "pending" : "skipped_no_scanner",
+        uploadedByUserId: authCtx.user.id,
+      });
+      await ctx.jobQueue.enqueue(ctx.scanner ? "document.scan" : "document.ingest", {
+        documentId: document.id,
+        requestId: request.id,
+      });
       reply.status(202).send({ document });
     }
   );
 
-  app.get("/api/v1/files", async () => ({ documents: await ctx.documents.list() }));
+  app.get("/api/v1/files", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "files:read");
+    // `listByProject`, not the old unscoped `list()` — that one handed every tenant's
+    // documents to whoever asked, the exact defect ADR-049 exists to close.
+    return { documents: await ctx.documents.listByProject(scopeOf(authCtx)) };
+  });
 
   app.get<{ Params: { id: string } }>("/api/v1/files/:id", async (request) => {
-    const document = await ctx.documents.get(request.params.id);
+    const authCtx = await requireProject(request, ctx.auth, "files:read");
+    const document = await ctx.documents.get(scopeOf(authCtx), request.params.id);
+    // A document in another project and a document that never existed are indistinguishable
+    // from out here, deliberately: a distinguishable 403 would be an existence oracle over
+    // another tenant's data.
     if (!document) throw new NotFoundError(`Document "${request.params.id}" not found.`);
     return { document };
   });
 
-  app.get("/api/v1/memory", async () => ({
-    items: await ctx.memoryItems.listByOwner(SINGLE_OPERATOR_OWNER_ID),
-  }));
+  /**
+   * The delete that did not exist before ADR-049's audit: documents could be uploaded,
+   * ingested and retrieved against forever with no way to remove one. Soft delete of the
+   * parent (the row survives for audit — "what did this project once hold" is a real
+   * question), hard delete of the derived chunks, in that order.
+   *
+   * The chunk delete is the half a user would actually notice. `documents.deletedAt` hides
+   * the row from listings, but retrieval reads `document_chunks`, so leaving those behind
+   * would mean a "deleted" document kept being quoted back into answers. Chunks are a
+   * derived index with no history worth keeping, which is why that delete is a real DELETE.
+   *
+   * Chunks go first, deliberately. These are two statements and not one transaction, so the
+   * order decides what a crash between them leaves behind: chunks-then-parent leaves a
+   * document that is listed but unsearchable, and a retried DELETE repairs it; parent-then-
+   * chunks would leave orphaned chunks still feeding retrieval and a retry that answers 404,
+   * because the parent is already gone. The chunk delete is itself project-scoped, so
+   * running it before the existence check cannot touch another tenant's rows.
+   */
+  app.delete<{ Params: { id: string } }>("/api/v1/files/:id", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "files:write");
+    const projectId = scopeOf(authCtx);
+    await ctx.documentChunks.deleteByDocument(request.params.id, projectId);
+    const deleted = await ctx.documents.softDelete(projectId, request.params.id);
+    // False means wrong project, unknown id, or already deleted — one answer for all three,
+    // so this cannot become an existence oracle over another project's document ids.
+    if (!deleted) throw new NotFoundError(`Document "${request.params.id}" not found.`);
+    return { ok: true };
+  });
 
-  app.post<{ Body: { scope: "conversation" | "task" | "user" | "project" | "semantic"; content: string } }>(
-    "/api/v1/memory",
-    async (request, reply) => {
-      const { scope, content } = request.body ?? {};
-      if (!scope || !content) throw new ValidationError("Body must include \"scope\" and \"content\".");
-      const item = await ctx.memoryItems.create({ id: uuid(), scope, ownerId: SINGLE_OPERATOR_OWNER_ID, content });
-      reply.status(201).send({ item });
-    }
-  );
+  // --- memory (docs/08_MEMORY_ARCHITECTURE.md) -------------------------------------------
+
+  app.get("/api/v1/memory", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "memory:read");
+    const parsed = listMemoryQuerySchema.safeParse(request.query);
+    if (!parsed.success) throw new ValidationError(parsed.error.message);
+    return {
+      items: await ctx.memoryItems.listRecent({
+        projectId: scopeOf(authCtx),
+        scope: parsed.data.scope,
+        subjectId: parsed.data.subjectId,
+        // "Mine, or the project's." docs/08 §6 is emphatic that one member's `user`-scope
+        // memory must never surface for another, so the filter is applied on this listing
+        // too, not only on the semantic retrieval path.
+        userId: authCtx.user.id,
+        limit: parsed.data.limit,
+      }),
+    };
+  });
+
+  app.post("/api/v1/memory", async (request, reply) => {
+    const authCtx = await requireProject(request, ctx.auth, "memory:write");
+    const parsed = createMemoryRequestSchema.safeParse(request.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.message);
+
+    const item = await ctx.memoryItems.create({
+      id: uuid(),
+      projectId: scopeOf(authCtx),
+      // A `project`-scope fact applies to every member, so it is stored project-wide
+      // (`user_id IS NULL`); every other scope belongs to the caller. Either way the owner
+      // comes from the credential — there is no body field that could name someone else.
+      userId: parsed.data.scope === "project" ? null : authCtx.user.id,
+      scope: parsed.data.scope,
+      subjectId: parsed.data.subjectId ?? null,
+      content: parsed.data.content,
+      // `source: "user"` and `confidence: 1` are the repository's defaults and are the right
+      // ones here: a human typed this, so it is a fact, not a model's inference. No embedding
+      // is attached, so the item is reachable through `listRecent` and not through semantic
+      // search — honest about what this endpoint is, rather than quietly writing an
+      // unlabelled vector the retrieval path would have to guess the model for (ADR-048).
+    });
+    reply.status(201).send({ item });
+  });
 
   app.delete<{ Params: { id: string } }>("/api/v1/memory/:id", async (request) => {
-    await ctx.memoryItems.delete(request.params.id);
+    const authCtx = await requireProject(request, ctx.auth, "memory:write");
+    // docs/08 §7 asks for deletion that actually stops influencing retrieval; the repository's
+    // soft delete does that (every read filters on `deletedAt`) while keeping the row for audit.
+    const deleted = await ctx.memoryItems.softDelete(scopeOf(authCtx), request.params.id);
+    if (!deleted) throw new NotFoundError(`Memory item "${request.params.id}" not found.`);
     return { ok: true };
   });
 }

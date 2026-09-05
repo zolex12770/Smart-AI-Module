@@ -54,3 +54,26 @@ export class QuotaExceededError extends AppError {
   readonly code = "QUOTA_EXCEEDED";
   readonly statusCode = 429;
 }
+
+/** The caller did not prove who they are (missing/invalid/expired credential). Distinct from
+ * PermissionError: 401 means "authenticate", 403 means "authenticated but not allowed"
+ * (docs/13_SECURITY_ARCHITECTURE.md §2, ADR-049). */
+export class UnauthorizedError extends AppError {
+  readonly code = "UNAUTHORIZED";
+  readonly statusCode = 401;
+}
+
+/** A write lost an optimistic-concurrency race, or a uniqueness constraint was violated by a
+ * concurrent request. Retryable by the client with fresh state. */
+export class ConflictError extends AppError {
+  readonly code = "CONFLICT";
+  readonly statusCode = 409;
+}
+
+/** The request was well-formed and authorized, but the platform cannot do it with the
+ * providers actually configured — e.g. real image generation with no image provider. Never
+ * substituted with a fake success (ADR-050). */
+export class CapabilityUnavailableError extends AppError {
+  readonly code = "CAPABILITY_UNAVAILABLE";
+  readonly statusCode = 501;
+}

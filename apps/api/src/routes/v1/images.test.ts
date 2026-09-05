@@ -8,9 +8,13 @@ describe("image generation routes", () => {
   let app: FastifyInstance;
   let db: DrizzleDb;
   let ctx: AppContext;
+  /** Session cookie + CSRF pair + x-project-id for the seeded test user (ADR-049).
+   * Every request in these suites is authenticated and project-scoped, because every real
+   * request is — an unauthenticated inject would only ever assert a 401. */
+  let auth: Awaited<ReturnType<typeof buildTestApp>>["auth"];
 
   beforeEach(async () => {
-    ({ app, db, ctx } = await buildTestApp());
+    ({ app, db, ctx, auth } = await buildTestApp());
   });
 
   afterEach(async () => {
@@ -18,31 +22,31 @@ describe("image generation routes", () => {
   });
 
   it("POST /api/v1/images creates a pending generation and enqueues a real job", async () => {
-    const res = await app.inject({ method: "POST", url: "/api/v1/images", payload: { prompt: "a lighthouse" } });
+    const res = await app.inject({ headers: auth.headers, method: "POST", url: "/api/v1/images", payload: { prompt: "a lighthouse" } });
     expect(res.statusCode).toBe(202);
     const { generation } = res.json();
     expect(generation.status).toBe("pending");
     expect(generation.prompt).toBe("a lighthouse");
 
-    const getRes = await app.inject({ method: "GET", url: `/api/v1/images/${generation.id}` });
+    const getRes = await app.inject({ headers: auth.headers, method: "GET", url: `/api/v1/images/${generation.id}` });
     expect(getRes.statusCode).toBe(200);
     expect(getRes.json().generation.id).toBe(generation.id);
   });
 
   it("rejects a request missing the required prompt", async () => {
-    const res = await app.inject({ method: "POST", url: "/api/v1/images", payload: {} });
+    const res = await app.inject({ headers: auth.headers, method: "POST", url: "/api/v1/images", payload: {} });
     expect(res.statusCode).toBe(400);
   });
 
   it("GET /api/v1/images/:id 404s for an unknown generation", async () => {
-    const res = await app.inject({ method: "GET", url: "/api/v1/images/00000000-0000-0000-0000-000000000000" });
+    const res = await app.inject({ headers: auth.headers, method: "GET", url: "/api/v1/images/00000000-0000-0000-0000-000000000000" });
     expect(res.statusCode).toBe(404);
   });
 
   it("enforces the real per-route rate limit (docs/13 SS4, ADR-032) — 10/min, verified at the HTTP layer", async () => {
     const results = [];
     for (let i = 0; i < 12; i++) {
-      results.push(await app.inject({ method: "POST", url: "/api/v1/images", payload: { prompt: `rl-${i}` } }));
+      results.push(await app.inject({ headers: auth.headers, method: "POST", url: "/api/v1/images", payload: { prompt: `rl-${i}` } }));
     }
     const accepted = results.filter((r) => r.statusCode === 202);
     const limited = results.filter((r) => r.statusCode === 429);
@@ -60,7 +64,7 @@ describe("image generation routes", () => {
   it("POST /api/v1/images refuses with 503 when media generation is unavailable, and stores nothing", async () => {
     ctx.mediaGenerationAvailable = false;
 
-    const res = await app.inject({ method: "POST", url: "/api/v1/images", payload: { prompt: "a lighthouse" } });
+    const res = await app.inject({ headers: auth.headers, method: "POST", url: "/api/v1/images", payload: { prompt: "a lighthouse" } });
     expect(res.statusCode).toBe(503);
     expect(res.json().error.code).toBe("SERVICE_UNAVAILABLE");
     expect(res.json().error.message).toMatch(/mock-only/);
@@ -71,7 +75,7 @@ describe("image generation routes", () => {
   it("POST /api/v1/videos refuses with the same 503 when media generation is unavailable", async () => {
     ctx.mediaGenerationAvailable = false;
 
-    const res = await app.inject({
+    const res = await app.inject({ headers: auth.headers,
       method: "POST",
       url: "/api/v1/videos",
       payload: { prompt: "a lighthouse at dawn", targetDurationSeconds: 10 },

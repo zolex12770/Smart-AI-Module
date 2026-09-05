@@ -44,8 +44,47 @@ export async function createDb(dataDir = process.env.DATABASE_DIR ?? "./data/pgd
  * allow-listed extension on the target instance (true for Cloud SQL); `CREATE EXTENSION IF
  * NOT EXISTS` is idempotent the same way createDb's PGlite path is.
  */
-export async function createPostgresDb(connectionString: string): Promise<PostgresDb> {
-  const pool = new Pool({ connectionString });
-  await pool.query("CREATE EXTENSION IF NOT EXISTS vector;");
+export interface PostgresConnectOptions {
+  /**
+   * Attempts for the initial connectivity probe. The default retries a transient failure at
+   * boot (the Cloud SQL proxy not being up yet is the common one) rather than killing the
+   * container; a caller that is *testing* unreachability passes 1 so it fails immediately.
+   */
+  connectAttempts?: number;
+}
+
+export async function createPostgresDb(
+  connectionString: string,
+  options: PostgresConnectOptions = {}
+): Promise<PostgresDb> {
+  const pool = new Pool({
+    connectionString,
+    // Bounded so a burst cannot exhaust the server's connection slots, and so a Cloud SQL
+    // instance's max_connections is shared predictably between the api and worker units.
+    max: Number(process.env.DATABASE_POOL_MAX ?? 10),
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
+  });
+  // An idle client erroring (server restart, network blip) emits on the pool; without a
+  // listener Node treats it as an unhandled 'error' event and kills the process.
+  pool.on("error", (err) => {
+    // eslint-disable-next-line no-console
+    console.error("[database] idle client error (pool will recycle the connection):", err.message);
+  });
+  await withRetry(() => pool.query("CREATE EXTENSION IF NOT EXISTS vector;"), options.connectAttempts ?? 5);
   return drizzleNodePg(pool, { schema });
+}
+
+/** A transient failure at boot (Cloud SQL proxy not up yet) must not kill the container. */
+async function withRetry<T>(fn: () => Promise<T>, attempts = 5): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 500 * 2 ** i));
+    }
+  }
+  throw lastError;
 }

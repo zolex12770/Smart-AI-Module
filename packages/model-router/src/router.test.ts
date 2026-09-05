@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ChatRequest, ChatStreamEvent, LLMProvider } from "@ai-platform/shared";
+import type { ChatRequest, ChatStreamEvent, LLMProvider, ProviderCapabilities } from "@ai-platform/shared";
 import { ModelRegistry } from "./registry.js";
 import { ModelRouter, type ProviderFallback } from "./router.js";
 
@@ -11,13 +11,21 @@ import { ModelRouter, type ProviderFallback } from "./router.js";
  * never locked in as an automated regression test.
  */
 class ScriptedProvider implements LLMProvider {
-  readonly isMock = true;
+  // Not a mock: the router now deprioritises mocks behind every real provider (ADR-058), so
+  // a chain built entirely from `isMock: true` doubles would not exercise the real ordering.
+  readonly isMock = false;
+  readonly model = "scripted-1";
   calls = 0;
 
   constructor(
     readonly name: string,
     private readonly events: ChatStreamEvent[] | (() => never)
   ) {}
+
+  /** Declared capabilities — the router filters candidates on these before ordering them. */
+  capabilities(): ProviderCapabilities {
+    return { streaming: true, toolCalling: true, structuredOutput: false, vision: false, contextWindow: null };
+  }
 
   async *streamChat(_request: ChatRequest): AsyncGenerator<ChatStreamEvent, void, unknown> {
     this.calls++;
@@ -32,6 +40,7 @@ const doneEvent = (provider: string): ChatStreamEvent => ({
   usage: { inputTokens: 1, outputTokens: 1 },
   provider,
   model: "test-model",
+  finishReason: "stop",
 });
 
 const request: ChatRequest = { messages: [{ role: "user", content: "hello" }] };
@@ -93,7 +102,15 @@ describe("ModelRouter (real fallback state machine)", () => {
     // event list" — a mid-stream throw needs a real generator, so this one is inline.
     const midStreamFailing: LLMProvider = {
       name: "primary",
-      isMock: true,
+      isMock: false,
+      model: "primary-1",
+      capabilities: () => ({
+        streaming: true,
+        toolCalling: true,
+        structuredOutput: false,
+        vision: false,
+        contextWindow: null,
+      }),
       async *streamChat() {
         yield { type: "token", delta: "partial" };
         throw new Error("primary crashed mid-stream");

@@ -1,173 +1,352 @@
 import type { FastifyInstance } from "fastify";
 import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
 import { SpanStatusCode, withSpan } from "@ai-platform/observability";
-import { chatRequestSchema, NotFoundError, QuotaExceededError, ValidationError, type ChatStreamEvent } from "@ai-platform/shared";
+import {
+  chatRequestSchema,
+  NotFoundError,
+  QuotaExceededError,
+  ValidationError,
+  type AuthContext,
+  type ChatStreamEvent,
+  type ToolCall,
+} from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import type { AppContext } from "../../context.js";
+import { requireProject } from "../../plugins/auth.js";
 
 /**
  * POST /api/v1/chat — streams a chat completion as Server-Sent Events.
  * See docs/15_API_ARCHITECTURE.md ("Streaming: SSE, not WebSockets, as the default").
+ *
+ * Every route in this file is project-scoped (docs/26_DECISIONS.md ADR-049). There is no
+ * "current owner" any more: the caller's identity comes from the session cookie or API key
+ * resolved by plugins/auth.ts, and the project scope comes from `requireProject`, which is
+ * also where the permission check happens. A conversation is therefore never read by id
+ * alone — `projectId` is a predicate in the repository's `WHERE`, so a conversation in
+ * another project is reported exactly like one that does not exist.
  */
+
+/**
+ * `AuthContext.projectId` is optional at the type level because an `AuthContext` exists
+ * before a request has been resolved against a project. Everything `requireProject` returns
+ * *has* been, so this narrows once, at the boundary, rather than scattering non-null
+ * assertions through every repository call below.
+ */
+function scopedProjectId(authCtx: AuthContext): string {
+  if (!authCtx.projectId) {
+    throw new ValidationError("A projectId is required (send it as a query parameter or in the body).");
+  }
+  return authCtx.projectId;
+}
+
 export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
-  app.get("/api/v1/conversations", async () => ({ conversations: await ctx.conversations.list() }));
+  app.get("/api/v1/conversations", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "project:read");
+    return { conversations: await ctx.conversations.list(scopedProjectId(authCtx)) };
+  });
 
   app.get<{ Params: { id: string } }>("/api/v1/conversations/:id/messages", async (request) => {
-    const conversation = await ctx.conversations.get(request.params.id);
+    const authCtx = await requireProject(request, ctx.auth, "project:read");
+    const projectId = scopedProjectId(authCtx);
+
+    // Scoped read, then a scoped read of the children: `messages` has no project column of
+    // its own and inherits scope through its FK to `conversations` (ADR-049), which is why
+    // the repository takes the project here too rather than trusting the id we just checked.
+    const conversation = await ctx.conversations.get(projectId, request.params.id);
     if (!conversation) throw new NotFoundError(`Conversation "${request.params.id}" not found.`);
-    return { messages: await ctx.messages.listByConversation(conversation.id) };
+    return { messages: await ctx.messages.listByConversation(projectId, conversation.id) };
   });
 
-  app.post("/api/v1/chat", async (request, reply) => {
-    const parsed = chatRequestSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw new ValidationError(parsed.error.message);
-    }
-    const chatRequest = parsed.data;
+  app.post(
+    "/api/v1/chat",
+    // docs/13_SECURITY_ARCHITECTURE.md §4 "Layer 1 — edge/API rate limiting". This is the
+    // endpoint that spends provider tokens, and it was the only expensive one with no
+    // per-route limit of its own (image/video/agent-task creation all had one) — the global
+    // 300/minute default would have allowed a runaway client to burn the whole token budget
+    // before FR-063's quota check could even be consulted. 30/minute is far above interactive
+    // human use and far below what a loop can do.
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      // Permission first: nothing is read, written or spent before the caller is known to be
+      // allowed to spend it in this project.
+      const authCtx = await requireProject(request, ctx.auth, "chat:write");
+      const projectId = scopedProjectId(authCtx);
 
-    const conversation = chatRequest.conversationId
-      ? await ctx.conversations.get(chatRequest.conversationId)
-      : await ctx.conversations.create();
+      const parsed = chatRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        throw new ValidationError(parsed.error.message);
+      }
+      const chatRequest = parsed.data;
 
-    if (!conversation) {
-      throw new ValidationError(`Unknown conversationId "${chatRequest.conversationId}".`);
-    }
+      // An existing conversation is fetched *within* the project; a new one is created in it
+      // and attributed to the authenticated principal, never to a hardcoded owner (ADR-049).
+      const conversation = chatRequest.conversationId
+        ? await ctx.conversations.get(projectId, chatRequest.conversationId)
+        : await ctx.conversations.create({ projectId, createdByUserId: authCtx.user.id });
 
-    const lastUserMessage = [...chatRequest.messages].reverse().find((m) => m.role === "user");
-    if (lastUserMessage) {
-      await ctx.messages.add({
-        conversationId: conversation.id,
-        role: "user",
-        content: lastUserMessage.content,
+      if (!conversation) {
+        throw new ValidationError(`Unknown conversationId "${chatRequest.conversationId}".`);
+      }
+
+      const lastUserMessage = [...chatRequest.messages].reverse().find((m) => m.role === "user");
+      if (lastUserMessage) {
+        await ctx.messages.add({
+          projectId,
+          conversationId: conversation.id,
+          role: "user",
+          content: lastUserMessage.content,
+        });
+      }
+
+      // FR-063 — checked before any provider call is made, never after (docs/22_COST_AND_
+      // QUOTA_STRATEGY.md): a rough pre-flight estimate (real token counts aren't known until
+      // the provider responds) decides only whether to reject now; the usage actually
+      // recorded below is always the real post-call figure.
+      const estimatedTokens = estimatePromptTokens(chatRequest.messages.map((m) => m.content).join(" "));
+      // Quota is per project (ADR-049): one project's spend must never exhaust another's
+      // allowance, so the scope goes into the check itself rather than being a global counter.
+      const quotaCheck = await ctx.quota.checkLlmTokens(projectId, estimatedTokens);
+      if (!quotaCheck.allowed) {
+        throw new QuotaExceededError(quotaCheck.reason ?? "Token quota exceeded.");
+      }
+
+      // reply.hijack() below bypasses @fastify/cors' onSend hook entirely, so the
+      // CORS header has to be written by hand here — otherwise the browser blocks
+      // the whole streamed response even though the server sent it successfully.
+      reply.raw.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Conversation-Id": conversation.id,
+        "Access-Control-Allow-Origin": ctx.corsOrigin,
+        "Access-Control-Expose-Headers": "X-Conversation-Id",
       });
-    }
+      reply.hijack();
 
-    // FR-063 — checked before any provider call is made, never after (docs/22_COST_AND_
-    // QUOTA_STRATEGY.md): a rough pre-flight estimate (real token counts aren't known until
-    // the provider responds) decides only whether to reject now; the usage actually
-    // recorded below is always the real post-call figure.
-    const estimatedTokens = estimatePromptTokens(chatRequest.messages.map((m) => m.content).join(" "));
-    const quotaCheck = await ctx.quota.checkLlmTokens(estimatedTokens);
-    if (!quotaCheck.allowed) {
-      throw new QuotaExceededError(quotaCheck.reason ?? "Token quota exceeded.");
-    }
+      // Started before the abort plumbing so every outcome — success, failure, cancellation —
+      // reports latency measured from the same instant.
+      const startedAt = Date.now();
 
-    // reply.hijack() below bypasses @fastify/cors' onSend hook entirely, so the
-    // CORS header has to be written by hand here — otherwise the browser blocks
-    // the whole streamed response even though the server sent it successfully.
-    reply.raw.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Conversation-Id": conversation.id,
-      "Access-Control-Allow-Origin": ctx.corsOrigin,
-      "Access-Control-Expose-Headers": "X-Conversation-Id",
-    });
-    reply.hijack();
+      /**
+       * A hijacked response is no longer managed by Fastify, so nothing else notices when the
+       * browser navigates away or the user hits stop: the generator below would keep pulling
+       * from the provider to completion and the tokens would still be billed, for an answer
+       * nobody can receive. The router re-checks the signal before it tries each candidate
+       * provider and before any retry; the loop below additionally *stops pulling*, which is
+       * what actually cancels an already-streaming call — abandoning a `for await` calls
+       * `return()` up the generator chain and closes the provider's response body.
+       *
+       * The listener is on `reply.raw`, NOT `request.raw`, and that distinction is load-
+       * bearing rather than stylistic. Fastify has already read and destroyed the request
+       * stream by the time this handler runs (it had to, to parse the JSON body), so on a
+       * POST `request.raw` emits `close` immediately — measured at 0 ms here, before the
+       * first token — and using it would abort every chat instead of only abandoned ones.
+       * `reply.raw` emits `close` when the response finishes *or* the connection dies, so
+       * `writableEnded` is what separates "done" from "gone". (The GET event stream in
+       * agent.ts can safely watch `request.raw`: a bodyless GET is never drained, so its
+       * `close` really does mean the client left.)
+       */
+      const abort = new AbortController();
+      const onClientClose = () => {
+        if (reply.raw.writableEnded || abort.signal.aborted) return;
+        abort.abort();
+        request.log.warn(
+          { request_id: request.id, project_id: projectId, conversation_id: conversation.id, status: "client_disconnected" },
+          "client disconnected — aborting the provider stream"
+        );
+      };
+      reply.raw.on("close", onClientClose);
 
-    const send = (event: ChatStreamEvent) => {
-      reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-    };
+      const send = (event: ChatStreamEvent) => {
+        // Writing to a destroyed socket throws `ERR_STREAM_WRITE_AFTER_END`, and there is
+        // nobody to read it anyway once the client is gone.
+        if (abort.signal.aborted || reply.raw.writableEnded || reply.raw.destroyed) return;
+        reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      };
 
-    // docs/20_OBSERVABILITY.md §3.3 `gen_ai.chat` span + §1.2 provider-call log fields —
-    // `request.id` (Fastify's own per-request id, already present on every request/response
-    // log line) is the correlation id threaded through here; the job-queue paths thread the
-    // same id through job payloads (see routes/v1/images.ts) so a job's worker-side and
-    // provider-call logs can be found from the originating request, and vice versa.
-    const startedAt = Date.now();
-    await withSpan(
-      "gen_ai.chat",
-      { "gen_ai.system": "unknown", request_id: request.id, conversation_id: conversation.id },
-      async (span) => {
-        // docs/26_DECISIONS.md ADR-044 — every provider the router skipped, in order. Without
-        // this the only structured record of a failed real-provider call would be the
-        // `provider: "mock", status: "success"` line below, which reads as a perfectly healthy
-        // request; an operator (or a first real-key verification) could not tell "the key
-        // worked" from "the key failed and the mock answered in its place".
-        const fellBackFrom: string[] = [];
-        try {
-          for await (const event of ctx.router.streamChat(
-            { ...chatRequest, conversationId: conversation.id },
-            {
-              onFallback: (fallback) => {
-                fellBackFrom.push(fallback.provider);
-                request.log.warn(
-                  {
-                    request_id: request.id,
-                    provider: fallback.provider,
-                    stage: fallback.stage,
-                    error: fallback.message,
-                    status: "fallback",
-                  },
-                  "provider call failed, falling back to the next provider"
-                );
-              },
-            }
-          )) {
-            send(event);
-            if (event.type === "done") {
-              await ctx.messages.add({
-                conversationId: conversation.id,
-                role: "assistant",
-                content: event.message.content,
-                providerUsed: event.provider,
-                modelUsed: event.model,
-                usage: event.usage,
-              });
-              // FR-061/FR-063 — the real post-call usage, not the pre-flight estimate above
-              // (docs/22: "only actuals count against quota"). estimatedCostUsd is null, not
-              // a fabricated figure, for any provider/model without researched pricing
-              // (packages/model-router/src/cost-estimator.ts) — today that's only the mock
-              // provider; the three real providers' current default models are priced.
-              await ctx.usage.create({
-                id: uuid(),
-                kind: "llm",
-                provider: event.provider,
-                model: event.model,
-                inputTokens: event.usage.inputTokens,
-                outputTokens: event.usage.outputTokens,
-                units: null,
-                estimatedCostUsd: estimateLlmCostUsd(event.provider, event.model, event.usage),
-                requestId: request.id,
-              });
-              span.setAttributes({
-                "gen_ai.system": event.provider,
-                "gen_ai.request.model": event.model,
-                "gen_ai.usage.input_tokens": event.usage.inputTokens,
-                "gen_ai.usage.output_tokens": event.usage.outputTokens,
-                "gen_ai.fell_back_from": fellBackFrom.join(","),
-              });
-              request.log.info(
+      const logCancelled = () =>
+        request.log.info(
+          {
+            request_id: request.id,
+            project_id: projectId,
+            conversation_id: conversation.id,
+            latency_ms: Date.now() - startedAt,
+            status: "cancelled",
+          },
+          "chat stream cancelled by the client"
+        );
+
+      // docs/20_OBSERVABILITY.md §3.3 `gen_ai.chat` span + §1.2 provider-call log fields —
+      // `request.id` (Fastify's own per-request id, already present on every request/response
+      // log line) is the correlation id threaded through here; the job-queue paths thread the
+      // same id through job payloads (see routes/v1/images.ts) so a job's worker-side and
+      // provider-call logs can be found from the originating request, and vice versa.
+      try {
+        await withSpan(
+          "gen_ai.chat",
+          {
+            "gen_ai.system": "unknown",
+            request_id: request.id,
+            conversation_id: conversation.id,
+            // Tenancy on the span too: a trace that cannot say which project it belongs to is
+            // useless for both cost attribution and incident scoping (ADR-049).
+            project_id: projectId,
+            user_id: authCtx.user.id,
+          },
+          async (span) => {
+            // docs/26_DECISIONS.md ADR-044 — every provider the router skipped, in order. Without
+            // this the only structured record of a failed real-provider call would be the
+            // `provider: "mock", status: "success"` line below, which reads as a perfectly healthy
+            // request; an operator (or a first real-key verification) could not tell "the key
+            // worked" from "the key failed and the mock answered in its place".
+            const fellBackFrom: string[] = [];
+            // ADR-047: a turn may be tool calls rather than prose. The provider reports them
+            // as they stream, and repeats them on the `done` message; collecting them here
+            // means a provider that only streams them still produces a complete `done` event
+            // and a complete stored message.
+            const streamedToolCalls: ToolCall[] = [];
+            /** Set once the turn finished, so a disconnect *after* a completed answer is not
+             * also logged as a cancellation of it. */
+            let completed = false;
+            try {
+              for await (const event of ctx.router.streamChat(
+                { ...chatRequest, conversationId: conversation.id },
                 {
-                  request_id: request.id,
+                  signal: abort.signal,
+                  onFallback: (fallback) => {
+                    fellBackFrom.push(fallback.provider);
+                    request.log.warn(
+                      {
+                        request_id: request.id,
+                        provider: fallback.provider,
+                        stage: fallback.stage,
+                        error: fallback.message,
+                        status: "fallback",
+                      },
+                      "provider call failed, falling back to the next provider"
+                    );
+                  },
+                }
+              )) {
+                // The cancellation that matters: stop consuming. `break` runs the generator
+                // chain's `return()`, which closes the provider's HTTP response body — the
+                // difference between "we ignore the rest" and "we are no longer billed for
+                // the rest". Checked here rather than only in `send` so a disconnect ends the
+                // call instead of quietly draining it into a discarded write.
+                if (abort.signal.aborted) break;
+
+                if (event.type === "tool_call") {
+                  streamedToolCalls.push(event.call);
+                }
+
+                if (event.type !== "done") {
+                  send(event);
+                  continue;
+                }
+
+                // ADR-047 — the wire event and the stored row must agree about tool calls, so
+                // both are built from the same value. Absent (not an empty array) when the turn
+                // asked for no tools: a message with no tool calls and one that predates tool
+                // calling are the same thing, and there is nothing to distinguish.
+                const toolCalls =
+                  event.message.toolCalls ?? (streamedToolCalls.length > 0 ? streamedToolCalls : undefined);
+                const doneEvent: ChatStreamEvent = toolCalls
+                  ? { ...event, message: { ...event.message, toolCalls } }
+                  : event;
+                send(doneEvent);
+
+                const assistantMessage = await ctx.messages.add({
+                  projectId,
+                  conversationId: conversation.id,
+                  role: "assistant",
+                  content: event.message.content,
+                  ...(toolCalls ? { toolCalls } : {}),
+                  providerUsed: event.provider,
+                  modelUsed: event.model,
+                  usage: event.usage,
+                });
+                // FR-061/FR-063 — the real post-call usage, not the pre-flight estimate above
+                // (docs/22: "only actuals count against quota"). estimatedCostUsd is null, not
+                // a fabricated figure, for any provider/model without researched pricing
+                // (packages/model-router/src/cost-estimator.ts) — today that's only the mock
+                // provider; the three real providers' current default models are priced.
+                await ctx.usage.create({
+                  id: uuid(),
+                  // Which project spent it and who spent it (ADR-049). A ledger row that
+                  // cannot name a project cannot be charged to one or reported to it.
+                  projectId,
+                  userId: authCtx.user.id,
+                  kind: "llm",
                   provider: event.provider,
                   model: event.model,
-                  tokens_input: event.usage.inputTokens,
-                  tokens_output: event.usage.outputTokens,
-                  latency_ms: Date.now() - startedAt,
-                  status: "success",
-                  // ADR-044: empty on a clean call; naming the skipped providers otherwise, so
-                  // this line alone answers "did a real provider actually serve this?"
-                  fell_back_from: fellBackFrom,
-                },
-                "provider call completed"
+                  inputTokens: event.usage.inputTokens,
+                  outputTokens: event.usage.outputTokens,
+                  units: null,
+                  estimatedCostUsd: estimateLlmCostUsd(event.provider, event.model, event.usage),
+                  requestId: request.id,
+                  // ADR-054: the natural key for this charge is the assistant message it paid
+                  // for. One message, one charge — so a retry that somehow re-recorded this
+                  // turn conflicts on the unique index instead of double-charging.
+                  idempotencyKey: `llm:message:${assistantMessage.id}`,
+                });
+                span.setAttributes({
+                  "gen_ai.system": event.provider,
+                  "gen_ai.request.model": event.model,
+                  "gen_ai.usage.input_tokens": event.usage.inputTokens,
+                  "gen_ai.usage.output_tokens": event.usage.outputTokens,
+                  "gen_ai.fell_back_from": fellBackFrom.join(","),
+                  "gen_ai.tool_calls": toolCalls?.length ?? 0,
+                });
+                request.log.info(
+                  {
+                    request_id: request.id,
+                    project_id: projectId,
+                    provider: event.provider,
+                    model: event.model,
+                    tokens_input: event.usage.inputTokens,
+                    tokens_output: event.usage.outputTokens,
+                    latency_ms: Date.now() - startedAt,
+                    status: "success",
+                    // ADR-044: empty on a clean call; naming the skipped providers otherwise, so
+                    // this line alone answers "did a real provider actually serve this?"
+                    fell_back_from: fellBackFrom,
+                  },
+                  "provider call completed"
+                );
+                completed = true;
+              }
+              // Reached by the `break` above; the router can also throw its own cancellation
+              // error, which the catch below routes to exactly the same place.
+              if (abort.signal.aborted && !completed) logCancelled();
+            } catch (err) {
+              // A stream the client itself abandoned is not a provider failure. Recording it as
+              // one would make every "user pressed stop" show up as an ERROR span and page
+              // somebody; it is logged as the cancellation it is, and no error event is sent
+              // because there is nobody left on the socket to read it.
+              if (abort.signal.aborted) {
+                if (!completed) logCancelled();
+                return;
+              }
+              // Handled here (an SSE error event is sent to the client, not re-thrown) — but the
+              // span must still reflect ERROR, or a real failure would misleadingly read as a
+              // successful `gen_ai.chat` call in any trace view.
+              span.recordException(err instanceof Error ? err : String(err));
+              span.setStatus({ code: SpanStatusCode.ERROR, message: err instanceof Error ? err.message : String(err) });
+              request.log.error(
+                { request_id: request.id, project_id: projectId, err, latency_ms: Date.now() - startedAt, status: "error" },
+                "chat stream failed"
               );
+              send({ type: "error", message: "The model provider failed to respond. Please try again." });
             }
           }
-        } catch (err) {
-          // Handled here (an SSE error event is sent to the client, not re-thrown) — but the
-          // span must still reflect ERROR, or a real failure would misleadingly read as a
-          // successful `gen_ai.chat` call in any trace view.
-          span.recordException(err instanceof Error ? err : String(err));
-          span.setStatus({ code: SpanStatusCode.ERROR, message: err instanceof Error ? err.message : String(err) });
-          request.log.error(
-            { request_id: request.id, err, latency_ms: Date.now() - startedAt, status: "error" },
-            "chat stream failed"
-          );
-          send({ type: "error", message: "The model provider failed to respond. Please try again." });
-        }
+        );
+      } finally {
+        // Detached before `end()`, so the normal completion path never runs the disconnect
+        // handler at all, and the closure (with its AbortController) is not held alive by a
+        // socket that outlives this request on a keep-alive connection.
+        reply.raw.off("close", onClientClose);
+        if (!reply.raw.writableEnded) reply.raw.end();
       }
-    );
-    reply.raw.end();
-  });
+    }
+  );
 }

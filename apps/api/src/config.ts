@@ -97,6 +97,40 @@ const envSchema = z.object({
   // override for an environment where it's installed somewhere non-standard.
   FFMPEG_PATH: z.string().default("ffmpeg"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
+
+  // --- Self-hosted / provider-neutral model runtime (ADR-056) --------------------------
+  // Any OpenAI-compatible `/v1` endpoint: Ollama, vLLM, llama.cpp, LM Studio, or a gateway.
+  // This is what lets the platform run with no third-party AI provider at all.
+  LLM_BASE_URL: optionalString,
+  LLM_MODEL: optionalString,
+  LLM_API_KEY: optionalString,
+  LLM_CONTEXT_WINDOW: z.coerce.number().int().positive().optional(),
+  LLM_SUPPORTS_TOOLS: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  // Embeddings from the same runtime — real semantic retrieval with no hosted provider.
+  EMBEDDING_BASE_URL: optionalString,
+  EMBEDDING_MODEL: optionalString,
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().max(1536).optional(),
+  EMBEDDING_API_KEY: optionalString,
+
+  // --- Security (ADR-049 / ADR-055) -----------------------------------------------------
+  // Session cookies are Secure in production; this allows plain HTTP for local development.
+  COOKIE_SECURE: z.enum(["true", "false"]).optional(),
+  SESSION_TTL_DAYS: z.coerce.number().int().positive().max(365).default(30),
+  // `docker` gives real container isolation for agent-run commands; `process` is the
+  // development fallback and is refused in production unless explicitly acknowledged.
+  SANDBOX_RUNTIME: z.enum(["docker", "process"]).default("process"),
+  SANDBOX_IMAGE: z.string().default("node:22-alpine"),
+  SANDBOX_ALLOW_PROCESS_IN_PRODUCTION: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  SANDBOX_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  SANDBOX_MEMORY_MB: z.coerce.number().int().positive().default(512),
+  // Bootstrap the first administrator on an empty database. Ignored once any user exists.
+  BOOTSTRAP_ADMIN_EMAIL: optionalString,
+  BOOTSTRAP_ADMIN_PASSWORD: optionalString,
+
+  // --- Agent limits (ADR-057) -----------------------------------------------------------
+  AGENT_MAX_ITERATIONS: z.coerce.number().int().positive().max(50).default(12),
+  AGENT_MAX_TOKENS_PER_RUN: z.coerce.number().int().positive().default(200_000),
   ANTHROPIC_API_KEY: optionalString,
   OPENAI_API_KEY: optionalString,
   OPENAI_ORG_ID: optionalString,

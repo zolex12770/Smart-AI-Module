@@ -1,105 +1,188 @@
 name: CI
 
-# docs/21_TESTING_STRATEGY.md §4 "CI pipeline shape" + docs/26_DECISIONS.md ADR-035.
+# docs/26_DECISIONS.md ADR-035 (original) and ADR-061 (this revision).
 #
-# Every job here mirrors an exact command verified locally in this repository's own
-# development sessions — nothing in this file is aspirational or copy-pasted from a
-# template. Notably, this pipeline needs no database/queue service containers at all:
-# the whole test suite runs against PGlite (an embedded, in-memory, genuinely
-# Postgres-compatible engine — ADR-025) and pg-boss's native PGlite adapter (ADR-027,
-# ADR-012), not a real standalone Postgres/Redis, so there is nothing to spin up as a
-# `services:` container the way docs/21 §2.2's Testcontainers-based design assumes for a
-# more conventional Postgres+Redis stack.
+# HONEST STATUS: this workflow has still never executed on GitHub Actions — the repository
+# that authored it has no remote (`git remote -v` is empty). Every step below was chosen to
+# match a command that IS run locally, but "CI green" remains unverified until a first push.
 #
-# Honesty note (docs/26_DECISIONS.md ADR-035): this file has been validated for syntax
-# and by running every one of its steps locally, but this repository has no GitHub
-# remote in the environment that authored it, so the workflow itself has never actually
-# executed in GitHub Actions. Treat "CI green" as unverified until the first real run
-# after this repo is pushed somewhere.
+# The gates are ordered cheapest-first so a typo fails in seconds rather than after the full
+# integration suite. Nothing is `continue-on-error`: a step that cannot fail is not a gate.
 
 on:
   push:
     branches: [main, master]
   pull_request:
-    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
+    name: Build, typecheck and test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
-          cache: "npm"
+          node-version: "22"
+          cache: npm
 
-      - name: Install dependencies
+      - name: Install
         run: npm ci
 
-      # Real, found-not-assumed ordering constraint (docs/26_DECISIONS.md ADR-035): each
-      # package's own `typecheck` script runs a plain `tsc --noEmit`, which resolves a
-      # dependency package (e.g. `@ai-platform/shared`) through its built `dist/*.d.ts`
-      # output, not its TypeScript source — so on a genuinely fresh checkout with no
-      # `dist/` yet, `npm run typecheck` fails immediately with "Cannot find module"
-      # errors for every cross-package import, confirmed by wiping every `dist/` and
-      # `.tsbuildinfo` locally and re-running the intended step order. `build:packages`
-      # (the same project-references build every package's own dependents already need)
-      # must run first.
-      - name: Build packages (required before typecheck can resolve cross-package types)
+      # Packages must be built before typecheck: each workspace's `tsc --noEmit` resolves
+      # cross-package types through the compiled `dist`, not through source.
+      - name: Build packages
         run: npm run build:packages
 
-      - name: Typecheck
+      - name: Typecheck (all workspaces)
         run: npm run typecheck
 
-      - name: Build (apps)
+      - name: Build apps
         run: npm run build
 
-      # packages/media's CloudStorageAssetStore suite (docs/26_DECISIONS.md ADR-040) runs the
-      # real @google-cloud/storage client against a real fake-gcs-server process. Without
-      # the binary the suite skips itself LOUDLY rather than pretending to pass — this step
-      # makes sure CI actually exercises it. Pinned to the exact release verified locally.
-      - name: Install fake-gcs-server (Cloud Storage emulator for the asset-store suite)
+      # --- external services the integration tests genuinely use ------------------------
+      # Both suites skip loudly rather than silently when their binary is absent; installing
+      # them here is what makes those tests actually run in CI instead of quietly passing.
+      - name: Install fake-gcs-server (Cloud Storage integration tests)
         run: |
-          curl -sSL -o /tmp/fgcs.tar.gz https://github.com/fsouza/fake-gcs-server/releases/download/v1.56.1/fake-gcs-server_1.56.1_Linux_amd64.tar.gz
-          tar -xzf /tmp/fgcs.tar.gz -C /tmp fake-gcs-server
-          chmod +x /tmp/fake-gcs-server
-          echo "FAKE_GCS_SERVER_BIN=/tmp/fake-gcs-server" >> "$GITHUB_ENV"
-      # packages/scanning's ClamAvScanner suite drives the real clamd TCP protocol against a
-      # real clamd process (docs/26_DECISIONS.md ADR-042). No virus database download is
-      # needed — the test starts clamd against a one-line EICAR-only signature file it writes
-      # itself. Without CLAMD_BIN the suite skips itself LOUDLY; this step makes CI run it.
-      - name: Install ClamAV (real clamd for the scanner suite)
+          set -euo pipefail
+          VERSION=1.56.1
+          curl -sSfL -o /tmp/fake-gcs.tar.gz \
+            "https://github.com/fsouza/fake-gcs-server/releases/download/v${VERSION}/fake-gcs-server_${VERSION}_Linux_amd64.tar.gz"
+          mkdir -p /tmp/fake-gcs && tar -xzf /tmp/fake-gcs.tar.gz -C /tmp/fake-gcs
+          echo "FAKE_GCS_SERVER_BIN=/tmp/fake-gcs/fake-gcs-server" >> "$GITHUB_ENV"
+
+      - name: Install ClamAV daemon (malware scanning tests)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq clamav-daemon >/dev/null
-          # The packaged services want a full database we don't need here; stop them so they
-          # neither contend for the port range nor spend CI minutes on freshclam.
-          sudo systemctl stop clamav-daemon clamav-freshclam 2>/dev/null || true
-          echo "CLAMD_BIN=$(command -v clamd)" >> "$GITHUB_ENV"
-      - name: Test
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clamav-daemon
+          # The tests spawn their own clamd with a one-signature database; the packaged
+          # services must not hold the socket or the port.
+          sudo systemctl stop clamav-freshclam clamav-daemon || true
+          echo "CLAMD_BIN=/usr/sbin/clamd" >> "$GITHUB_ENV"
+
+      - name: Test (all workspaces)
         run: npm test
 
-      # docs/13_SECURITY_ARCHITECTURE.md §3 "Dependency/SCA scanning" + docs/21 §2.8.
-      # --audit-level=high: the 4 known moderate advisories (drizzle-kit's dev-only,
-      # never-network-exposed esbuild dependency) are an accepted risk, documented in
-      # docs/26_DECISIONS.md — this gate exists to catch a *new* high/critical
-      # regression, not to re-litigate an already-reviewed one on every single run.
-      - name: Dependency audit (high/critical only)
-        run: npm audit --audit-level=high
+      # A skipped test is not a passing test (product brief §29). This fails the build if the
+      # environment-gated suites silently skipped instead of running.
+      - name: Assert the gated suites actually ran
+        run: |
+          set -euo pipefail
+          npm test 2>&1 | tee /tmp/test-output.txt
+          if grep -qiE "skipping (clamd|fake-gcs)" /tmp/test-output.txt; then
+            echo "::error::An environment-gated suite skipped in CI. Those binaries are installed above, so a skip means the gate is broken."
+            exit 1
+          fi
 
-  secret-scan:
+  frontend:
+    name: Frontend build and tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build packages
+        run: npm run build:packages
+      - name: Test (web)
+        run: npm test --workspace=@ai-platform/web --if-present
+      - name: Build (web)
+        run: npm run build --workspace=@ai-platform/web
+
+  security:
+    name: Security checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # docs/13_SECURITY_ARCHITECTURE.md §3 "Enforce this with pre-commit secret-scanning
-      # (e.g., gitleaks) and CI secret-scanning as a merge-blocking check" — the real tool
-      # the security doc names, not a hand-rolled substitute, now that CI exists to run it
-      # on (docs/27_RISKS_AND_LIMITATIONS.md previously tracked this as blocked on exactly
-      # that precondition).
-      - name: gitleaks
+
+      - name: Secret scan (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install
+        run: npm ci
+
+      # Fails on high/critical only. One moderate advisory is accepted and argued in
+      # docs/27_RISKS_AND_LIMITATIONS.md; a blanket `--audit-level=moderate` would fail on it
+      # every run and train everyone to ignore the gate.
+      - name: Dependency audit
+        run: npm audit --audit-level=high
+
+      - name: Assert no production code path returns a fake implementation
+        run: |
+          set -euo pipefail
+          # Product brief §32: mock providers must never be reachable in production. The
+          # composition root refuses to construct them when NODE_ENV=production; this checks
+          # nobody has since added an unconditional construction.
+          if grep -rn "new Mock" apps/api/src --include=*.ts | grep -v "NODE_ENV" | grep -v test; then
+            echo "::error::A mock provider is constructed outside a NODE_ENV guard."
+            exit 1
+          fi
+
+  infrastructure:
+    name: Docker build and Terraform validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # The ADR-047 audit found the API image could never boot, and the reason was invisible
+      # because no image had ever been built. Building both images in CI is what stops that
+      # class of defect from recurring.
+      - name: Build the API image
+        run: docker build -f apps/api/Dockerfile -t ai-platform-api:ci .
+
+      - name: Build the web image
+        run: docker build -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_API_URL=http://localhost:8787 -t ai-platform-web:ci .
+
+      # And that it actually STARTS — a build that produces an un-bootable image is the exact
+      # failure this gate exists to catch (ADR-060).
+      - name: Assert the API image boots in the worker role with no LLM key
+        run: |
+          set -euo pipefail
+          docker run --rm -d --name api-boot-check \
+            -e NODE_ENV=production -e ROLE=worker -e DATABASE_DIR=/tmp/pgdata \
+            ai-platform-api:ci
+          for i in $(seq 1 30); do
+            if ! docker ps --filter name=api-boot-check --filter status=running -q | grep -q .; then
+              echo "::error::The worker-role container exited instead of running."
+              docker logs api-boot-check || true
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs api-boot-check
+          docker stop api-boot-check
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+      - name: Terraform format check
+        run: terraform -chdir=infrastructure/terraform fmt -check -recursive
+      - name: Terraform validate
+        run: |
+          terraform -chdir=infrastructure/terraform init -backend=false
+          terraform -chdir=infrastructure/terraform validate

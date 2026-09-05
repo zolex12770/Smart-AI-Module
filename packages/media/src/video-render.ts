@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssetRepository, VideoProjectRepository, VideoSceneRepository } from "@ai-platform/database";
 import type { AssetStore } from "./asset-store.js";
+import type { VideoProjectScope } from "./video-orchestration.js";
 
 const RENDER_WIDTH = 640;
 const RENDER_HEIGHT = 360;
@@ -33,26 +34,35 @@ export interface VideoRenderDeps {
  * docs/07 §2.2 stage 8's documented approach (normalize each clip with `scale`+`pad`+`fps`
  * before concatenating, concat demuxer for hard cuts) rather than being invented from
  * scratch, but that is not a substitute for having actually run it.
+ *
+ * `scope` carries the tenant project alongside the video project (ADR-049): the parent row,
+ * its scenes, each scene's asset and the final MP4's own `assets` row are all read and
+ * written under it, so a `video.render` payload naming another tenant's video resolves to
+ * nothing instead of rendering it.
  */
-export async function processVideoRender(deps: VideoRenderDeps, projectId: string): Promise<void> {
+export async function processVideoRender(deps: VideoRenderDeps, scope: VideoProjectScope): Promise<void> {
   const ffmpegPath = deps.ffmpegPath ?? "ffmpeg";
-  const project = await deps.projectRepo.get(projectId);
-  if (!project) throw new Error(`video.render job referenced unknown project "${projectId}".`);
+  const project = await deps.projectRepo.get(scope.projectId, scope.videoProjectId);
+  if (!project) {
+    throw new Error(
+      `video.render job referenced unknown project "${scope.videoProjectId}" in project "${scope.projectId}".`
+    );
+  }
 
-  await deps.projectRepo.updateRender(projectId, { renderStatus: "processing" });
+  await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, { renderStatus: "processing" });
 
   if (!(await isFfmpegAvailable(ffmpegPath))) {
-    await deps.projectRepo.updateRender(projectId, {
+    await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {
       renderStatus: "skipped_no_ffmpeg",
       renderError:
         "ffmpeg was not found on PATH in this environment. Every scene generated successfully and " +
         "its clip is available individually via its own asset id; final MP4 packaging was skipped.",
     });
-    await deps.projectRepo.updateStatus(projectId, "succeeded");
+    await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "succeeded");
     return;
   }
 
-  const allScenes = await deps.sceneRepo.listByProject(projectId);
+  const allScenes = await deps.sceneRepo.listByVideoProject(scope);
   const succeededScenes = allScenes.filter((s) => s.status === "succeeded" && s.assetId).sort((a, b) => a.sceneIndex - b.sceneIndex);
 
   const workDir = await mkdtemp(join(tmpdir(), "video-render-"));
@@ -63,14 +73,13 @@ export async function processVideoRender(deps: VideoRenderDeps, projectId: strin
 
     const normalizedPaths: string[] = [];
     for (const scene of succeededScenes) {
-      const asset = await deps.assetRepo.get(scene.assetId as string);
+      const asset = await deps.assetRepo.get(scope.projectId, scene.assetId as string);
       if (!asset) throw new Error(`Scene ${scene.sceneIndex} references missing asset "${scene.assetId}".`);
       // ffmpeg needs a real local file, and an asset's bytes may live in Cloud Storage
       // (ADR-040) — materialize every clip into the render's own temp dir through the
       // store, never by reading `asset.storagePath` directly. For the local store this is
       // one extra copy of a small clip; for GCS it is the download that has to happen anyway.
-      const ext = asset.mimeType === "image/gif" ? "gif" : asset.storagePath.split(".").pop() ?? "bin";
-      const inPath = join(workDir, `clip_${String(scene.sceneIndex).padStart(4, "0")}.${ext}`);
+      const inPath = join(workDir, `clip_${String(scene.sceneIndex).padStart(4, "0")}.${extensionForMimeType(asset.mimeType)}`);
       await writeFile(inPath, await deps.assetStore.read(asset));
       const outPath = join(workDir, `scene_${String(scene.sceneIndex).padStart(4, "0")}.mp4`);
       await runFfmpeg(ffmpegPath, [
@@ -98,21 +107,62 @@ export async function processVideoRender(deps: VideoRenderDeps, projectId: strin
     await runFfmpeg(ffmpegPath, ["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", finalPath]);
 
     const finalBytes = await readFile(finalPath);
-    const assetId = await deps.assetStore.store(finalBytes, "video/mp4", "mp4", "video");
+    // Owned by the same tenant as the clips it was assembled from — nothing else could serve it.
+    const assetId = await deps.assetStore.store(scope.projectId, finalBytes, "video/mp4", "mp4", "video");
 
-    await deps.projectRepo.updateRender(projectId, { renderStatus: "succeeded", renderAssetId: assetId });
+    await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {
+      renderStatus: "succeeded",
+      renderAssetId: assetId,
+    });
     await deps.projectRepo.updateStatus(
-      projectId,
+      scope.projectId,
+      scope.videoProjectId,
       succeededScenes.length === allScenes.length ? "succeeded" : "partially_succeeded"
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await deps.projectRepo.updateRender(projectId, { renderStatus: "failed", renderError: message });
-    await deps.projectRepo.updateStatus(projectId, "failed", { errorMessage: `Rendering failed: ${message}` });
+    await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {
+      renderStatus: "failed",
+      renderError: message,
+    });
+    await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "failed", {
+      errorMessage: `Rendering failed: ${message}`,
+    });
     throw err;
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * The temp-file extension ffmpeg's input is written with, derived from the asset's declared
+ * `mimeType`.
+ *
+ * It used to be parsed out of `asset.storagePath`, which broke the AssetStore contract this
+ * file's own comment states two lines above the call site: only the store that wrote that
+ * field may interpret it (ADR-040). The bug was not theoretical — a `CloudStorageAssetStore`
+ * row is a `gs://bucket/video/<id>.gif` URI whose "extension" is an artifact of the object
+ * key, and a store that keyed objects without one would have yielded a suffix taken from the
+ * bucket name. `mimeType` is the asset's own description of its bytes, recorded by whichever
+ * provider produced them, and is identical under both stores.
+ *
+ * Unknown types fall back to `.bin` rather than to a guess: ffmpeg demuxes by probing content,
+ * not by suffix, so an honest "unknown" costs nothing and a wrong extension only misleads
+ * whoever reads a crash dump.
+ */
+export function extensionForMimeType(mimeType: string): string {
+  const EXTENSIONS: Record<string, string> = {
+    "image/gif": "gif", // the mock provider's real, playable clips (ADR-030)
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp",
+  };
+  // Parameters are legal in a media type (`video/mp4; codecs=avc1`) and are not part of it.
+  const essence = mimeType.split(";")[0].trim().toLowerCase();
+  return EXTENSIONS[essence] ?? "bin";
 }
 
 export function isFfmpegAvailable(ffmpegPath: string): Promise<boolean> {

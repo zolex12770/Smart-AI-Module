@@ -19,30 +19,72 @@ import {
   PgVideoProjectRepository,
   PgVideoSceneRepository,
   PgUsageRecordRepository,
-  type DrizzleDb,
+  type PgliteDb,
 } from "@ai-platform/database";
-import { HashEmbeddingProvider } from "@ai-platform/embeddings";
+import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { LocalAssetStore } from "@ai-platform/media";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { QuotaManager } from "@ai-platform/quota";
+import { AuthService, ProcessSandbox, TEST_SCRYPT_PARAMS, generateCsrfToken } from "@ai-platform/security";
 import { createFilesystemTools, ToolRegistry } from "@ai-platform/tools";
 import { loadConfig } from "./config.js";
 import type { AppContext } from "./context.js";
+import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from "./plugins/auth.js";
 import { buildServer } from "./server.js";
 
 /**
  * Real, in-process test harness for the HTTP layer — mirrors `index.ts`'s composition
- * root (same repositories, same real PGlite Postgres, same real pg-boss job queue) minus
- * the pieces route-level tests don't need: no real network `listen()` (Fastify's own
- * `app.inject()` drives requests directly against the app instance), no MCP subprocess,
- * no job *workers* registered (route tests assert on enqueue-time behavior — validation,
- * status codes, rate limits — not job completion, which `packages/media`/`packages/rag`'s
- * own integration tests already cover for real). `NODE_ENV=test` keeps `loadConfig()`
- * happy without a real `.env`.
+ * root (same repositories, same real PGlite Postgres, same real pg-boss job queue, same
+ * real `AuthService`) minus the pieces route-level tests don't need: no real network
+ * `listen()` (Fastify's own `app.inject()` drives requests directly against the app
+ * instance), no MCP subprocess, no job *workers* registered (route tests assert on
+ * enqueue-time behavior — validation, status codes, rate limits — not job completion, which
+ * `packages/media`/`packages/rag`'s own integration tests already cover for real).
+ * `NODE_ENV=test` keeps `loadConfig()` happy without a real `.env`.
+ *
+ * Since ADR-049 the harness also has to produce a *caller*. Every route that touches user
+ * data now demands an authenticated principal and a project scope, so a test that only got
+ * an app back could no longer reach anything: there is deliberately no ambient authority to
+ * fall back on. `buildTestApp` therefore signs up a real user through the real `AuthService`
+ * — which creates their organization and first project in one transaction — logs them in for
+ * a real session token, and hands back ready-to-use `headers`.
  */
-export async function buildTestApp(): Promise<{ app: FastifyInstance; db: DrizzleDb; ctx: AppContext }> {
+
+/** Password used for the harness account. Length only matters to `signupRequestSchema`;
+ * this goes straight through `AuthService`, but keeping it valid means a test may re-login
+ * through `POST /api/v1/auth/login` with the same credentials. */
+const TEST_PASSWORD = "test-password-1234";
+
+export interface TestAuth {
+  userId: string;
+  /** The tenant project every repository call in a route will be scoped to. */
+  projectId: string;
+  /** The opaque session token; only its SHA-256 is stored, exactly as in production. */
+  sessionToken: string;
+  csrfToken: string;
+  /**
+   * Drop-in for `app.inject({ headers })`. Carries three things, and each is load-bearing:
+   * the session cookie (authentication), the CSRF cookie *and* matching header (the
+   * double-submit pair the auth plugin requires on every cookie-authenticated mutation), and
+   * `x-project-id` (the scope selector — a session, unlike an API key, is not bound to one
+   * project, so the caller has to name which one it is acting in).
+   */
+  headers: Record<string, string>;
+}
+
+export async function buildTestApp(): Promise<{
+  app: FastifyInstance;
+  /**
+   * The concrete PGlite handle, not the dialect-agnostic `DrizzleDb` the repositories take.
+   * Tests need the narrower type because `$client` — the embedded engine that has to be shut
+   * down at the end of a test, and the connection `pg-boss` is wired to — exists only on it.
+   */
+  db: PgliteDb;
+  ctx: AppContext;
+  auth: TestAuth;
+}> {
   process.env.NODE_ENV = process.env.NODE_ENV ?? "test";
   const config = loadConfig();
 
@@ -75,6 +117,21 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; db: Drizzl
     await jobQueue.ensureQueue(queue);
   }
 
+  /**
+   * The real AuthService against the real test database — not a stub. Authorization is the
+   * thing these route tests most need to exercise honestly: a fake that always said "yes"
+   * would make every IDOR regression invisible, which is exactly the class of bug ADR-049
+   * exists to prevent.
+   *
+   * The one concession to running in a test is the scrypt cost. Production uses OWASP's
+   * minimum (N=2^17 ≈ 128 MiB per hash); at that cost a suite that signs up a user per test
+   * spends most of its runtime deriving keys. `TEST_SCRYPT_PARAMS` is the same algorithm and
+   * the same encoded format at a lower N — the code path under test is unchanged.
+   */
+  const authService = new AuthService(db, { scryptParams: TEST_SCRYPT_PARAMS });
+
+  const embeddings = new EmbeddingService(new HashEmbeddingProvider());
+
   const ctx: AppContext = {
     router: modelRouter,
     conversations: new PgConversationRepository(db),
@@ -87,7 +144,7 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; db: Drizzl
     documents: new PgDocumentRepository(db),
     documentChunks: new PgDocumentChunkRepository(db),
     memoryItems: new PgMemoryItemRepository(db),
-    embeddings: new HashEmbeddingProvider(),
+    embeddings,
     sandboxRoot,
     jobQueue,
     assets: new PgAssetRepository(db),
@@ -106,15 +163,61 @@ export async function buildTestApp(): Promise<{ app: FastifyInstance; db: Drizzl
     uploadScanRequired: false,
     // Tests run as development would: the mock media providers are available (ADR-045).
     mediaGenerationAvailable: true,
+
+    // --- identity, tenancy and isolation (ADR-049 / ADR-055) -----------------------------
+    auth: authService,
+    // Plain HTTP under `app.inject()`: a `Secure` cookie would simply not be sent back.
+    cookieSecure: false,
+    // ADR-055's process isolation (scrubbed env, real termination, output caps) rooted at the
+    // same throwaway directory the filesystem tools use, so a test that reaches the sandbox
+    // gets the real containment check rather than a permissive double.
+    sandbox: new ProcessSandbox(sandboxRoot),
+    agentLimits: {
+      maxIterations: config.AGENT_MAX_ITERATIONS,
+      maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN,
+    },
+    // False here, and truthfully so: the hash provider is a deterministic lexical fallback,
+    // not a semantic model (ADR-048). Reading it off the service rather than hardcoding it
+    // means a harness that one day configures a real embedding runtime reports the change.
+    semanticEmbeddingsAvailable: !embeddings.isDeterministicFallback,
   };
 
   const { createLogger } = await import("@ai-platform/observability");
   const app = await buildServer(config, ctx, createLogger("api-test"));
 
-  return { app, db, ctx };
+  // A real signup (user + organization + first project, one transaction) followed by a real
+  // login, through the same service the HTTP routes call. Nothing is inserted behind the
+  // service's back, so the fixture cannot drift from what a genuine account looks like.
+  const { user, projectId } = await authService.signup({
+    email: `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.test`,
+    password: TEST_PASSWORD,
+    displayName: "Test Operator",
+    organizationName: "Test Organization",
+  });
+  const session = await authService.login(user.email, TEST_PASSWORD);
+  // The CSRF token is minted by the login *route* in production (it is not a property of the
+  // session), so the harness mints one the same way and sends both halves of the pair.
+  const csrfToken = generateCsrfToken();
+
+  return {
+    app,
+    db,
+    ctx,
+    auth: {
+      userId: user.id,
+      projectId,
+      sessionToken: session.token,
+      csrfToken,
+      headers: {
+        cookie: `${SESSION_COOKIE}=${session.token}; ${CSRF_COOKIE}=${csrfToken}`,
+        [CSRF_HEADER]: csrfToken,
+        "x-project-id": projectId,
+      },
+    },
+  };
 }
 
-export async function closeTestApp(app: FastifyInstance, db: DrizzleDb, ctx: AppContext): Promise<void> {
+export async function closeTestApp(app: FastifyInstance, db: PgliteDb, ctx: AppContext): Promise<void> {
   await app.close();
   await ctx.jobQueue.stop();
   await db.$client.close();

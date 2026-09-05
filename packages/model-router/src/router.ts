@@ -1,79 +1,156 @@
-import type { ChatRequest, ChatStreamEvent } from "@ai-platform/shared";
-import { ProviderError } from "@ai-platform/shared";
-import type { ModelRegistry } from "./registry.js";
+import { ProviderError, type ChatRequest, type ChatStreamEvent, type LLMProvider } from "@ai-platform/shared";
+import type { ModelRegistry, SelectionCriteria } from "./registry.js";
 
 /**
- * Routes to a specific requested provider (no fallback substitution — if a caller names
- * a provider explicitly, silently swapping it for another would violate their intent),
- * or, when no provider is named, tries the default provider first and falls back through
- * the rest of the registry in order (docs/12_MODEL_ROUTING.md, docs/23_FAILURE_RECOVERY.md
- * "Circuit breaking"/fallback section).
+ * Routing, retry and fallback — docs/12_MODEL_ROUTING.md §4, completed by ADR-058.
  *
- * Fallback only happens BEFORE a provider yields its first real event — once a provider
- * has started streaming tokens to the caller, switching to a different provider mid-
- * stream would mean sending a partial response from one model followed by a full
- * response from another, which is more confusing than just surfacing the failure. A
- * failure after the first token is a clean stream-ending error, not a silent retry.
+ * The previous router had no retry, no backoff, never read `Retry-After`, and skipped a
+ * silent provider without reporting it. All three are fixed here, and the guarantee the
+ * fallback design rests on is unchanged and load-bearing:
  *
- * A fallback is REPORTED, never silent (docs/26_DECISIONS.md ADR-044). This was originally
- * a bare `console.warn`, which meant that when a real provider failed and the mock answered
- * in its place, the only *structured* record of the request said `provider: "mock",
- * status: "success"` — a failed real call was indistinguishable from a healthy mock one in
- * the JSON logs. Callers now receive every fallback through `onFallback`, either per call
- * (so it can be correlated with a request id) or per router instance; the `console.warn`
- * remains only as the default when no caller supplies a hook.
+ *   **Fallback only happens BEFORE a provider yields its first real event.** Once tokens are
+ *   flowing to the caller, switching providers would splice half an answer from one model
+ *   onto a full answer from another. After the first event a failure is a clean stream error.
+ *
+ * Nothing is silent. Every retry, every backoff, and every provider skipped is reported to
+ * `onFallback`/`onRetry`, which the composition root wires to the structured logger (ADR-044).
  */
+
 export interface ProviderFallback {
-  /** The provider that failed and was skipped — NOT the one that ultimately answered. */
   provider: string;
-  /** Where it failed: it threw before yielding anything, or its first event was an error. */
-  stage: "no_first_event" | "error_event";
+  stage: "no_first_event" | "error_event" | "empty_stream";
   message: string;
   error: unknown;
 }
 
+export interface ProviderRetry {
+  provider: string;
+  attempt: number;
+  delayMs: number;
+  message: string;
+}
+
+export interface RetryPolicy {
+  /** Attempts per provider, including the first. docs/12 §4.1 specifies 3. */
+  maxAttempts: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
+export const DEFAULT_RETRY_POLICY: RetryPolicy = { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 20_000 };
+
 export interface StreamChatOptions {
-  /** Called once per skipped provider, before the next candidate is tried. */
   onFallback?: (fallback: ProviderFallback) => void;
+  onRetry?: (retry: ProviderRetry) => void;
+  /** Hard requirements/preferences for provider selection. */
+  criteria?: SelectionCriteria;
+  signal?: AbortSignal;
+}
+
+export interface ModelRouterOptions extends StreamChatOptions {
+  retryPolicy?: RetryPolicy;
+  /** Consecutive failures before a provider is skipped for `circuitResetMs`. */
+  circuitThreshold?: number;
+  circuitResetMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/** Errors worth retrying the SAME provider for, versus errors that should fail over. */
+export function classifyProviderError(error: unknown): "retryable" | "fatal" {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\((429|408|500|502|503|504)\)/.test(message)) return "retryable";
+  if (/timeout|timed out|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|socket hang up|fetch failed/i.test(message)) {
+    return "retryable";
+  }
+  // 400/401/403/404 and unparseable-argument errors will not fix themselves.
+  return "fatal";
+}
+
+/** Honours a provider's own `Retry-After` when it told us one, as docs/12 §4.1 requires. */
+export function retryAfterMsFromError(error: unknown): number | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const seconds = /retry-after["':\s]+(\d+)/i.exec(message);
+  if (seconds) return Number(seconds[1]) * 1000;
+  const ms = /retry-after-ms["':\s]+(\d+)/i.exec(message);
+  if (ms) return Number(ms[1]);
+  return null;
+}
+
+interface CircuitState {
+  failures: number;
+  openedAt: number | null;
 }
 
 export class ModelRouter {
+  private readonly retryPolicy: RetryPolicy;
+  private readonly circuitThreshold: number;
+  private readonly circuitResetMs: number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
+  private readonly circuits = new Map<string, CircuitState>();
+
   constructor(
     private readonly registry: ModelRegistry,
-    private readonly options: StreamChatOptions = {}
-  ) {}
+    private readonly options: ModelRouterOptions = {}
+  ) {
+    this.retryPolicy = options.retryPolicy ?? DEFAULT_RETRY_POLICY;
+    this.circuitThreshold = options.circuitThreshold ?? 5;
+    this.circuitResetMs = options.circuitResetMs ?? 30_000;
+    this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
+    this.now = options.now ?? (() => Date.now());
+  }
 
   async *streamChat(
     request: ChatRequest,
     callOptions: StreamChatOptions = {}
   ): AsyncGenerator<ChatStreamEvent, void, unknown> {
+    const report = (f: ProviderFallback) => (callOptions.onFallback ?? this.options.onFallback)?.(f);
+    const reportRetry = (r: ProviderRetry) => (callOptions.onRetry ?? this.options.onRetry)?.(r);
+    const signal = callOptions.signal ?? this.options.signal;
+
+    // An explicitly named provider is never substituted: silently swapping it would violate
+    // the caller's intent. It still gets retries, just no fallback.
     if (request.provider) {
       const provider = this.registry.get(request.provider);
       if (!provider) throw new ProviderError(`Unknown provider "${request.provider}".`);
-      yield* provider.streamChat(request);
+      yield* this.streamWithRetry(provider, request, reportRetry, signal);
       return;
     }
 
-    const report = (fallback: ProviderFallback): void => {
-      const handler = callOptions.onFallback ?? this.options.onFallback;
-      if (handler) {
-        handler(fallback);
-        return;
-      }
-      // eslint-disable-next-line no-console
-      console.warn(`[model-router] provider "${fallback.provider}" ${fallback.stage === "no_first_event" ? "failed before its first event" : "returned an error event"}, falling back:`, fallback.error);
+    const criteria: SelectionCriteria = {
+      ...(callOptions.criteria ?? this.options.criteria ?? {}),
+      // A request carrying tools may only go to a provider that can call them.
+      requiresTools: (callOptions.criteria?.requiresTools ?? this.options.criteria?.requiresTools) || Boolean(request.tools?.length),
     };
 
-    const candidates = this.fallbackOrder();
-    let lastError: unknown;
+    const candidates = this.registry.select(criteria);
+    if (candidates.length === 0) {
+      throw new ProviderError(
+        `No configured model provider satisfies this request (tools required: ${Boolean(request.tools?.length)}).`
+      );
+    }
 
+    let lastError: unknown;
     for (const provider of candidates) {
-      const iterator = provider.streamChat(request)[Symbol.asyncIterator]();
+      if (signal?.aborted) throw new ProviderError("Cancelled before a provider produced output.");
+      if (this.circuitOpen(provider.name)) {
+        report({
+          provider: provider.name,
+          stage: "no_first_event",
+          message: "circuit open after repeated failures",
+          error: new ProviderError("circuit open"),
+        });
+        continue;
+      }
+
+      const iterator = this.streamWithRetry(provider, request, reportRetry, signal)[Symbol.asyncIterator]();
       let first: IteratorResult<ChatStreamEvent>;
       try {
         first = await iterator.next();
       } catch (err) {
         lastError = err;
+        this.recordFailure(provider.name);
         report({
           provider: provider.name,
           stage: "no_first_event",
@@ -82,26 +159,35 @@ export class ModelRouter {
         });
         continue;
       }
-      if (first.done) continue;
+
+      if (first.done) {
+        // Previously skipped WITHOUT reporting — a real hole in "a fallback is never silent".
+        lastError = new ProviderError(`Provider "${provider.name}" produced no events.`);
+        this.recordFailure(provider.name);
+        report({ provider: provider.name, stage: "empty_stream", message: "produced no events", error: lastError });
+        continue;
+      }
       if (first.value.type === "error") {
         lastError = new ProviderError(first.value.message);
-        report({
-          provider: provider.name,
-          stage: "error_event",
-          message: first.value.message,
-          error: lastError,
-        });
+        this.recordFailure(provider.name);
+        report({ provider: provider.name, stage: "error_event", message: first.value.message, error: lastError });
         continue;
       }
 
-      // Committed to this provider now that it has produced a real first event.
+      // Committed: this provider produced a real first event.
+      this.recordSuccess(provider.name);
       yield first.value;
       while (true) {
         let next: IteratorResult<ChatStreamEvent>;
         try {
           next = await iterator.next();
-        } catch {
-          yield { type: "error", message: "The model provider failed partway through responding." };
+        } catch (err) {
+          yield {
+            type: "error",
+            message: `The model provider failed partway through responding: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          };
           return;
         }
         if (next.done) return;
@@ -114,9 +200,72 @@ export class ModelRouter {
       : new ProviderError("All configured LLM providers failed to respond.");
   }
 
-  private fallbackOrder() {
-    const all = this.registry.list();
-    const primary = this.registry.getDefault();
-    return [primary, ...all.filter((p) => p !== primary)];
+  /**
+   * Retries one provider with exponential backoff and full jitter, honouring `Retry-After`
+   * as a floor. Retry only happens before the first event for the same reason fallback does.
+   */
+  private async *streamWithRetry(
+    provider: LLMProvider,
+    request: ChatRequest,
+    reportRetry: (r: ProviderRetry) => void,
+    signal?: AbortSignal
+  ): AsyncGenerator<ChatStreamEvent, void, unknown> {
+    for (let attempt = 1; attempt <= this.retryPolicy.maxAttempts; attempt++) {
+      const iterator = provider.streamChat(request)[Symbol.asyncIterator]();
+      let first: IteratorResult<ChatStreamEvent>;
+      try {
+        first = await iterator.next();
+      } catch (err) {
+        const retryable = classifyProviderError(err) === "retryable";
+        if (!retryable || attempt === this.retryPolicy.maxAttempts || signal?.aborted) throw err;
+        const delay = this.backoffDelay(attempt, retryAfterMsFromError(err));
+        reportRetry({
+          provider: provider.name,
+          attempt,
+          delayMs: delay,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        await this.sleep(delay);
+        continue;
+      }
+      if (first.done) return;
+      yield first.value;
+      while (true) {
+        const next = await iterator.next();
+        if (next.done) return;
+        yield next.value;
+      }
+    }
+  }
+
+  private backoffDelay(attempt: number, retryAfterMs: number | null): number {
+    const exponential = Math.min(this.retryPolicy.baseDelayMs * 2 ** (attempt - 1), this.retryPolicy.maxDelayMs);
+    // Full jitter (AWS's recommendation) — avoids a thundering herd of synchronised retries.
+    const jittered = Math.random() * exponential;
+    return Math.max(retryAfterMs ?? 0, Math.ceil(jittered));
+  }
+
+  private circuitOpen(name: string): boolean {
+    const state = this.circuits.get(name);
+    if (!state?.openedAt) return false;
+    if (this.now() - state.openedAt >= this.circuitResetMs) {
+      // Half-open: allow one probe through rather than waiting for a manual reset.
+      this.circuits.set(name, { failures: 0, openedAt: null });
+      return false;
+    }
+    return true;
+  }
+
+  private recordFailure(name: string): void {
+    const state = this.circuits.get(name) ?? { failures: 0, openedAt: null };
+    const failures = state.failures + 1;
+    this.circuits.set(name, {
+      failures,
+      openedAt: failures >= this.circuitThreshold ? this.now() : state.openedAt,
+    });
+  }
+
+  private recordSuccess(name: string): void {
+    this.circuits.set(name, { failures: 0, openedAt: null });
   }
 }

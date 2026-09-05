@@ -1,103 +1,137 @@
-import { readFile, writeFile } from "node:fs/promises";
-import { PERMISSION_LEVEL_DEFAULTS } from "@ai-platform/shared";
+import { readFileSync, writeFileSync, rmSync } from "node:fs";
+import { PERMISSION_LEVEL_DEFAULTS, ValidationError, type ToolDefinition } from "@ai-platform/shared";
+import { applyUnifiedDiff, PatchError } from "./patch.js";
 import { resolveSandboxedPath } from "./sandbox-path.js";
 import type { NativeToolEntry } from "./filesystem.js";
 
 /**
- * Deterministic coding-fix tools — docs/25_IMPLEMENTATION_ROADMAP.md Phase 5.
+ * Code-editing tools for the coding agent — docs/26_DECISIONS.md ADR-062, product brief §10.
  *
- * Honest scope note (mirrors docs/26_DECISIONS.md ADR-018's reasoning for the planner):
- * genuinely reasoning about an arbitrary test failure and writing a correct fix needs a
- * real LLM — the mock provider (no real API key configured, ADR-010) cannot do that, and
- * building a "coding agent" that pretends to via canned text would be theater. These two
- * tools instead do something real and narrow: parse a *structured, self-describing*
- * failure signal a test prints (`FIX_NEEDED path=... find=... replace=...`) and apply the
- * exact literal correction it names. This proves the full pipeline — sandboxed command
- * execution, real failure observation, a real file mutation, and a real re-verification —
- * for a genuine (if narrow) automated-fix class, without faking creative reasoning.
- * Swapping in an LLM that reads arbitrary failure output and proposes a real diff is
- * future work once Phase 2 supplies a real model.
+ * WHAT THIS REPLACES, and why it matters: the previous implementation exposed
+ * `code.parse_fix_directive` and `code.apply_literal_fix`, which between them matched a
+ * `FIX_NEEDED path=... find=... replace=...` string that the failing test printed about
+ * itself and performed one whitespace-free literal replacement. No model was consulted at
+ * any point, so calling it an "autonomous coding agent" was not true (§37 forbids exactly
+ * that claim). The fix was authored by the test, not by the agent.
+ *
+ * These tools take the opposite approach: they give a *model* the primitives to do real
+ * work — read, search, patch, format, test — and let it decide what to change. The unified
+ * diff is the representation models are trained to produce, and `applyUnifiedDiff` applies
+ * it atomically across files with real hunk matching (see patch.ts).
  */
-const FIX_DIRECTIVE = /FIX_NEEDED path=(\S+) find=(\S+) replace=(\S+)/;
+
+function toolDefinition(
+  id: string,
+  name: string,
+  description: string,
+  inputSchema: Record<string, unknown>,
+  permissionLevel: "read_only" | "write_local"
+): ToolDefinition {
+  const defaults = PERMISSION_LEVEL_DEFAULTS[permissionLevel];
+  return {
+    id,
+    name,
+    description,
+    origin: { kind: "native", serverId: null, serverVersion: null },
+    inputSchema,
+    outputSchema: null,
+    permissionLevel,
+    riskLevel: defaults.riskLevel,
+    requiresApproval: defaults.requiresApproval,
+    timeoutMs: defaults.timeoutMs,
+    retryPolicy: { maxAttempts: 1, backoff: "none", idempotencyRequired: false },
+    enabled: true,
+  };
+}
 
 export function createCodingTools(root: string): NativeToolEntry[] {
-  const readOnly = PERMISSION_LEVEL_DEFAULTS.read_only;
-  const writeLocal = PERMISSION_LEVEL_DEFAULTS.write_local;
-
-  const parseFixDirectiveTool: NativeToolEntry = {
-    definition: {
-      id: "code.parse_fix_directive",
-      name: "Parse Fix Directive",
-      description:
-        "Scans text (e.g. captured stdout from a test run) for a line matching " +
-        '"FIX_NEEDED path=<file> find=<old> replace=<new>" and extracts the three fields. ' +
-        "Fails cleanly (does not fabricate a fix) if no such line is present — e.g. because " +
-        "the test already passed or failed for an unrelated reason this tool doesn't understand.",
-      origin: { kind: "native", serverId: null, serverVersion: null },
-      inputSchema: {
-        type: "object",
-        properties: { text: { type: "string" } },
-        required: ["text"],
-        additionalProperties: false,
-      },
-      outputSchema: {
-        type: "object",
-        properties: { path: { type: "string" }, find: { type: "string" }, replace: { type: "string" } },
-      },
-      permissionLevel: "read_only",
-      riskLevel: readOnly.riskLevel,
-      requiresApproval: readOnly.requiresApproval,
-      timeoutMs: readOnly.timeoutMs,
-      retryPolicy: { maxAttempts: 1, backoff: "none", idempotencyRequired: false },
-      enabled: true,
-    },
-    handler: async (args) => {
-      const text = String(args.text ?? "");
-      const match = FIX_DIRECTIVE.exec(text);
-      if (!match) {
-        return { ok: false, error: "No FIX_NEEDED directive found in the given text — nothing to fix." };
-      }
-      const [, path, find, replace] = match;
-      return { ok: true, output: { path, find, replace } };
-    },
+  const resolveIn = (context: { workspaceRoot?: string }, relativePath: string) => {
+    const base = context.workspaceRoot ? resolveSandboxedPath(root, context.workspaceRoot) : root;
+    return resolveSandboxedPath(base, relativePath);
   };
 
-  const applyLiteralFixTool: NativeToolEntry = {
-    definition: {
-      id: "code.apply_literal_fix",
-      name: "Apply Literal Fix",
-      description:
-        "Replaces the first exact occurrence of `find` with `replace` in the given file, " +
-        "inside the sandboxed workspace. Fails cleanly if `find` is not present in the file " +
-        "(never silently no-ops) so a stale or wrong directive doesn't look like a fix.",
-      origin: { kind: "native", serverId: null, serverVersion: null },
-      inputSchema: {
-        type: "object",
-        properties: { path: { type: "string" }, find: { type: "string" }, replace: { type: "string" } },
-        required: ["path", "find", "replace"],
-        additionalProperties: false,
+  return [
+    {
+      definition: toolDefinition(
+        "code.apply_patch",
+        "Apply a unified diff",
+        [
+          "Apply a unified diff to the workspace. This is how you edit code.",
+          "Supply a standard `--- a/path` / `+++ b/path` diff with `@@` hunks; several files may be changed in one call.",
+          "Create a file with `--- /dev/null`, delete one with `+++ /dev/null`.",
+          "The patch is applied atomically: if any hunk does not match, NOTHING is written and you get an error describing which hunk failed — read the file again and produce a fresh diff rather than retrying the same one.",
+        ].join(" "),
+        {
+          type: "object",
+          properties: {
+            diff: { type: "string", description: "A unified diff. Paths are relative to the workspace root." },
+          },
+          required: ["diff"],
+          additionalProperties: false,
+        },
+        "write_local"
+      ),
+      handler: async (args, context) => {
+        const diff = String(args.diff ?? "");
+        if (!diff.trim()) return { ok: false, error: "The diff was empty." };
+        try {
+          const applied = applyUnifiedDiff(diff, (relativePath) => resolveIn(context, relativePath), {
+            readFileSync,
+            writeFileSync,
+            rmSync: (p: string) => rmSync(p, { force: true }),
+          });
+          return {
+            ok: true,
+            output: {
+              filesChanged: applied.length,
+              files: applied,
+              // Surfaced so the model learns the file had drifted and can re-read it.
+              driftDetected: applied.some((f) => f.offsets.length > 0),
+            },
+          };
+        } catch (err) {
+          if (err instanceof PatchError || err instanceof ValidationError) {
+            return { ok: false, error: err.message };
+          }
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
       },
-      outputSchema: { type: "object", properties: { path: { type: "string" } } },
-      permissionLevel: "write_local",
-      riskLevel: writeLocal.riskLevel,
-      requiresApproval: writeLocal.requiresApproval,
-      timeoutMs: writeLocal.timeoutMs,
-      retryPolicy: { maxAttempts: 1, backoff: "none", idempotencyRequired: false },
-      enabled: true,
     },
-    handler: async (args) => {
-      const path = String(args.path ?? "");
-      const find = String(args.find ?? "");
-      const replace = String(args.replace ?? "");
-      const safePath = resolveSandboxedPath(root, path);
-      const content = await readFile(safePath, "utf8");
-      if (!content.includes(find)) {
-        return { ok: false, error: `"${find}" was not found in ${path} — refusing to apply a no-op fix.` };
-      }
-      await writeFile(safePath, content.replace(find, replace), "utf8");
-      return { ok: true, output: { path } };
+    {
+      definition: toolDefinition(
+        "code.read_lines",
+        "Read a numbered slice of a file",
+        "Read part of a file with line numbers, which is what you need to construct a correct unified diff. Prefer this over reading a whole large file.",
+        {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+            startLine: { type: "integer", minimum: 1 },
+            endLine: { type: "integer", minimum: 1 },
+          },
+          required: ["path"],
+          additionalProperties: false,
+        },
+        "read_only"
+      ),
+      handler: async (args, context) => {
+        try {
+          const absolute = resolveIn(context, String(args.path));
+          const lines = readFileSync(absolute, "utf8").split(/\r\n|\n|\r/);
+          const start = Math.max(1, Number(args.startLine ?? 1));
+          const end = Math.min(lines.length, Number(args.endLine ?? Math.min(lines.length, start + 399)));
+          const slice = lines
+            .slice(start - 1, end)
+            .map((text, i) => `${start + i}\t${text}`)
+            .join("\n");
+          return {
+            ok: true,
+            output: { path: String(args.path), startLine: start, endLine: end, totalLines: lines.length, content: slice },
+          };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
     },
-  };
-
-  return [parseFixDirectiveTool, applyLiteralFixTool];
+  ];
 }

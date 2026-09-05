@@ -1,4 +1,5 @@
 export * from "./errors.js";
+export * from "./auth.js";
 export * from "./chat.js";
 export * from "./task-graph.js";
 export * from "./tools.js";

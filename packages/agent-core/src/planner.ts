@@ -4,10 +4,20 @@ import { UNTRUSTED_CONTENT_SYSTEM_PROMPT, wrapUntrustedContent } from "./trust-b
 
 export type ToolLookup = (toolId: string) => ToolDefinition | undefined;
 
-/** A tool requires approval at plan time unless its registry entry says "never". */
-function approvalRequiredFor(toolId: string, lookupTool: ToolLookup): boolean {
-  return requireTool(toolId, lookupTool).requiresApproval !== "never";
-}
+/**
+ * `approvalRequired` on a planned node is now ONLY the planner's own unconditional gate —
+ * "this step needs a human whatever the tool says" — and no planned step currently needs
+ * one, so every node below sets it false.
+ *
+ * It used to be `def.requiresApproval !== "never"`, which quietly destroyed three quarters
+ * of docs/10_TOOL_AND_MCP_ARCHITECTURE.md §3.1's approval policy: `first_use` and
+ * `risk_threshold` both collapsed into `always` the moment the plan was written. Neither is
+ * answerable at plan time — one is a question about this project's history with the tool,
+ * the other about the deployment's risk threshold — and a plan can outlive both answers.
+ * So the boolean is gone and the dispatcher asks `ToolRegistry.approvalFor(toolId,
+ * projectId)` at the moment of the call instead (see engine.ts `approvalDecision`, ADR-059).
+ */
+const PLANNER_LEVEL_APPROVAL_REQUIRED = false;
 
 function requireTool(toolId: string, lookupTool: ToolLookup) {
   const def = lookupTool(toolId);
@@ -72,7 +82,7 @@ function planEchoChat(input: Record<string, unknown>): CreateTaskNodeInput[] {
       timeoutMs: 30_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["content"] },
-      approvalRequired: false,
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
     },
   ];
 }
@@ -98,7 +108,7 @@ function planReadAndSummarize(
       timeoutMs: 30_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["content"] },
-      approvalRequired: approvalRequiredFor(readToolId, lookupTool),
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: retryPolicyForTool(readToolId, lookupTool),
     },
     {
@@ -118,7 +128,7 @@ function planReadAndSummarize(
       timeoutMs: 30_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["content"] },
-      approvalRequired: false,
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: { maxAttempts: 2, backoff: "fixed", classifyFailureAs: null },
     },
   ];
@@ -126,7 +136,9 @@ function planReadAndSummarize(
 
 /**
  * Exists specifically to exercise the approval-gate mechanism end to end against a real
- * destructive tool (fs.delete_file) — see PROJECT_STATUS.md verification notes.
+ * destructive tool (fs.delete_file) — see PROJECT_STATUS.md verification notes. The gate is
+ * no longer baked into the plan: `fs.delete_file` declares `requiresApproval: "always"`, and
+ * the dispatcher asks the registry for that verdict when it is about to make the call.
  */
 function planDeleteSandboxFile(input: Record<string, unknown>, lookupTool: ToolLookup): CreateTaskNodeInput[] {
   const path = String(input.path ?? "");
@@ -141,7 +153,7 @@ function planDeleteSandboxFile(input: Record<string, unknown>, lookupTool: ToolL
       timeoutMs: 30_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["path"] },
-      approvalRequired: approvalRequiredFor("fs.delete_file", lookupTool),
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: retryPolicyForTool("fs.delete_file", lookupTool),
     },
   ];
@@ -168,7 +180,7 @@ function planAnswerFromDocuments(input: Record<string, unknown>, lookupTool: Too
       timeoutMs: 15_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["context"] },
-      approvalRequired: approvalRequiredFor("rag.search_documents", lookupTool),
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: retryPolicyForTool("rag.search_documents", lookupTool),
     },
     {
@@ -188,7 +200,7 @@ function planAnswerFromDocuments(input: Record<string, unknown>, lookupTool: Too
       timeoutMs: 30_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["content"] },
-      approvalRequired: false,
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: { maxAttempts: 2, backoff: "fixed", classifyFailureAs: null },
     },
   ];
@@ -220,7 +232,7 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
       timeoutMs: 30_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["exitCode", "stdout"] },
-      approvalRequired: approvalRequiredFor("terminal.run_command", lookupTool),
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: retryPolicyForTool("terminal.run_command", lookupTool),
     },
     {
@@ -233,7 +245,7 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
       timeoutMs: 10_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["path", "find", "replace"] },
-      approvalRequired: approvalRequiredFor("code.parse_fix_directive", lookupTool),
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: retryPolicyForTool("code.parse_fix_directive", lookupTool),
     },
     {
@@ -250,7 +262,7 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
       timeoutMs: 10_000,
       verificationMethod: "schema_check",
       verificationSpec: { requiredKeys: ["path"] },
-      approvalRequired: approvalRequiredFor("code.apply_literal_fix", lookupTool),
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: retryPolicyForTool("code.apply_literal_fix", lookupTool),
     },
     {
@@ -263,7 +275,7 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
       timeoutMs: 30_000,
       verificationMethod: "deterministic_compare",
       verificationSpec: { field: "exitCode", equals: 0 },
-      approvalRequired: approvalRequiredFor("terminal.run_command", lookupTool),
+      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
       retryPolicy: retryPolicyForTool("terminal.run_command", lookupTool),
     },
   ];

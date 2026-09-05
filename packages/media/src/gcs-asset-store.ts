@@ -47,8 +47,17 @@ export class CloudStorageAssetStore implements AssetStore {
     this.storage = options.storage ?? new Storage(options.apiEndpoint ? { apiEndpoint: options.apiEndpoint } : {});
   }
 
-  async store(bytes: Buffer, mimeType: string, ext: string, kind: AssetKind = "image"): Promise<string> {
+  async store(
+    projectId: string,
+    bytes: Buffer,
+    mimeType: string,
+    ext: string,
+    kind: AssetKind = "image"
+  ): Promise<string> {
     const id = uuid();
+    // Keyed by kind, not by project: the object name is a storage detail, and tenancy is
+    // enforced by the `assets` row's `project_id` in the SQL `WHERE` of every read
+    // (ADR-049), never by trusting a path prefix an operator could rename.
     const objectName = `${kind}/${id}.${ext}`;
     await this.storage.bucket(this.bucketName).file(objectName).save(bytes, {
       contentType: mimeType,
@@ -58,6 +67,7 @@ export class CloudStorageAssetStore implements AssetStore {
     const checksum = createHash("sha256").update(bytes).digest("hex");
     const asset = await this.assetRepo.create({
       id,
+      projectId,
       kind,
       mimeType,
       sizeBytes: bytes.length,
@@ -79,7 +89,8 @@ export class CloudStorageAssetStore implements AssetStore {
       // ignoreNotFound: an object already gone (a retried job) is success, not a failure.
       await this.storage.bucket(bucket).file(objectName).delete({ ignoreNotFound: true });
     } finally {
-      await this.assetRepo.delete(asset.id);
+      // Same scope-from-the-row reasoning as LocalAssetStore.delete (ADR-049).
+      await this.assetRepo.delete(asset.projectId, asset.id);
     }
   }
 }

@@ -6,6 +6,7 @@
     { "path": "packages/providers/llm-anthropic" },
     { "path": "packages/providers/llm-openai" },
     { "path": "packages/providers/llm-google" },
+    { "path": "packages/providers/llm-local" },
     { "path": "packages/model-router" },
     { "path": "packages/database" },
     { "path": "packages/tools" },
@@ -19,6 +20,7 @@
     { "path": "packages/providers/video-mock" },
     { "path": "packages/agent-core" },
     { "path": "packages/quota" },
-    { "path": "packages/scanning" }
+    { "path": "packages/scanning" },
+    { "path": "packages/security" }
   ]
 }
