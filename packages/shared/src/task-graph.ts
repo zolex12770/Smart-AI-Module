@@ -76,7 +76,14 @@ export const retryPolicySchema = z.object({
 });
 export type RetryPolicy = z.infer<typeof retryPolicySchema>;
 
-export const nodeKindSchema = z.enum(["model_call", "tool_call"]);
+/**
+ * The three atomic executors. `reasoning` is what unifies the two agent architectures
+ * (docs/26_DECISIONS.md ADR-064): a `model_call` node asks the model once and takes what it
+ * says, whereas a `reasoning` node hands the model the project's tools and lets it decide for
+ * itself how many turns and which actions the task needs. The task graph remains the
+ * orchestration and state layer; the intelligence inside one node is the model's.
+ */
+export const nodeKindSchema = z.enum(["model_call", "tool_call", "reasoning"]);
 export type NodeKind = z.infer<typeof nodeKindSchema>;
 
 export const taskNodeSchema = z.object({
@@ -142,6 +149,13 @@ export const taskTypeSchema = z.enum([
   "mcp_read_and_summarize",
   "fix_failing_test",
   "answer_from_documents",
+  /**
+   * The open-ended type: no fixed plan, no hardcoded steps. The model receives the goal and
+   * the tools it is allowed to use and drives the task itself (ADR-064). Every other type
+   * above is a deterministic recipe kept because it is cheap, predictable and well-tested;
+   * this one is what the platform does when the work is not known in advance.
+   */
+  "autonomous",
 ]);
 export type TaskType = z.infer<typeof taskTypeSchema>;
 

@@ -23,6 +23,7 @@ import {
   PgUsageRecordRepository,
 } from "@ai-platform/database";
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
+import { MemoryService } from "@ai-platform/memory";
 import { MockImageProvider } from "@ai-platform/image-mock";
 import { fromPglite, JobQueue, type JobQueueOptions } from "@ai-platform/jobs";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
@@ -336,6 +337,12 @@ async function main() {
   // FR-063 (docs/22_COST_AND_QUOTA_STRATEGY.md) — the limits are still deployment-wide values
   // read from config; what ADR-049 changed is that the *usage* they are measured against is
   // counted per project, so one tenant can no longer exhaust another tenant's budget.
+  const memoryItems = new PgMemoryItemRepository(db);
+  // ADR-063 — the retrieval/injection/extraction layer over the memory store. Its relevance
+  // threshold is derived from the embedding model, so it adapts when a real semantic model
+  // replaces the deterministic fallback rather than needing to be retuned by hand.
+  const memory = new MemoryService(memoryItems, embeddings);
+
   const usage = new PgUsageRecordRepository(db);
   const quota = new QuotaManager(usage, {
     dailyTokenLimit: config.DAILY_TOKEN_LIMIT,
@@ -627,6 +634,12 @@ async function main() {
   });
 
   const engine = new AgentEngine({
+    // ADR-064 — ceilings for an autonomous `reasoning` node. Set by the operator, not by the
+    // model: they are the harness's half of the bargain that lets the model drive execution.
+    agentLimits: {
+      maxIterations: config.AGENT_MAX_ITERATIONS,
+      maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN,
+    },
     // docs/26_DECISIONS.md ADR-046 — the same quota gate and usage ledger the chat route
     // uses, so a real key's spend through agent tasks is bounded and visible too.
     meter: {
@@ -709,7 +722,8 @@ async function main() {
     toolRegistry,
     documents,
     documentChunks,
-    memoryItems: new PgMemoryItemRepository(db),
+    memoryItems,
+    memory,
     embeddings,
     sandboxRoot,
     jobQueue,

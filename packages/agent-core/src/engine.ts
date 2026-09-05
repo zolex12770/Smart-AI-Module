@@ -11,6 +11,7 @@ import { estimatePromptTokens, type ModelRouter } from "@ai-platform/model-route
 import type { ToolRegistry } from "@ai-platform/tools";
 import {
   chatMessageSchema,
+  toolCallSchema,
   type ChatMessage,
   type FailureClass,
   type NodeStatus,
@@ -19,10 +20,12 @@ import {
   type TaskEvent,
   type TaskType,
   type TokenUsage,
+  type ToolCall,
   type ToolCallResult,
 } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import { planTask } from "./planner.js";
+import { runReasoningLoop } from "./reasoning-loop.js";
 import { resolveNodeInput } from "./template.js";
 import { verifyNodeOutput } from "./verify.js";
 
@@ -126,6 +129,8 @@ export interface AgentEngineDeps {
    * backoff and node timeouts through it instead of sleeping for real.
    */
   now?: () => number;
+  /** Ceilings for a `reasoning` node's loop (ADR-064). The model cannot raise them. */
+  agentLimits?: { maxIterations?: number; maxTokensPerRun?: number };
 }
 
 /** The authenticated principal a task runs as — resolved by the route, never client-supplied. */
@@ -431,6 +436,8 @@ export class AgentEngine {
 
     if (node.kind === "tool_call") {
       await this.executeToolNode(task, node, byId, resolvedInput);
+    } else if (node.kind === "reasoning") {
+      await this.executeReasoningNode(task, node, byId, resolvedInput);
     } else {
       await this.executeModelNode(task, node, byId, resolvedInput);
     }
@@ -516,6 +523,206 @@ export class AgentEngine {
       return;
     }
     await this.verifyAndAdvance(task.id, node, byId, result.output ?? {});
+  }
+
+  /**
+   * The model-driven executor — docs/26_DECISIONS.md ADR-064.
+   *
+   * This is where the two agent architectures meet. Everything else in this engine decides
+   * *when* work runs: dependencies, retries, leases, approval, crash recovery. This method
+   * decides nothing about *what* work is done — it hands the model the goal and the tools the
+   * project has enabled, and the model chooses the actions, the order, and when it is
+   * finished. The task graph stays the orchestration and state layer; the intelligence lives
+   * in the loop.
+   *
+   * Approval is the one place the harness interrupts the model mid-thought. When a chosen tool
+   * needs a human, the loop stops, the transcript so far is persisted on the node, and the node
+   * parks at `waiting_approval`. Approving it re-dispatches this method, which resumes from
+   * that transcript with the pending call pre-authorised — so a human decision does not throw
+   * away the reasoning that led to it.
+   */
+  private async executeReasoningNode(
+    task: TaskRecord,
+    node: TaskNodeRecord,
+    byId: Map<string, TaskNodeRecord>,
+    resolvedInput: Record<string, unknown>
+  ): Promise<void> {
+    const goal = String(resolvedInput.goal ?? "").trim();
+    if (!goal) {
+      await this.handleNodeFailure(task.id, node, "reasoning node has no `goal`.", "plan-invalidating");
+      return;
+    }
+    const userId = task.createdByUserId;
+    if (!userId) {
+      await this.handleNodeFailure(
+        task.id,
+        node,
+        `Task "${task.id}" has no creating user on record, so tool calls cannot be attributed to a principal.`,
+        "plan-invalidating"
+      );
+      return;
+    }
+
+    // A resumed run carries the transcript it was interrupted at, plus the call the human just
+    // approved. A fresh run starts from the goal alone.
+    const resumed = readResumeState(node.output);
+    const priorMessages: ChatMessage[] = resumed?.transcript ?? [
+      { role: "system", content: AUTONOMOUS_SYSTEM_PROMPT },
+      { role: "user", content: goal },
+    ];
+    const preApprovedCallIds = new Set<string>(resumed?.approvedCallIds ?? []);
+
+    const allowed = Array.isArray(resolvedInput.allowedTools)
+      ? new Set((resolvedInput.allowedTools as unknown[]).map(String))
+      : null;
+    const tools = this.deps.toolRegistry.toolSpecs((d) => (allowed ? allowed.has(d.id) : true));
+
+    await this.updateNode(node, { status: "waiting_model", startedAt: this.now() }, "engine");
+    const controller = new AbortController();
+    this.inFlight.set(node.id, controller);
+
+    /**
+     * On resume, run the call the human actually approved BEFORE handing control back to the
+     * model. Without this the loop would simply re-prompt from the parked transcript, whose
+     * last turn is the assistant asking for the tool — so the model would be answering as if
+     * the action had happened when it never did, and an approval would silently do nothing.
+     * Appending the real result as a `tool` message is also what keeps the transcript a valid
+     * conversation: an assistant turn with tool calls must be followed by their results.
+     */
+    const approvedCall = resumed?.pendingCall;
+    if (approvedCall) {
+      const outcome = await this.deps.toolRegistry.call(approvedCall.name, approvedCall.arguments, {
+        projectId: task.projectId,
+        userId,
+        workspaceRoot: this.deps.workspaceRoot,
+        signal: controller.signal,
+      });
+      priorMessages.push({
+        role: "tool",
+        content: outcome.ok
+          ? JSON.stringify(outcome.output ?? {})
+          : `Error: ${outcome.error ?? "the tool failed without a message"}`,
+        toolCallId: approvedCall.id,
+        name: approvedCall.name,
+      });
+    }
+
+    /**
+     * Filled in when the loop stops for approval, so the node can be parked with context.
+     * A holder object rather than a `let`: it is written inside the executeTool closure, and
+     * TypeScript's control-flow analysis cannot see that, so a bare variable would narrow to
+     * `null` at every read site below.
+     */
+    const approval: { pending: { call: ToolCall; reason: string } | null } = { pending: null };
+
+    try {
+      const result = await this.withNodeDeadline(
+        node,
+        controller,
+        runReasoningLoop(
+          {
+            tools,
+            streamChat: (request) =>
+              this.deps.modelRouter.streamChat(
+                { messages: request.messages, tools: request.tools, toolChoice: request.toolChoice },
+                { signal: controller.signal }
+              ),
+            executeTool: async ({ call }) => {
+              // Approval is resolved per call, per project — the four modes are real (ADR-059).
+              if (!preApprovedCallIds.has(call.id)) {
+                const decision = await this.deps.toolRegistry.approvalFor(call.name, task.projectId);
+                if (decision.required) {
+                  approval.pending = { call, reason: decision.reason ?? "Approval required." };
+                  return { ok: false, content: "", awaitingApproval: true };
+                }
+              }
+              const outcome = await this.deps.toolRegistry.call(call.name, call.arguments, {
+                projectId: task.projectId,
+                userId,
+                workspaceRoot: this.deps.workspaceRoot,
+                signal: controller.signal,
+              });
+              // The model reads this string, so a failure has to be legible to it: an error it
+              // can act on is worth more than a stack trace it cannot.
+              return {
+                ok: outcome.ok,
+                content: outcome.ok
+                  ? JSON.stringify(outcome.output ?? {})
+                  : `Error: ${outcome.error ?? "the tool failed without a message"}`,
+              };
+            },
+            onEvent: (event) => {
+              if (event.type === "usage" && this.deps.meter) {
+                void this.deps.meter
+                  .record({
+                    provider: "reasoning",
+                    model: "loop",
+                    inputTokens: event.inputTokens,
+                    outputTokens: event.outputTokens,
+                    taskId: task.id,
+                    nodeId: node.id,
+                  })
+                  .catch(() => undefined);
+              }
+            },
+          },
+          priorMessages,
+          {
+            signal: controller.signal,
+            maxIterations: this.deps.agentLimits?.maxIterations,
+            maxTotalTokens: this.deps.agentLimits?.maxTokensPerRun,
+          }
+        )
+      );
+
+      if (!(await this.stillRunning(node, "waiting_model"))) return;
+
+      const paused = approval.pending;
+      if (result.stopReason === "awaiting_approval" && paused) {
+        // Persist enough to resume exactly here, including WHY a human was asked.
+        await this.updateNode(
+          node,
+          {
+            status: "waiting_approval",
+            output: {
+              resume: { transcript: result.transcript, approvedCallIds: [...preApprovedCallIds, paused.call.id] },
+              pendingCall: { id: paused.call.id, name: paused.call.name, arguments: paused.call.arguments },
+              reason: paused.reason,
+            },
+          },
+          "engine",
+          { reason: paused.reason }
+        );
+        await this.transitionTask(task.id, "WAITING_FOR_APPROVAL", "engine");
+        return;
+      }
+
+      if (result.stopReason === "cancelled") {
+        await this.updateNode(node, { status: "cancelled" }, "engine");
+        return;
+      }
+      if (result.stopReason === "max_iterations" || result.stopReason === "budget_exhausted") {
+        // Not a crash and not a success: the model ran out of the budget the harness set. It
+        // is reported as a failure with the reason named, never as a completed answer.
+        await this.handleNodeFailure(
+          task.id,
+          node,
+          `The agent stopped after ${result.iterations} turns (${result.stopReason}) without reaching an answer.`
+        );
+        return;
+      }
+
+      await this.verifyAndAdvance(task.id, node, byId, {
+        content: result.answer,
+        toolCallCount: result.toolCallCount,
+        iterations: result.iterations,
+        usage: result.usage,
+      });
+    } catch (err) {
+      await this.handleNodeFailure(task.id, node, err instanceof Error ? err.message : String(err));
+    } finally {
+      this.inFlight.delete(node.id);
+    }
   }
 
   private async executeModelNode(
@@ -981,4 +1188,39 @@ async function runModelToCompletion(
     }
   }
   throw new Error("Model stream ended without a done event.");
+}
+
+/**
+ * The standing instruction for an autonomous run. Deliberately short: a long persona prompt
+ * competes with the user's actual goal for the model's attention, and everything genuinely
+ * enforceable (budgets, approval, isolation) is enforced by the harness rather than requested
+ * politely here.
+ */
+export const AUTONOMOUS_SYSTEM_PROMPT = [
+  "You are an autonomous agent working inside a sandboxed project workspace.",
+  "Use the tools available to you to accomplish the user's goal. Inspect before you change anything.",
+  "If a tool fails, read the error, adjust, and try a different approach rather than repeating the same call.",
+  "When you have accomplished the goal, reply with a concise summary of what you did and what the result was.",
+  "If the goal cannot be accomplished with the tools you have, say so plainly instead of guessing.",
+].join(" ");
+
+/** Reads the resume state a paused reasoning node persisted, tolerating anything malformed. */
+function readResumeState(
+  output: Record<string, unknown> | null
+): { transcript: ChatMessage[]; approvedCallIds: string[]; pendingCall: ToolCall | null } | null {
+  const resume = (output as { resume?: unknown } | null)?.resume;
+  if (!resume || typeof resume !== "object") return null;
+  const { transcript, approvedCallIds } = resume as { transcript?: unknown; approvedCallIds?: unknown };
+  const parsed = chatMessageSchema.array().safeParse(transcript);
+  if (!parsed.success) return null;
+
+  // The call a human approved, validated rather than trusted: it round-tripped through a
+  // jsonb column, so its shape is a claim until something checks it.
+  const pending = toolCallSchema.safeParse((output as { pendingCall?: unknown } | null)?.pendingCall);
+
+  return {
+    transcript: parsed.data,
+    approvedCallIds: Array.isArray(approvedCallIds) ? approvedCallIds.map(String) : [],
+    pendingCall: pending.success ? pending.data : null,
+  };
 }

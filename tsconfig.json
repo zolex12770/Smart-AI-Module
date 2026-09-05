@@ -12,6 +12,7 @@
     { "path": "packages/tools" },
     { "path": "packages/mcp" },
     { "path": "packages/embeddings" },
+    { "path": "packages/memory" },
     { "path": "packages/rag" },
     { "path": "packages/jobs" },
     { "path": "packages/observability" },

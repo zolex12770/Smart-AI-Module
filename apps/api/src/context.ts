@@ -20,6 +20,7 @@ import type { ModelRouter } from "@ai-platform/model-router";
 import type { QuotaManager } from "@ai-platform/quota";
 import type { MalwareScanner } from "@ai-platform/scanning";
 import type { ToolRegistry } from "@ai-platform/tools";
+import type { MemoryService } from "@ai-platform/memory";
 import type { AuthService } from "@ai-platform/security";
 import type { ExecutionSandbox } from "@ai-platform/security";
 
@@ -39,6 +40,9 @@ export interface AppContext {
   documents: DocumentRepository;
   documentChunks: DocumentChunkRepository;
   memoryItems: MemoryItemRepository;
+  /** Retrieval + injection + extraction. The repository above is the store; this is the
+   * subsystem that makes memory reach a model at all (ADR-063). */
+  memory: MemoryService;
   embeddings: EmbeddingService;
   sandboxRoot: string;
   jobQueue: JobQueue;

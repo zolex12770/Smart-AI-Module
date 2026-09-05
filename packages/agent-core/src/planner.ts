@@ -67,7 +67,48 @@ export function planTask(
       return planFixFailingTest(input, lookupTool);
     case "answer_from_documents":
       return planAnswerFromDocuments(input, lookupTool);
+    case "autonomous":
+      return planAutonomous(input);
   }
+}
+
+/**
+ * The open-ended plan — docs/26_DECISIONS.md ADR-064.
+ *
+ * It is deliberately a single node, and that is the whole point. Every other planner in this
+ * file writes the steps in advance because it knows them in advance; here nobody does, so the
+ * "plan" is one `reasoning` node and the sequence of actions is decided turn by turn by the
+ * model inside it. The task graph keeps doing what it is good at — persistence, state,
+ * approval, retries, crash recovery — and stops pretending to supply the intelligence.
+ *
+ * `verificationMethod: "none"` because the reasoning loop runs its own verification pass and
+ * can self-correct; layering a schema check on top would only assert that a string is a string.
+ */
+function planAutonomous(input: Record<string, unknown>): CreateTaskNodeInput[] {
+  const goal = String(input.goal ?? input.message ?? "").trim();
+  if (!goal) {
+    throw new Error('planTask: an "autonomous" task requires a non-empty `goal`.');
+  }
+  return [
+    {
+      id: uuid(),
+      type: "atomic",
+      kind: "reasoning",
+      dependsOn: [],
+      input: {
+        goal,
+        // Optional narrowing: which tools this run may use. Absent means "every tool the
+        // caller's project has enabled", which the engine resolves at dispatch time.
+        ...(Array.isArray(input.allowedTools) ? { allowedTools: input.allowedTools } : {}),
+      },
+      // Generous, because a multi-turn autonomous run is legitimately slower than one call;
+      // the reasoning loop's own iteration and token ceilings are the real bound.
+      timeoutMs: 10 * 60_000,
+      verificationMethod: "none",
+      verificationSpec: null,
+      approvalRequired: false,
+    },
+  ];
 }
 
 function planEchoChat(input: Record<string, unknown>): CreateTaskNodeInput[] {

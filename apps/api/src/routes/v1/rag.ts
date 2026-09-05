@@ -236,21 +236,29 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
     const parsed = createMemoryRequestSchema.safeParse(request.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
 
-    const item = await ctx.memoryItems.create({
-      id: uuid(),
+    /**
+     * Written through the MemoryService, not the repository — ADR-063.
+     *
+     * The distinction is not stylistic. The service embeds the content and records which model
+     * produced the vector, and semantic retrieval requires both: a row stored without an
+     * embedding is invisible to `searchSemantic` and can only ever be reached by listing it.
+     * Writing straight to the repository here meant every memory a user typed was, in
+     * practice, unrecallable — stored, listed, and never able to influence an answer, which is
+     * exactly the SKELETON finding this ADR exists to close.
+     *
+     * `source: "user"` and `confidence: 1` are right for this endpoint: a human typed it, so
+     * it is a stated fact rather than a model's inference. The owner comes from the
+     * credential — a `project`-scope fact is stored project-wide (`user_id IS NULL`) and every
+     * other scope belongs to the caller; no body field can name someone else.
+     */
+    const item = await ctx.memory.remember({
       projectId: scopeOf(authCtx),
-      // A `project`-scope fact applies to every member, so it is stored project-wide
-      // (`user_id IS NULL`); every other scope belongs to the caller. Either way the owner
-      // comes from the credential — there is no body field that could name someone else.
-      userId: parsed.data.scope === "project" ? null : authCtx.user.id,
+      userId: authCtx.user.id,
       scope: parsed.data.scope,
       subjectId: parsed.data.subjectId ?? null,
       content: parsed.data.content,
-      // `source: "user"` and `confidence: 1` are the repository's defaults and are the right
-      // ones here: a human typed this, so it is a fact, not a model's inference. No embedding
-      // is attached, so the item is reachable through `listRecent` and not through semantic
-      // search — honest about what this endpoint is, rather than quietly writing an
-      // unlabelled vector the retrieval path would have to guess the model for (ADR-048).
+      source: "user",
+      confidence: 1,
     });
     reply.status(201).send({ item });
   });

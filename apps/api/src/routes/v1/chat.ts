@@ -98,11 +98,48 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
         });
       }
 
+      /**
+       * Long-term memory joins the prompt here — docs/26_DECISIONS.md ADR-063.
+       *
+       * This is the step whose absence made memory a SKELETON in the ADR-047 audit: rows were
+       * stored and listed, and nothing ever put one in front of a model. Retrieval is scoped
+       * to this project, this user and this conversation in SQL, and a match below the
+       * embedder's relevance threshold is dropped rather than padded in — an irrelevant fact
+       * asserted as background is worse than no memory at all.
+       *
+       * It runs before the quota estimate on purpose: the injected block is real prompt input,
+       * so it must be counted, not smuggled in after the budget check.
+       */
+      const memoryQuery = lastUserMessage?.content ?? "";
+      const { messages: messagesWithMemory, injected } = memoryQuery
+        ? await ctx.memory.withMemoryContext(
+            {
+              projectId,
+              userId: authCtx.user.id,
+              query: memoryQuery,
+              conversationId: conversation.id,
+            },
+            chatRequest.messages
+          )
+        : { messages: chatRequest.messages, injected: [] };
+
+      if (injected.length > 0) {
+        request.log.info(
+          {
+            request_id: request.id,
+            conversation_id: conversation.id,
+            memories_injected: injected.length,
+            memory_ids: injected.map((m) => m.item.id),
+          },
+          "long-term memory injected into the prompt"
+        );
+      }
+
       // FR-063 — checked before any provider call is made, never after (docs/22_COST_AND_
       // QUOTA_STRATEGY.md): a rough pre-flight estimate (real token counts aren't known until
       // the provider responds) decides only whether to reject now; the usage actually
       // recorded below is always the real post-call figure.
-      const estimatedTokens = estimatePromptTokens(chatRequest.messages.map((m) => m.content).join(" "));
+      const estimatedTokens = estimatePromptTokens(messagesWithMemory.map((m) => m.content).join(" "));
       // Quota is per project (ADR-049): one project's spend must never exhaust another's
       // allowance, so the scope goes into the check itself rather than being a global counter.
       const quotaCheck = await ctx.quota.checkLlmTokens(projectId, estimatedTokens);
@@ -210,7 +247,7 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
             let completed = false;
             try {
               for await (const event of ctx.router.streamChat(
-                { ...chatRequest, conversationId: conversation.id },
+                { ...chatRequest, messages: messagesWithMemory, conversationId: conversation.id },
                 {
                   signal: abort.signal,
                   onFallback: (fallback) => {

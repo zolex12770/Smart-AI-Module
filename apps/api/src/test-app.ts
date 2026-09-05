@@ -22,6 +22,7 @@ import {
   type PgliteDb,
 } from "@ai-platform/database";
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
+import { MemoryService } from "@ai-platform/memory";
 import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { LocalAssetStore } from "@ai-platform/media";
@@ -131,6 +132,7 @@ export async function buildTestApp(): Promise<{
   const authService = new AuthService(db, { scryptParams: TEST_SCRYPT_PARAMS });
 
   const embeddings = new EmbeddingService(new HashEmbeddingProvider());
+  const memoryItemRepo = new PgMemoryItemRepository(db);
 
   const ctx: AppContext = {
     router: modelRouter,
@@ -143,7 +145,8 @@ export async function buildTestApp(): Promise<{
     toolRegistry,
     documents: new PgDocumentRepository(db),
     documentChunks: new PgDocumentChunkRepository(db),
-    memoryItems: new PgMemoryItemRepository(db),
+    memoryItems: memoryItemRepo,
+    memory: new MemoryService(memoryItemRepo, embeddings),
     embeddings,
     sandboxRoot,
     jobQueue,

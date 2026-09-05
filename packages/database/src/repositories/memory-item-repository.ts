@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, notInArray, or, sql } from "drizzle-orm";
 import type { DrizzleDb } from "../client.js";
 import { memoryItems, EMBEDDING_DIMENSIONS } from "../schema/index.js";
 
@@ -95,6 +95,17 @@ export interface MemorySemanticSearch {
    * over-retrieval docs/08 §6 warns about when it says to pull what is relevant to *this* turn.
    */
   maxDistance: number;
+  /**
+   * Subjects the caller is entitled to see for the *thread-scoped* levels
+   * (`conversation`, `task`). Those rows belong to one thread, so semantic similarity alone
+   * must not surface them elsewhere: a fact recorded in conversation A is not background for
+   * conversation B, however alike the two turns read. Long-term levels (`user`, `project`,
+   * `semantic`) are unaffected — they are about the user, not about a thread.
+   *
+   * Omit it and thread-scoped rows are excluded from semantic search entirely, which is the
+   * safe default: a caller that did not say which thread it is in cannot be entitled to any.
+   */
+  subjectIds?: string[];
 }
 
 export interface MemoryRecentQuery {
@@ -218,6 +229,8 @@ export class PgMemoryItemRepository implements MemoryItemRepository {
             ? isNull(memoryItems.userId)
             : or(eq(memoryItems.userId, params.userId), isNull(memoryItems.userId)),
           inArray(memoryItems.scope, params.scopes),
+          // Thread containment — see MemorySemanticSearch.subjectIds.
+          threadScopePredicate(params.subjectIds),
           isNull(memoryItems.deletedAt),
           // A superseded item is history kept for "why did it think X" (docs/08 §4/§7); it
           // must not be retrieved into a prompt, or a correction would never take effect.
@@ -323,4 +336,15 @@ export class PgMemoryItemRepository implements MemoryItemRepository {
 /** pgvector's text input format. Bound as a parameter and cast with `::vector`, never spliced. */
 function toVectorLiteral(embedding: number[]): string {
   return `[${embedding.join(",")}]`;
+}
+
+/**
+ * Restricts the thread-scoped memory levels to subjects the caller is actually in. Returns a
+ * predicate rather than a boolean so it composes into the same `and(...)` as every other
+ * access-control clause — the containment is part of the query, not a filter applied after.
+ */
+function threadScopePredicate(subjectIds: string[] | undefined) {
+  const notThreadScoped = notInArray(memoryItems.scope, ["conversation", "task"]);
+  if (!subjectIds || subjectIds.length === 0) return notThreadScoped;
+  return or(notThreadScoped, inArray(memoryItems.subjectId, subjectIds));
 }
