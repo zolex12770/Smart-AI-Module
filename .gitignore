@@ -21,5 +21,6 @@ coverage/
 !*.tfvars.example
 
 # Playwright output
-apps/web/test-results/
+test-results/
+playwright-report/
 apps/web/playwright-report/
