@@ -17,6 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ai-platform/observability": "*",
     "@ai-platform/shared": "*"
   },
   "devDependencies": {

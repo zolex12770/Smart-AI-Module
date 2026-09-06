@@ -11,6 +11,8 @@ const NAV_LINKS = [
   { href: "/videos", label: "Videos" },
   { href: "/files", label: "Files" },
   { href: "/usage", label: "Usage" },
+  // ADR-074: models, tools, MCP, jobs and dead letters — the ADR-066 API had no consumer.
+  { href: "/platform", label: "Platform" },
   { href: "/settings", label: "Settings" },
 ];
 

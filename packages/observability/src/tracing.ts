@@ -16,11 +16,14 @@ import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
  * repo has no Docker (docs/20 §4's own acknowledged local-dev fallback — "structured console
  * logging... without full trace/metrics visualization... until Docker Desktop is installed")
  * and no Collector/Tempo/Grafana running to receive OTLP. Manual spans + a `ConsoleSpanExporter`
- * are the honest, verifiable substitute: every span this platform actually needs (agent.run,
- * agent.step, tool.call, gen_ai.chat, job processing — docs/20 §3.3) is created explicitly at
- * the point that matters, so no auto-instrumentation gap can silently miss one, and the console
- * output is real, inspectable proof the spans nest and propagate correctly — not a claim that
- * can't be checked. Swapping to a real OTLP exporter later (once a Collector exists) is a
+ * are the honest, verifiable substitute.
+ *
+ * The spans docs/20 §3.3 calls for — `agent.run`, `agent.step`, `tool.call`, `gen_ai.chat` and
+ * job processing — are created explicitly at the point that matters, so no auto-instrumentation
+ * gap can silently miss one. That sentence used to be here while only two of the five existed
+ * (ADR-073); the missing three are now real, and `span-coverage.test.ts` asserts the tree they
+ * form against an in-memory exporter, so the claim is checked rather than merely written down.
+ * Swapping to a real OTLP exporter later (once a Collector exists) is a
  * one-line change to `spanProcessors` here, not an application-code change (docs/20 §4's stated
  * design goal), since none of the call sites that create spans know or care what the exporter is.
  */

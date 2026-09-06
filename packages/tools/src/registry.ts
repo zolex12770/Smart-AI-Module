@@ -1,3 +1,4 @@
+import { withSpan, type Span } from "@ai-platform/observability";
 import {
   PermissionError,
   ValidationError,
@@ -126,11 +127,46 @@ export class ToolRegistry {
    * Executes a tool. Order matters and is deliberate: existence, then enabled, then argument
    * validation, then the handler under a timeout. Approval is resolved by the *caller* (the
    * agent engine), because only it can pause a task and ask a human.
+   *
+   * The whole body runs inside a `tool.call` span (ADR-073). It goes HERE rather than at the
+   * two call sites — the engine's tool nodes and the reasoning loop — because a span added per
+   * call site is one a third call site can silently skip, and "which tools are slow, and which
+   * fail" is precisely the question that must not have a blind spot. The span covers argument
+   * validation and the rejection paths too: a tool rejected for being disabled or for bad
+   * arguments never reaches the handler, and an operator watching only successful executions
+   * would see nothing at all while a model burned its whole iteration budget on them.
    */
   async call(toolId: string, args: Record<string, unknown>, context: ToolInvocationContext): Promise<ToolCallResult> {
+    return withSpan(
+      "tool.call",
+      {
+        "tool.id": toolId,
+        // Tenancy on every span: a trace that cannot say whose it is serves neither cost
+        // attribution nor incident scoping (ADR-049).
+        project_id: context.projectId,
+        user_id: context.userId,
+      },
+      (span) => this.invoke(span, toolId, args, context)
+    );
+  }
+
+  private async invoke(
+    span: Span,
+    toolId: string,
+    args: Record<string, unknown>,
+    context: ToolInvocationContext
+  ): Promise<ToolCallResult> {
     const entry = this.entries.get(toolId);
-    if (!entry) return { ok: false, error: `Unknown tool "${toolId}".` };
+    if (!entry) {
+      // `outcome` rather than span status: an unknown tool is a normal, expected event in a
+      // model-driven loop (the model guessed a name), not an error in the platform. Marking it
+      // ERROR would bury real failures under model hallucinations.
+      span.setAttribute("tool.outcome", "unknown_tool");
+      return { ok: false, error: `Unknown tool "${toolId}".` };
+    }
+    span.setAttribute("tool.risk_level", entry.definition.riskLevel);
     if (!entry.definition.enabled) {
+      span.setAttribute("tool.outcome", "disabled");
       return { ok: false, error: `Tool "${toolId}" is disabled. An operator must enable it explicitly.` };
     }
 
@@ -139,6 +175,7 @@ export class ToolRegistry {
     } catch (err) {
       // Returned rather than thrown: when a model supplied the arguments, this message is
       // fed back so it can correct itself, which is more useful than failing the run.
+      span.setAttribute("tool.outcome", "invalid_arguments");
       return { ok: false, error: err instanceof ValidationError ? err.message : String(err) };
     }
 
@@ -149,9 +186,11 @@ export class ToolRegistry {
         `Tool "${toolId}" timed out after ${entry.definition.timeoutMs}ms.`
       );
       if (result.ok) await this.options.markUsed?.(context.projectId, toolId);
+      span.setAttribute("tool.outcome", result.ok ? "ok" : "failed");
       return result;
     } catch (err) {
       if (err instanceof PermissionError) throw err;
+      span.setAttribute("tool.outcome", "error");
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }

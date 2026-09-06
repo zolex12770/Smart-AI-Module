@@ -34,6 +34,13 @@ export default defineConfig({
    * Both applications, started for real. The web app is built and served rather than run in
    * dev mode so that what is tested is what would be deployed; the API runs against its own
    * throwaway database directory so an E2E run never touches development data.
+   *
+   * `start:e2e` REBUILDS the web app rather than reusing whatever build happens to be on disk.
+   * That is not wasted work: `NEXT_PUBLIC_API_URL` is inlined by Next at build time, so a build
+   * made without it points the browser at the development port, and every test then fails with
+   * an opaque "Could not reach the server" that says nothing about the real cause. Found the
+   * hard way after an unrelated rebuild. Making the suite build what it runs is what stops the
+   * result from depending on who last ran `npm run build` and with which environment.
    */
   webServer: [
     {

@@ -115,3 +115,38 @@ test.describe("usage", () => {
     await expect(page.getByText(/tokens today/i)).toBeVisible();
   });
 });
+
+test.describe("platform operations screen", () => {
+  test("reports what is really configured, including whether a model is a mock", async ({ page }) => {
+    await signUp(page, `platform-${unique()}@example.com`);
+    await page.getByRole("link", { name: "Platform" }).click();
+    await page.waitForURL("**/platform");
+
+    await expect(page.getByRole("heading", { name: "Platform", exact: true })).toBeVisible();
+
+    // Health is system-admin-only and answers 404 to everyone else, deliberately (ADR-049:
+    // confirming an endpoint exists is itself a disclosure). This account is an ordinary
+    // member, so the correct rendering is the explanation — NOT an error, and not a blank
+    // section that reads as broken. Asserting this is what stops a future change from
+    // "fixing" the 404 by widening the permission.
+    await expect(page.getByRole("heading", { name: "Health" })).toBeVisible();
+    await expect(page.getByText(/system administrators only/i)).toBeVisible();
+    await expect(page.getByText(/some sections could not load/i)).toHaveCount(0);
+
+    // The honesty cell. This suite runs against a deployment with no real LLM key, so the row
+    // MUST say so; a screen that rendered a mock as a real model would be exactly the failure
+    // the whole no-fake-implementations rule exists to prevent.
+    await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
+    await expect(page.getByText(/MOCK — not a real model/).first()).toBeVisible();
+
+    // Tools come from the real registry (native tools plus whatever MCP discovered), so an
+    // empty table here would mean the registry never populated.
+    await expect(page.getByRole("heading", { name: "Tools" })).toBeVisible();
+    await expect(page.getByText("fs.read_file")).toBeVisible();
+
+    // Nothing has failed in a fresh project, and the screen has to say that plainly rather
+    // than rendering an empty table that reads as "broken".
+    await expect(page.getByRole("heading", { name: "Dead-lettered work" })).toBeVisible();
+    await expect(page.getByText(/nothing has been given up on/i)).toBeVisible();
+  });
+});

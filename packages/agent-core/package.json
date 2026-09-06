@@ -19,6 +19,7 @@
   "dependencies": {
     "@ai-platform/database": "*",
     "@ai-platform/model-router": "*",
+    "@ai-platform/observability": "*",
     "@ai-platform/shared": "*",
     "@ai-platform/tools": "*",
     "uuid": "^11.0.4"

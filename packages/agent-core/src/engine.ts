@@ -28,6 +28,7 @@ import { planTask } from "./planner.js";
 import { runReasoningLoop } from "./reasoning-loop.js";
 import { resolveNodeInput } from "./template.js";
 import { verifyNodeOutput } from "./verify.js";
+import { withSpan } from "@ai-platform/observability";
 
 const TERMINAL_TASK_STATES = ["COMPLETED", "FAILED", "CANCELLED"] as const;
 const TERMINAL_NODE_STATUSES = ["completed", "failed", "cancelled", "skipped"] as const;
@@ -211,9 +212,22 @@ export class AgentEngine {
     });
     await this.logTransition(task.id, null, null, "IDLE", `user:${owner.userId}`);
 
-    void this.runExclusive(task.id, () => this.planAndExecute(task.id, taskType, input)).catch((err) =>
-      this.onUnexpectedError(task.id, err)
-    );
+    // `agent.run` wraps the ENTIRE task, not just planning (ADR-073). Started here rather than
+    // inside `planAndExecute` so that a task which dies during planning still produces a span —
+    // an agent that fails before it does anything is exactly the case an operator needs to see,
+    // and it is the case a span opened later would miss. It is deliberately not awaited: the
+    // span's lifetime follows the detached run, and `createAndStart` must return the task id to
+    // the caller immediately.
+    void withSpan(
+      "agent.run",
+      {
+        task_id: task.id,
+        "agent.task_type": taskType,
+        project_id: owner.projectId,
+        user_id: owner.userId,
+      },
+      () => this.runExclusive(task.id, () => this.planAndExecute(task.id, taskType, input))
+    ).catch((err) => this.onUnexpectedError(task.id, err));
 
     return task;
   }
@@ -396,6 +410,28 @@ export class AgentEngine {
   }
 
   private async executeNode(
+    task: TaskRecord,
+    node: TaskNodeRecord,
+    byId: Map<string, TaskNodeRecord>
+  ): Promise<void> {
+    // One span per node, nested under `agent.run` through the AsyncLocalStorage context the
+    // tracer provider installs (ADR-073). This is the span that answers "where did the run
+    // spend its time and which step failed" — with `tool.call` and `gen_ai.chat` nesting
+    // beneath it, a whole task reads as one tree rather than as a pile of unrelated log lines.
+    return withSpan(
+      "agent.step",
+      {
+        task_id: task.id,
+        node_id: node.id,
+        "agent.node_kind": node.kind,
+        "agent.attempt": node.attemptCount ?? 0,
+        project_id: task.projectId,
+      },
+      () => this.executeNodeInSpan(task, node, byId)
+    );
+  }
+
+  private async executeNodeInSpan(
     task: TaskRecord,
     node: TaskNodeRecord,
     byId: Map<string, TaskNodeRecord>

@@ -8,7 +8,7 @@
   "include": ["src"],
   "exclude": ["src/**/*.test.ts"],
   "references": [
-    { "path": "../shared" },
+    { "path": "../shared" }, { "path": "../observability" },
     { "path": "../database" },
     { "path": "../model-router" },
     { "path": "../tools" }
