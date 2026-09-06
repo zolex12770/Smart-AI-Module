@@ -88,14 +88,16 @@ tools exist, approval policy, argument validity against `inputSchema`, execution
 cancellation. A tool *error* is fed back as an observation, because recovering from it is exactly
 the reasoning worth having.
 
-> **Status:** the reasoning loop is real and tested (18 tests). The task-graph engine still
-> executes its deterministic plans for the six built-in task types; the two execution paths are
-> **not yet unified**, and that is the largest remaining architectural gap.
+> **Status:** unified (ADR-064). The planner emits a `reasoning` node for the `autonomous` task
+> type and the engine executes it through the same node lifecycle as every other kind — same
+> approval handling, same cancellation, same ceilings. The six deterministic task types remain
+> because they are cheap, predictable and well-tested; they are recipes, not a second engine.
 
 ## Data
 
-21 tables, 42 indexes, one squashed baseline migration (the platform has never been deployed, so
-a baseline is safer than an untestable ALTER chain).
+22 tables, 43 indexes, a squashed baseline migration plus one incremental (the platform has never
+been deployed, so a baseline was safer than an untestable ALTER chain; everything after it is a
+normal migration).
 
 - **Identity:** `users`, `organizations`, `organization_members`, `projects`, `project_members`,
   `sessions`, `api_keys`, `audit_log`.
@@ -123,8 +125,16 @@ without any LLM provider — the fix for the crash-loop that made the whole depl
 
 ## Deliberate limits
 
-- Rate limiting is per-instance and in-memory; multi-instance needs a shared store.
-- Memory is stored, embedded and searchable but **not yet injected into prompts**.
-- Image and video generation have **no real provider**; production returns a capability error
-  rather than fake output.
-- MCP is stdio-only, one hardcoded server, no reconnection.
+- **Video generation has no real provider.** Production constructs none and the route returns a
+  real capability error; `videoGenerationAvailable` reports `false` rather than faking output.
+  Image generation has a real OpenAI-compatible adapter (ADR-065) but no credentials here.
+- **Long-form video** keeps its honest `skipped_no_ffmpeg` behaviour; script, storyboard, audio
+  and subtitle stages are not built.
+- **MCP is stdio-only.** Servers are configurable and the manager reconnects and health-checks
+  per server (ADR-067), but no HTTP/SSE transport exists.
+- **The rate limiter fails open.** If Postgres is unreachable the request is allowed and the
+  error is logged — deliberately, and opposite to the malware scanner's fail-closed rule
+  (ADR-042/ADR-071). Rate limiting is a mitigation, not an authorization boundary.
+- **The Docker sandbox has never executed a container** in this environment, and no real LLM has
+  ever completed a request here. Both are environmental, not missing code — see
+  `FINAL_IMPLEMENTATION_REPORT.md`.

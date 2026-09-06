@@ -1,19 +1,28 @@
 # CURRENT_STATE.md — Repository Audit
 
-> **SUPERSEDED IN PART, 2026-09-05.** This audit describes commit `3989631`. The P0/P1 findings
-> below — deployment BROKEN, authentication MISSING, memory SKELETON, no model-driven agent, no
-> tool calling, no database indexes, no execution isolation — were acted on in commit `d8c7b46`.
+> **SUPERSEDED, 2026-09-06.** This audit describes commit `3989631` and is kept as the record of
+> what was found, not as a description of the repository today. Every P0 and P1 finding below —
+> deployment BROKEN, authentication MISSING, memory SKELETON, no model-driven agent, no tool
+> calling, no database indexes, no execution isolation — has been acted on, as have the P2–P7
+> findings that were still open at the previous revision of this note.
+>
 > See [FINAL_IMPLEMENTATION_REPORT.md](FINAL_IMPLEMENTATION_REPORT.md) for what changed and what
-> did not, [TEST_REPORT.md](TEST_REPORT.md) for the current suite (327 tests, 42 files, 0
-> failures), [ARCHITECTURE.md](ARCHITECTURE.md) and [SECURITY.md](SECURITY.md).
+> did not, [TEST_REPORT.md](TEST_REPORT.md) for the current suite (**429 cases across 50 files,
+> 416 passing, 13 environment-gated skips, 0 failures**, plus 7 browser end-to-end tests),
+> [ARCHITECTURE.md](ARCHITECTURE.md) and [SECURITY.md](SECURITY.md).
 >
-> **Statuses that changed:** Authentication MISSING -> IMPLEMENTED; Deployment BROKEN ->
-> boot verified 7/7; Security PARTIAL -> substantially hardened (isolation, CSRF, headers,
-> audit); Database IMPLEMENTED -> now with 42 indexes and transactions.
+> **Statuses that changed since the audit:** Authentication MISSING -> IMPLEMENTED; Deployment
+> BROKEN -> boot verified 7/7; Security PARTIAL -> hardened (isolation, CSRF, headers, audit,
+> shared-store rate limiting); Database IMPLEMENTED -> 22 tables with 43 indexes and
+> transactions; Memory SKELETON -> IMPLEMENTED and injected into the prompt; Frontend PARTIALLY
+> IMPLEMENTED with zero tests -> 15 screens with 23 unit tests and 7 end-to-end tests; Job system
+> -> dead-letter queues with inspect and replay; Observability -> the full span tree, asserted.
 >
-> **Statuses that did NOT change:** Frontend still PARTIALLY IMPLEMENTED with zero tests;
-> Memory still not injected into prompts; Image and Video generation still have no real
-> provider. The audit below remains accurate for everything it says about those.
+> **Statuses that did NOT change:** Image generation has a real provider adapter but no real
+> credentials in this environment; **video generation still has no real provider at all** and is
+> reported as unavailable rather than faked; long-form video keeps its honest
+> `skipped_no_ffmpeg` behaviour. The audit below remains accurate for everything it says about
+> those.
 
 
 

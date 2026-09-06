@@ -131,9 +131,12 @@ behind a proxy.
 
 ## What is NOT protected — read this before deploying
 
-- **Rate limiting is per-instance and in-memory.** With more than one instance the effective limit
-  is multiplied by the instance count. A shared store (Redis) is required for a real multi-instance
-  deployment.
+- **The rate limiter fails open.** Counters are shared across instances via Postgres (ADR-071), so
+  N instances enforce one limit rather than N — but if the database is unreachable the request is
+  allowed and the error is logged. That is deliberate and opposite to the malware scanner's
+  fail-closed rule (ADR-042): a scanner that cannot scan must not certify a file clean, whereas a
+  limiter that cannot count would turn a database blip into a total outage. Nothing in the
+  authorization model rests on rate limiting; it is a mitigation, not a boundary.
 - **Process isolation is not container isolation.** The development sandbox shares the host's
   network and filesystem. Production refuses it by default for exactly this reason, but an operator
   who sets `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true` has accepted a real risk.

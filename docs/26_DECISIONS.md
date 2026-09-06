@@ -949,3 +949,184 @@ This replaces a deterministic `switch` over six hardcoded task types (ADR-018), 
 
 **Date:** 2026-09-05
 **Impact:** `packages/tools/src/native/{patch,search,coding}.ts` + 26 tests.
+
+---
+
+## ADR-063: Memory that actually reaches the model
+
+**Decision:** A `MemoryService` owns the whole loop — store → embed → retrieve → rank → inject → record — and `POST /api/v1/chat` calls it before the model call, so retrieved memories arrive in the message array the provider receives.
+
+**What was wrong.** Memory was a table with a repository and an HTTP endpoint. Nothing read from it on the chat path, so a fact the user stated was stored, was never recalled, and changed no answer. A memory subsystem that does not influence a response is a database, not memory. A second defect compounded it: `POST /api/v1/memory` wrote through the *repository*, so items arrived with no embedding and were permanently unrecallable.
+
+**The threshold had to be derived, not guessed.** Cosine distances differ by embedder. Measured empirically against the deterministic lexical fallback: relevant pairs land at 0.67–0.80 and irrelevant ones at 1.00, so a threshold tuned for a real embedding model (0.55) retrieved nothing at all locally. `maxDistance` now derives from `embeddings.isDeterministicFallback` rather than being a constant that is right in one deployment and silently wrong in the other.
+
+**Thread containment.** Conversation- and task-scoped memories must not leak across threads. `threadScopePredicate` admits a scoped item only when its `subject_id` is one of the current conversation/task ids, in SQL — not by filtering after the fact.
+
+**Date:** 2026-09-05
+**Impact:** `packages/memory/*`, `packages/database/src/repositories/memory-item-repository.ts`, `apps/api/src/routes/v1/{chat,rag}.ts`.
+
+---
+
+## ADR-064: One agent path, not two
+
+**Decision:** The deterministic planner and the model-driven loop become a single execution path: the planner emits a `reasoning` node for the `autonomous` task type, and the engine executes it through the same node lifecycle as every other kind.
+
+**What was wrong.** Two independent implementations of "run an agent" existed — one through the task graph, one through `runReasoningLoop` — with separate approval handling, separate cancellation and separate limits. Two paths means one of them is always the less-tested one, while the properties that matter (a human can approve, a run can be cancelled, ceilings hold) have to be true on both.
+
+**Approval resume had to act, not re-ask.** On resume the engine now executes the approved call and appends its tool message *before* re-prompting; previously it re-prompted with no record that the approved action had happened, so the model was asked to decide the same thing again.
+
+**Date:** 2026-09-05
+**Impact:** `packages/agent-core/src/{engine,reasoning-loop,planner}.ts`, `packages/shared/src/task-graph.ts`.
+
+---
+
+## ADR-065: Image and video are separate capabilities
+
+**Decision:** `imageGenerationAvailable` and `videoGenerationAvailable` are independent flags, and a real OpenAI-compatible image provider (`/v1/images/generations`) exists alongside the mock.
+
+**Why not one flag.** A deployment can have a real image server and no video one. Reporting both through a single flag either disables something that works or advertises something that does not — and the second is the failure the honesty rule forbids.
+
+**Date:** 2026-09-05
+**Impact:** `packages/providers/image-openai/*`, `apps/api/src/{context,index}.ts`, `apps/api/src/routes/v1/{images,videos}.ts`.
+
+---
+
+## ADR-066: Platform introspection routes
+
+**Decision:** `/api/v1/{models,providers,tools,mcp,jobs,admin/*}` report what is really configured, including explicit `available: false` and `isMock: true` states.
+
+**Why.** With a provider-neutral runtime (ADR-056), "which model am I actually talking to, and is it real?" is a question an operator must be able to answer without reading boot logs. An unconfigured capability is reported as unconfigured rather than omitted: a missing row looks like a bug, an explicit `false` looks like a decision, and only one of those is actionable.
+
+The `/admin` endpoints answer **404** to a non-administrator rather than 403 — confirming an endpoint exists is itself a disclosure (ADR-049).
+
+**Date:** 2026-09-05
+**Impact:** `apps/api/src/routes/v1/platform.ts`.
+
+---
+
+## ADR-067: A real MCP lifecycle
+
+**Decision:** `McpManager` owns every MCP subprocess's lifetime, with `startAll`/`status`/`reconnect`/`disconnect`/`stopAll`/`checkHealth`, and `parseMcpServerConfigs` skips a malformed entry instead of failing the boot.
+
+**What was wrong.** The previous integration assigned its connection to a local and dropped it, leaking the child process. And a single bad entry in `MCP_SERVERS` took the whole platform down — MCP is optional, and an optional integration must never be able to stop a boot.
+
+**Date:** 2026-09-05
+**Impact:** `packages/mcp/src/manager.ts`, `apps/api/src/index.ts`.
+
+---
+
+## ADR-068: The frontend gets tested, and E2E finds three real bugs
+
+**Decision:** `apps/web` gets Vitest + Testing Library for units and Playwright for end-to-end tests against the real API and a real database, both wired into CI.
+
+**Why it mattered.** `apps/web` had no test script at all, so it was invisible to `npm test` and every claim about the UI rested on a manual browser session recorded in prose.
+
+**What the suite found on its first runs** — which is the argument for having written it:
+
+1. `app/lib/api.ts` — all 24 REST functions — called `fetch` directly with no credentials, no CSRF header and no project scope. Fine when the API had no auth; broken the moment it did. Signup succeeded and the very next call was refused, bouncing the user back to sign-in.
+2. After a successful signup or login the client-side session state was still "anonymous" — the provider had resolved it when the page mounted — so the redirect effect bounced the user straight back to `/login`.
+3. `SameSite=Lax` on the session cookie (see ADR-070).
+
+Also fixed on the way: the client SSE parser framed on `\n\n` only (the same defect ADR-045 fixed server-side, never applied to the client — a CRLF response rendered a permanently empty answer), swallowed the API's error body, and had an unguarded `JSON.parse` that turned one malformed frame into an unhandled rejection.
+
+**Date:** 2026-09-05
+**Impact:** `apps/web/{vitest.config.ts,playwright.config.ts,e2e/*,app/lib/*}`, `.github/workflows/ci.yml`.
+
+---
+
+## ADR-069: The ffmpeg branch, executed for real
+
+**Decision:** An integration test runs a real ffmpeg end to end and asserts ffmpeg can decode the result back — and it probes the binary's **capabilities**, not its presence.
+
+**Why capability-probing.** The ffmpeg cached on the authoring machine is Playwright's screencast build (`--disable-everything`), which runs and reports a version and then cannot open a GIF or encode H.264. A presence check would have failed these tests against perfectly correct render code. The probe requires a gif demuxer, libx264 and the mp4 muxer; CI installs a general-purpose build so the branch is genuinely covered, and locally the suite skips loudly.
+
+Round-tripping through the decoder is what distinguishes "wrote bytes" from "wrote a valid video".
+
+**Date:** 2026-09-05
+**Impact:** `packages/media/src/video-render.integration.test.ts`, `.github/workflows/ci.yml`.
+
+---
+
+## ADR-070: SameSite derived from Secure
+
+**Decision:** The session and CSRF cookies use `SameSite=None` when `Secure` (production over HTTPS) and `Lax` otherwise, overridable via `COOKIE_SAMESITE`.
+
+**What was broken.** This platform deploys the web app and the API as separate services on different hostnames, so every browser call to the API is cross-**site**, and a `Lax` cookie is never sent on those. Nobody could have signed in to the deployed platform. The bug was invisible locally, where both share a host.
+
+**It does not reintroduce CSRF risk.** The double-submit token is a cookie an attacker's site can cause to be *sent* but still cannot *read*, so it cannot set the matching header.
+
+`AUTH_RATE_LIMIT_MAX` was made configurable at the same time: 5-per-10-minutes is right for a public instance and wrong for a suite that legitimately creates several accounts from one address.
+
+**Date:** 2026-09-05
+**Impact:** `apps/api/src/{config,context,index}.ts`, `apps/api/src/routes/v1/auth.ts`.
+
+---
+
+## ADR-071: Rate limiting in Postgres, not in each process
+
+**Decision:** `@fastify/rate-limit` uses a Postgres-backed store shared by every API instance.
+
+**What was wrong.** The default store is a per-process LRU: with N instances behind a load balancer the effective limit is N × max. It degrades in the worst direction — the harder an endpoint is hammered the more instances the autoscaler adds, and the higher the real limit climbs. `infrastructure/terraform` already provisions `max_instance_count > 1`, so this was live rather than hypothetical.
+
+**Why not Redis.** A second piece of mandatory infrastructure to provision, secure, monitor and fail over, in exchange for one small upsert per request against a database the platform already requires and already holds a pool to. The store interface is the entire coupling surface if that trade ever changes.
+
+**Correctness.** One statement: an upsert whose UPDATE branch decides, inside the same statement, whether the stored window has expired (start at 1) or is live (increment). Postgres's row lock serialises every instance — no read-then-write race, no lost update. Counters are namespaced by route, or the global limit and the signup limit would share a row and ordinary reads would consume the signup budget.
+
+**It fails OPEN**, deliberately, and opposite to the malware scanner's fail-closed rule (ADR-042): a scanner that cannot scan must not certify a file clean, whereas a limiter that cannot count would turn a database blip into a total outage. Nothing in the security model rests on it. The synchronous-construction-failure path fails open too — an uncaught throw in a `preHandler` is a 500 on every request.
+
+**Verified live:** with `AUTH_RATE_LIMIT_MAX=3`, five signups returned 201, 201, 201, 429, 429, with the counters visible in the table, namespaced per route.
+
+**Date:** 2026-09-06
+**Impact:** `apps/api/src/plugins/rate-limit-store.ts`, `apps/api/src/{server,context,index}.ts`, `packages/database/src/schema/index.ts` (+ migration `0001`).
+
+---
+
+## ADR-072: Dead-letter queues, and the job listing that stole jobs
+
+**Decision:** Every queue is created with a `.dlq` sibling; dead letters are listable **with the failure reason** and replayable, both project-scoped. `listForProject` becomes a read-only SQL query.
+
+**Dead-lettering was a docstring.** `registerWorker` claimed a job "eventually dead-letters once retries are exhausted". It did not, and could not: pg-boss only dead-letters when a queue names a `deadLetter` target, and none did. An exhausted job stopped at `failed`, was archived and then deleted — for `document.scan`, silent data loss that left the document `scanning` forever with no record of why.
+
+The DLQ must be created before the queue that names it, because pg-boss puts a real foreign key on the column; `ensureQueueWithDeadLetter` makes that ordering impossible to get wrong. The dead-letter row carries the payload but not the failure — the failure is on the *original* job's `output` — so the listing joins the two: reporting a dead letter without saying why leaves an operator as blind as having no DLQ at all. Replay **cancels** the dead letter rather than completing it, because pg-boss only completes an `active` job and a dead letter is `created`; completing it silently did nothing and the replayed job stayed on the outstanding list forever.
+
+**Two real bugs found while building it, both in `GET /api/v1/jobs`:**
+
+1. **It stole jobs.** `listForProject` called `boss.fetch()`, which is the primitive `work()` polls with: it transitions every job it returns to `active`. Opening the jobs screen claimed the project's pending work into a process that would never run it; each job then sat active until `expireInSeconds` elapsed, burning a retry, and a few refreshes could exhaust `retryLimit` and fail it for good. Confirmed against a real queue — `created` before the call, `active` after. The types say nothing about this.
+2. **And showed nothing anyway.** Three of the four enqueue sites never put `projectId` in the payload, the only field the tenant filter can key on, so image and document jobs were invisible to their owners — and the theft happened with no visible output at all.
+
+**Verified live** under `ROLE=api` with nothing consuming: the image job is now visible, and five consecutive reads leave it `created` with `retries=0`.
+
+**Date:** 2026-09-06
+**Impact:** `packages/jobs/src/queue.ts`, `apps/api/src/index.ts`, `apps/api/src/routes/v1/{platform,images,rag}.ts`.
+
+---
+
+## ADR-073: The spans the docstring promised
+
+**Decision:** `tool.call`, `agent.run` and `agent.step` are emitted for real, and `span-coverage.test.ts` asserts the tree they form.
+
+**What was wrong.** `tracing.ts` asserted in its own docstring that "every span this platform actually needs (agent.run, agent.step, tool.call, gen_ai.chat, job processing) is created explicitly at the point that matters". Two of the five existed. A checkable claim that nobody had checked.
+
+**`tool.call` lives in the registry**, not at the call sites: a span added per call site is one a third call site silently skips, and "which tools are slow, and which fail" must not have a blind spot. It covers the rejection paths (unknown tool, disabled, invalid arguments) — those never reach a handler, so an operator watching only executions would see nothing while a model burned its whole iteration budget on them. They are recorded as a `tool.outcome` attribute rather than span ERROR, because a model guessing a tool name is normal in a model-driven loop and marking it ERROR would bury real failures.
+
+**`agent.run` opens in `createAndStart`**, not in `planAndExecute`, so a task that dies *during* planning still produces a span — precisely the case a later span would miss.
+
+**Nesting is the property under test,** not span count: a flat pile of spans cannot answer "where did this run spend its time". Verified live in the running server — `agent.run` (no parent), `agent.step` (parent = the run), `tool.call` (parent = the step), one trace id, `project_id` on every span.
+
+**Date:** 2026-09-06
+**Impact:** `packages/tools/src/registry.ts`, `packages/agent-core/src/engine.ts`, `packages/observability/src/{tracing.ts,span-coverage.test.ts}`.
+
+---
+
+## ADR-074: A UI for the platform API
+
+**Decision:** One operations screen at `/platform` consumes the ADR-066 endpoints and the ADR-072 dead-letter list, with a working Replay control.
+
+**Why.** ADR-066 built six endpoint groups and nothing ever called them. An API that needs curl does not answer "which model am I actually talking to, and is it real?" for the person who has to ask it.
+
+The most important cell on the page reads **"MOCK — not a real model"**, and the E2E test asserts that exact string renders — a mock that looks real is the single failure the honesty rule exists to prevent. The health section distinguishes "you may not see this" (the deliberate 404 for a non-administrator) from "this is broken", and the E2E asserts both that the explanation renders *and* that no error banner appears, which is what stops a future change from "fixing" the 404 by widening the permission.
+
+**A build-time trap fixed at the same time.** `NEXT_PUBLIC_API_URL` is inlined by Next at build time, so a web build made without it points the browser at the development port and every E2E test fails with an opaque "Could not reach the server". `start:e2e` now builds what it runs, so the result no longer depends on the environment of an unrelated earlier build.
+
+**Date:** 2026-09-06
+**Impact:** `apps/web/app/platform/page.tsx`, `apps/web/app/lib/app-chrome.tsx`, `apps/web/e2e/auth-and-isolation.spec.ts`, `apps/web/package.json`.
