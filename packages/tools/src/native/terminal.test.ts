@@ -17,14 +17,23 @@ import { createTerminalTools } from "./terminal.js";
  */
 describe("terminal.run_command security", () => {
   let root: string;
+  let workspace: string;
+  const PROJECT_ID = "p1";
   let runCommand: ToolHandler;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "terminal-test-"));
+    // ADR-090: tools resolve inside the CALLER'S project workspace, not the bare
+    // deployment root, so a fixture written to `root` is no longer where the tool looks.
+    workspace = join(root, PROJECT_ID);
+    mkdirSync(workspace, { recursive: true });
     // The real sandbox, not a stub: these are security tests, and a stub would let a
     // regression in the isolation path pass them (ADR-077).
     const [tool] = createTerminalTools(root, new ProcessSandbox(root));
-    runCommand = tool.handler;
+    // The invocation context is no longer optional: paths resolve inside the CALLER'S project
+    // workspace (ADR-090), so every call needs a project to resolve one for.
+    runCommand = (args: Record<string, unknown>) =>
+      tool.handler(args, { projectId: PROJECT_ID, userId: "u1" });
   });
 
   afterEach(() => {
@@ -59,14 +68,14 @@ describe("terminal.run_command security", () => {
   });
 
   it("rejects a path-traversal escape in a SECOND argument too, not only the first", async () => {
-    writeFileSync(join(root, "ok.js"), "");
+    writeFileSync(join(workspace, "ok.js"), "");
     const result = await runCommand({ command: "node", args: ["ok.js", "../../../etc/passwd"] });
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/resolves outside/);
   });
 
   it("does not reject a legitimate flag-free non-path second argument", async () => {
-    writeFileSync(join(root, "echo-arg.js"), "console.log(process.argv[2]);");
+    writeFileSync(join(workspace, "echo-arg.js"), "console.log(process.argv[2]);");
     const result = await runCommand({ command: "node", args: ["echo-arg.js", "42"] });
     expect(result.ok).toBe(true);
     const output = result.output as { exitCode: number; stdout: string };
@@ -75,7 +84,7 @@ describe("terminal.run_command security", () => {
   });
 
   it("still runs a legitimate real script inside the sandbox (no regression)", async () => {
-    writeFileSync(join(root, "ok.js"), 'console.log("real script output");');
+    writeFileSync(join(workspace, "ok.js"), 'console.log("real script output");');
     const result = await runCommand({ command: "node", args: ["ok.js"] });
     expect(result.ok).toBe(true);
     const output = result.output as { exitCode: number; stdout: string };
@@ -84,7 +93,7 @@ describe("terminal.run_command security", () => {
   });
 
   it("still runs a legitimate script from a sandboxed subdirectory cwd (no regression)", async () => {
-    const sub = join(root, "coding-demo");
+    const sub = join(workspace, "coding-demo");
     mkdirSync(sub);
     writeFileSync(join(sub, "math.test.js"), 'console.log("PASS");');
     const result = await runCommand({ command: "node", args: ["math.test.js"], cwd: "coding-demo" });

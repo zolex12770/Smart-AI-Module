@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -80,6 +80,7 @@ const USER = "user-auto";
 describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
   let db: PgliteDb;
   let sandboxRoot: string;
+  let workspaceDir: string;
   let tasks: PgTaskRepository;
   let nodes: PgTaskNodeRepository;
 
@@ -125,6 +126,10 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     db = await createDb(":memory:");
     await runMigrations(db);
     sandboxRoot = mkdtempSync(join(tmpdir(), "autonomous-"));
+    // ADR-090: the filesystem tools resolve inside the CALLER'S project workspace, so a
+    // fixture written to the bare deployment root is not where the agent will look.
+    workspaceDir = join(sandboxRoot, PROJECT);
+    mkdirSync(workspaceDir, { recursive: true });
     const now = new Date();
     await db.insert(organizations).values({ id: ORG, name: "Org", createdAt: now, updatedAt: now });
     await db
@@ -147,7 +152,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
   });
 
   it("lets the model choose a tool, run it, read the result, and finish — with a real file changed", async () => {
-    writeFileSync(join(sandboxRoot, "answer.txt"), "the answer is 41\n");
+    writeFileSync(join(workspaceDir, "answer.txt"), "the answer is 41\n");
 
     const { engine, provider } = build([
       // Turn 1: the model decides to look at the file. Nothing in the plan told it to.
@@ -184,7 +189,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
 
     expect(finished.state).toBe("COMPLETED");
     // The real, observable outcome: the file on disk changed.
-    expect(readFileSync(join(sandboxRoot, "answer.txt"), "utf8")).toContain("42");
+    expect(readFileSync(join(workspaceDir, "answer.txt"), "utf8")).toContain("42");
 
     // The model was called three times, each turn seeing a longer transcript than the last —
     // which is what makes it a reasoning loop rather than three unrelated calls.
@@ -220,7 +225,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
   });
 
   it("stops at the harness's iteration ceiling when the model will not stop calling tools", async () => {
-    writeFileSync(join(sandboxRoot, "loop.txt"), "x\n");
+    writeFileSync(join(workspaceDir, "loop.txt"), "x\n");
     const { engine } = build(
       [{ calls: [{ id: "c", name: "fs.read_file", arguments: { path: "loop.txt" } }] }],
       { maxIterations: 3 }
@@ -241,7 +246,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
   });
 
   it("parks for human approval when the model reaches for a destructive tool, without running it", async () => {
-    const doomed = join(sandboxRoot, "important.txt");
+    const doomed = join(workspaceDir, "important.txt");
     writeFileSync(doomed, "please do not delete me\n");
 
     const { engine } = build([
@@ -266,7 +271,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
   });
 
   it("resumes from the preserved transcript once a human approves, and completes the action", async () => {
-    const doomed = join(sandboxRoot, "important.txt");
+    const doomed = join(workspaceDir, "important.txt");
     writeFileSync(doomed, "please do not delete me\n");
 
     const { engine } = build([

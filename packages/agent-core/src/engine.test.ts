@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -111,6 +111,10 @@ async function setupHarness() {
   const { projectId, userId } = await seedTenancy(db);
 
   const sandboxRoot = mkdtempSync(join(tmpdir(), "engine-test-"));
+  // ADR-090: the tools resolve inside the CALLER'S project workspace, so a fixture written to the
+  // bare deployment root is not where the agent will look for it.
+  const workspaceDir = join(sandboxRoot, projectId);
+  mkdirSync(workspaceDir, { recursive: true });
 
   const tasks: TaskRepository = new PgTaskRepository(db);
   const taskNodes: TaskNodeRepository = new PgTaskNodeRepository(db);
@@ -159,6 +163,7 @@ async function setupHarness() {
   return {
     db,
     sandboxRoot,
+    workspaceDir,
     projectId,
     userId,
     clock,
@@ -261,8 +266,8 @@ describe("AgentEngine — real state machine + dispatcher", () => {
   });
 
   it("completes a real multi-step task with dependency + template resolution (read_and_summarize)", async () => {
-    const { engine, taskNodes, sandboxRoot, projectId, userId } = harness;
-    writeFileSync(join(sandboxRoot, "notes.txt"), "the secret ingredient is basil");
+    const { engine, taskNodes, workspaceDir, projectId, userId } = harness;
+    writeFileSync(join(workspaceDir, "notes.txt"), "the secret ingredient is basil");
 
     const task = await engine.createAndStart(
       "read_and_summarize",
@@ -282,8 +287,8 @@ describe("AgentEngine — real state machine + dispatcher", () => {
   });
 
   it("gates a destructive tool call on human approval, and approving it actually executes the action", async () => {
-    const { engine, taskNodes, sandboxRoot, projectId, userId } = harness;
-    const filePath = join(sandboxRoot, "to-delete.txt");
+    const { engine, taskNodes, workspaceDir, projectId, userId } = harness;
+    const filePath = join(workspaceDir, "to-delete.txt");
     writeFileSync(filePath, "delete me");
 
     const task = await engine.createAndStart("delete_sandbox_file", { path: "to-delete.txt" }, { projectId, userId });
@@ -301,8 +306,8 @@ describe("AgentEngine — real state machine + dispatcher", () => {
   });
 
   it("rejecting an approval-gated tool call cancels the task and never executes the action", async () => {
-    const { engine, taskNodes, sandboxRoot, projectId, userId } = harness;
-    const filePath = join(sandboxRoot, "keep-me.txt");
+    const { engine, taskNodes, workspaceDir, projectId, userId } = harness;
+    const filePath = join(workspaceDir, "keep-me.txt");
     writeFileSync(filePath, "do not delete");
 
     const task = await engine.createAndStart("delete_sandbox_file", { path: "keep-me.txt" }, { projectId, userId });
@@ -317,8 +322,8 @@ describe("AgentEngine — real state machine + dispatcher", () => {
   });
 
   it("cancel() stops a task and marks its non-terminal nodes cancelled", async () => {
-    const { engine, tasks, taskNodes, sandboxRoot, projectId, userId } = harness;
-    writeFileSync(join(sandboxRoot, "x.txt"), "x");
+    const { engine, tasks, taskNodes, workspaceDir, projectId, userId } = harness;
+    writeFileSync(join(workspaceDir, "x.txt"), "x");
     const task = await engine.createAndStart("delete_sandbox_file", { path: "x.txt" }, { projectId, userId });
     await waitForTaskState(harness, task.id, ["WAITING_FOR_APPROVAL"]);
 
@@ -398,8 +403,8 @@ describe("AgentEngine — real state machine + dispatcher", () => {
     });
 
     it("resumeAll() does NOT auto-retry a mutating tool call crashed mid-flight — surfaces needs_reconciliation + PAUSED instead", async () => {
-      const { tasks, taskNodes, taskTransitions, toolRegistry, modelRouter, sandboxRoot, projectId, userId } = harness;
-      const filePath = join(sandboxRoot, "maybe-deleted.txt");
+      const { tasks, taskNodes, taskTransitions, toolRegistry, modelRouter, workspaceDir, projectId, userId } = harness;
+      const filePath = join(workspaceDir, "maybe-deleted.txt");
       writeFileSync(filePath, "unknown fate");
 
       const task = await tasks.create({

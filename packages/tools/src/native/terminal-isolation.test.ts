@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -22,6 +22,8 @@ import { createTerminalTools } from "./terminal.js";
  */
 describe("terminal.run_command environment isolation (ADR-077)", () => {
   let root: string;
+  let workspace: string;
+  const PROJECT_ID = "p1";
   const CANARIES = {
     ANTHROPIC_API_KEY: "sk-ant-CANARY-must-not-escape",
     OPENAI_API_KEY: "sk-CANARY-must-not-escape",
@@ -34,6 +36,9 @@ describe("terminal.run_command environment isolation (ADR-077)", () => {
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "term-iso-"));
+    // ADR-090: the tool resolves inside the project workspace, not the bare root.
+    workspace = join(root, PROJECT_ID);
+    mkdirSync(workspace, { recursive: true });
     for (const [key, value] of Object.entries(CANARIES)) {
       saved[key] = process.env[key];
       process.env[key] = value;
@@ -50,12 +55,11 @@ describe("terminal.run_command environment isolation (ADR-077)", () => {
 
   /** Writes a script into the sandbox and runs it the way the agent would. */
   async function runScript(source: string) {
-    writeFileSync(join(root, "probe.js"), source);
+    writeFileSync(join(workspace, "probe.js"), source);
     const [tool] = tools();
     return tool.handler({ command: "node", args: ["probe.js"] }, {
-      projectId: "p1",
+      projectId: PROJECT_ID,
       userId: "u1",
-      workspaceRoot: root,
     });
   }
 
@@ -111,7 +115,7 @@ describe("terminal.run_command environment isolation (ADR-077)", () => {
     const [tool] = tools();
     const result = await tool.handler(
       { command: "node", args: ["--eval=console.log(process.env)"] },
-      { projectId: "p1", userId: "u1", workspaceRoot: root }
+      { projectId: PROJECT_ID, userId: "u1" }
     );
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/flag/i);
@@ -121,7 +125,7 @@ describe("terminal.run_command environment isolation (ADR-077)", () => {
     const [tool] = tools();
     const result = await tool.handler(
       { command: "curl", args: ["https://example.com"] },
-      { projectId: "p1", userId: "u1", workspaceRoot: root }
+      { projectId: PROJECT_ID, userId: "u1" }
     );
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/allow-list/i);

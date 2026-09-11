@@ -1,5 +1,6 @@
 import { PERMISSION_LEVEL_DEFAULTS } from "@ai-platform/shared";
 import { resolveSandboxedPath } from "./sandbox-path.js";
+import { projectWorkspace } from "./workspace.js";
 import type { NativeToolEntry } from "./filesystem.js";
 
 /**
@@ -110,7 +111,10 @@ export function createTerminalTools(root: string, sandbox: CommandSandbox): Nati
       if (!ALLOWED_COMMANDS.has(command)) {
         return { ok: false, error: `Command "${command}" is not in the allow-list (${[...ALLOWED_COMMANDS].join(", ")}).` };
       }
-      const cwd = resolveSandboxedPath(root, typeof args.cwd === "string" ? args.cwd : ".");
+      // The caller's PROJECT workspace, not the shared deployment root (ADR-090): a command
+      // one tenant's agent runs must not see another tenant's files.
+      const workspace = projectWorkspace(root, context);
+      const cwd = resolveSandboxedPath(workspace, typeof args.cwd === "string" ? args.cwd : ".");
       const cmdArgs = Array.isArray(args.args) ? args.args.map(String) : [];
 
       // docs/13_SECURITY_ARCHITECTURE.md §6/§11 — found the hard way (a real exploit run
@@ -138,7 +142,7 @@ export function createTerminalTools(root: string, sandbox: CommandSandbox): Nati
           // Resolved relative to the already-sandboxed `cwd` — the same base Node itself
           // will use to resolve a path argument when it actually runs — not relative to
           // `root`, which would validate the wrong path for any non-root `cwd`.
-          resolveSandboxedPath(root, arg, cwd);
+          resolveSandboxedPath(workspace, arg, cwd);
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }

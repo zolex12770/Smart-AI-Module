@@ -1399,3 +1399,24 @@ Found by the final zero-gap audit.
 
 **Date:** 2026-09-11
 **Impact:** `apps/api/src/routes/v1/platform.ts`.
+
+---
+
+## ADR-090: One agent workspace per project
+
+**Decision:** Every native filesystem, coding, search and terminal tool resolves paths inside `<SANDBOX_ROOT>/<projectId>/`, derived from the invocation context rather than from a single deployment-wide root.
+
+**What was shared.** `SANDBOX_ROOT` is one directory and every tool factory took it and then ignored the invocation context entirely. So every tenant's agent read and wrote the SAME directory: project A's agent could read a file project B's agent had just written, overwrite it, or delete it, simply by naming it. `ToolInvocationContext.projectId` was threaded all the way to the handlers and never used.
+
+**This was the one place the authorization model had no equivalent.** Every repository takes a project and puts it in the SQL `WHERE` (ADR-049); the filesystem had no `WHERE` at all. Enumeration counts too — the `fs.list_directory` listing leaked other tenants' filenames, which are often sensitive on their own.
+
+**Containment and scoping are separate concerns.** `projectWorkspace` decides which directory a tool operates in; `resolveSandboxedPath` (ADR-088) decides what may not be escaped, and still checks against the deployment root. Narrowing containment to the project directory as well would be stricter and is a separate change; the escape that mattered was leaving the deployment root entirely.
+
+**An ABSOLUTE `context.workspaceRoot` is now ignored.** Before this change the composition root passed the deployment sandbox root in that field, which is now the PARENT of the project workspace — re-resolving it would read as an escape attempt and reject every coding-tool call in production. A RELATIVE one is still honoured, naming a subdirectory within the project's workspace so a run can scope itself to a checkout.
+
+The project id is validated before it becomes a path component. Ids are UUIDs from this platform's own database, so it never fires today — which is why it is there: the day something else supplies one, a `../` in that field would be a traversal in the ROOT, where the per-path containment check is not positioned to catch it.
+
+Found by the final zero-gap audit.
+
+**Date:** 2026-09-11
+**Impact:** `packages/tools/src/native/{workspace,filesystem,coding,search,terminal}.ts` + `workspace-isolation.test.ts`; test fixtures in `packages/agent-core` and `apps/api` reseeded.

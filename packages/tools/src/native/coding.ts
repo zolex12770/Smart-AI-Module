@@ -2,6 +2,9 @@ import { readFileSync, writeFileSync, rmSync } from "node:fs";
 import { PERMISSION_LEVEL_DEFAULTS, ValidationError, type ToolDefinition } from "@ai-platform/shared";
 import { applyUnifiedDiff, PatchError } from "./patch.js";
 import { resolveSandboxedPath } from "./sandbox-path.js";
+import { isAbsolute } from "node:path";
+import { projectWorkspace } from "./workspace.js";
+import type { ToolInvocationContext } from "@ai-platform/shared";
 import type { NativeToolEntry } from "./filesystem.js";
 
 /**
@@ -45,9 +48,29 @@ function toolDefinition(
 }
 
 export function createCodingTools(root: string): NativeToolEntry[] {
-  const resolveIn = (context: { workspaceRoot?: string }, relativePath: string) => {
-    const base = context.workspaceRoot ? resolveSandboxedPath(root, context.workspaceRoot) : root;
-    return resolveSandboxedPath(base, relativePath);
+  /**
+   * Every coding-tool path resolves inside the CALLER'S PROJECT workspace (ADR-090), not the
+   * shared deployment root — one tenant's agent must not be able to read or overwrite a file
+   * another tenant's agent just wrote.
+   *
+   * `workspaceRoot`, when the engine supplies one, is a subdirectory WITHIN that project
+   * workspace rather than an alternative to it: it lets a run scope itself to a checkout, and it
+   * is validated through the same containment check so it cannot be used to climb out.
+   */
+  const resolveIn = (context: ToolInvocationContext, relativePath: string) => {
+    const workspace = projectWorkspace(root, context);
+    // `workspaceRoot` is honoured only when RELATIVE — it then names a subdirectory within the
+    // project's workspace, letting a run scope itself to a checkout, validated through the same
+    // containment check so it cannot climb out.
+    //
+    // An ABSOLUTE one is ignored. Before ADR-090 the composition root passed the deployment
+    // sandbox root here, which is now the PARENT of the project workspace: re-resolving it would
+    // be an escape attempt and every coding-tool call in production would be rejected. Ignoring
+    // it is correct rather than lenient, because the project workspace it would have named is
+    // exactly what `projectWorkspace` just computed.
+    const scoped = context.workspaceRoot && !isAbsolute(context.workspaceRoot) ? context.workspaceRoot : null;
+    const base = scoped ? resolveSandboxedPath(workspace, scoped) : workspace;
+    return resolveSandboxedPath(workspace, relativePath, base);
   };
 
   return [

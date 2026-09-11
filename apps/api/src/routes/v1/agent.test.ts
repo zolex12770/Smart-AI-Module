@@ -70,7 +70,10 @@ describe("agent task routes", () => {
   it("the full approve HTTP flow actually deletes the real file", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const filePath = path.join(ctx.sandboxRoot, "http-delete-me.txt");
+    // ADR-090: the filesystem tools resolve inside the CALLER'S project workspace, not the
+    // bare deployment sandbox root, so the fixture has to be seeded where the tool will look.
+    const filePath = path.join(ctx.sandboxRoot, auth.projectId, "http-delete-me.txt");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, "bye");
 
     const createRes = await app.inject({ headers: auth.headers,

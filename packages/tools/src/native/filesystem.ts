@@ -2,6 +2,7 @@ import { readFile, writeFile, unlink, readdir, stat } from "node:fs/promises";
 import type { ToolDefinition, ToolHandler } from "@ai-platform/shared";
 import { PERMISSION_LEVEL_DEFAULTS } from "@ai-platform/shared";
 import { resolveSandboxedPath } from "./sandbox-path.js";
+import { projectWorkspace } from "./workspace.js";
 
 export interface NativeToolEntry {
   definition: ToolDefinition;
@@ -45,9 +46,9 @@ export function createFilesystemTools(root: string): NativeToolEntry[] {
       retryPolicy: { maxAttempts: readOnly.maxAttempts, backoff: "fixed", idempotencyRequired: false },
       enabled: true,
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const path = String(args.path ?? "");
-      const safePath = resolveSandboxedPath(root, path);
+      const safePath = resolveSandboxedPath(projectWorkspace(root, context), path);
       const content = await readFile(safePath, "utf8");
       return { ok: true, output: { content, path } };
     },
@@ -76,9 +77,9 @@ export function createFilesystemTools(root: string): NativeToolEntry[] {
       retryPolicy: { maxAttempts: readOnly.maxAttempts, backoff: "fixed", idempotencyRequired: false },
       enabled: true,
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const path = String(args.path ?? ".");
-      const safePath = resolveSandboxedPath(root, path);
+      const safePath = resolveSandboxedPath(projectWorkspace(root, context), path);
       const names = await readdir(safePath);
       const entries = await Promise.all(
         names.map(async (name) => {
@@ -113,10 +114,10 @@ export function createFilesystemTools(root: string): NativeToolEntry[] {
       retryPolicy: { maxAttempts: writeLocal.maxAttempts, backoff: "none", idempotencyRequired: false },
       enabled: true,
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const path = String(args.path ?? "");
       const content = String(args.content ?? "");
-      const safePath = resolveSandboxedPath(root, path);
+      const safePath = resolveSandboxedPath(projectWorkspace(root, context), path);
       await writeFile(safePath, content, "utf8");
       return { ok: true, output: { path, writtenAt: now() } };
     },
@@ -145,9 +146,9 @@ export function createFilesystemTools(root: string): NativeToolEntry[] {
       retryPolicy: { maxAttempts: destructive.maxAttempts, backoff: "none", idempotencyRequired: true },
       enabled: true,
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const path = String(args.path ?? "");
-      const safePath = resolveSandboxedPath(root, path);
+      const safePath = resolveSandboxedPath(projectWorkspace(root, context), path);
       await unlink(safePath);
       return { ok: true, output: { path, deletedAt: now() } };
     },
