@@ -39,6 +39,11 @@ Read this file first at the start of any session, along with `README.md`, `docs/
 
 - New native tools: `terminal.run_command` (sandboxed, `node`-only allow-list, `child_process.spawn` with `shell: false` and an argument array — no shell-injection surface regardless of allow-list size), `code.parse_fix_directive`, `code.apply_literal_fix`.
 - New task type `fix_failing_test`: run test → parse failure → apply fix → re-run test, four real tool-call nodes chained via the existing template-resolution mechanism.
+  - **Correction, 2026-09-11 (the entry above is left as written — it was true on its date):** ADR-062 later
+    DELETED the two tools this pipeline depended on, and nothing updated the planner. `fix_failing_test`
+    then failed at plan time — every time — until a zero-gap audit found it. The task type is now a
+    model-driven reasoning node over the real coding tools, with `test_suite` verification wired to the
+    real sandbox. The four-node recipe described here no longer exists.
 - **Honest scope decision (ADR-022), same reasoning as ADR-018's planner:** the mock provider can't actually reason about arbitrary test failures and write a correct fix — that needs a real LLM (Phase 2). Rather than fake that with canned mock-provider text, the "fix" is a deterministic literal-value correction driven by a structured signal the test itself prints (`FIX_NEEDED path=... find=... replace=...`). This is a real, narrow, honestly-scoped automated-fix capability, not a simulation of a smarter one.
 - **Verified against a running server:** set up a real two-file Node project (`math.js` with a wrong constant, `math.test.js` asserting the right one) in the sandbox; confirmed the test genuinely fails standalone; ran the `fix_failing_test` task and confirmed all four steps completed for real — the actual file on disk changed from `ANSWER = 41` to `ANSWER = 42`, and the final re-run genuinely reported `exitCode: 0` / `"PASS"`. Re-ran the same task afterward (test now passing) and confirmed it correctly fails with "nothing to fix" rather than fabricating a result. Directly verified the terminal tool's command allow-list rejects a non-`node` command (`bash -c "echo pwned"` → rejected).
 
