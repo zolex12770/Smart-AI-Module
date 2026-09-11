@@ -1,10 +1,10 @@
 # Test Report
 
-**Date:** 2026-09-11 · **Commit:** `c6cf1a1`
+**Date:** 2026-09-11 · **Commit:** `3074680`
 
-**Result: 524 test cases across 63 files — 524 passing, 0 skipped, 0 failures.
-Plus 7 end-to-end tests in a real browser, 7/7 boot checks, 0 lint errors and 0 type errors
-across 26 workspaces.**
+**Result: 556 test cases across 69 files — 556 passing, 0 skipped, 0 failures.
+Plus 7 end-to-end tests in a real browser, 7/7 boot checks, 3/3 migration checks, 0 lint errors
+and 0 type errors across 26 workspaces.**
 
 **Every environment-gated suite now runs for real.** The previous report listed 13 skips against
 binaries that were not installed; ffmpeg, ClamAV, fake-gcs-server, Terraform and a real local LLM
@@ -15,13 +15,14 @@ than skip. A skipped test is not a passing test (product brief §29) — and the
 
 | | Original audit | Previous report | Now |
 |---|---|---|---|
-| Test files | 35 | 50 | **63** |
-| Test cases | 189 | 429 | **524** |
-| Passing | 189 | 416 | **524** |
+| Test files | 35 | 50 | **69** |
+| Test cases | 189 | 429 | **556** |
+| Passing | 189 | 416 | **556** |
 | Skipped | 0 | 13 | **0** |
 | Failures | 0 | 0 | **0** |
 | End-to-end (real browser) | 0 | 7 | **7** |
 | Boot configurations verified | 0 | 7 | **7** |
+| Migration checks | *none existed* | *none existed* | **3** |
 | Lint errors | *no linter existed* | *no linter existed* | **0** |
 | Type errors | 0 | 0 | **0** |
 

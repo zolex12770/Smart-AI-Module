@@ -1,6 +1,6 @@
 # Final Implementation Report
 
-**Date:** 2026-09-11 · **Commit:** `c6cf1a1` · **Scope:** the autonomous-completion brief
+**Date:** 2026-09-11 · **Commit:** `3074680` · **Scope:** the autonomous-completion brief
 
 **Status: IMPLEMENTATION COMPLETE — RUNTIME VERIFICATION BLOCKED for two external dependencies
 (a container runtime, and hosted-provider credentials).**
@@ -21,13 +21,13 @@ evidence; everything else is in [§ What is NOT done](#what-is-not-done).
 
 | Metric | Original audit | Previous report | Now |
 |---|---|---|---|
-| Tests passing / files | 189 / 35 | 416 / 50 | **524 / 63** |
+| Tests passing / files | 189 / 35 | 416 / 50 | **556 / 69** |
 | Skipped tests | 0 | 13 | **0** |
 | End-to-end (real browser) | 0 | 7 | **7** |
 | Boot configurations | 0 | 7/7 | **7/7** |
 | Lint | *no linter existed* | *no linter existed* | **0 errors, in CI** |
 | Type errors | 0 | 0 | **0** |
-| ADRs | 44 | 66 | **78** |
+| ADRs | 44 | 66 | **87** |
 | A real LLM has served a request | **no** | **no** | **yes** |
 | Memory changes a real answer | no | asserted on the array | **verified with a real model** |
 | Real RAG answer with citations | no | no | **yes** |
@@ -133,6 +133,38 @@ token and cost counters on an unauthenticated port.
 
 An unpriced model records **no** cost rather than zero — the default provider is self-hosted and has
 no price, and a zero would read as "free".
+
+### What a final zero-gap audit found — and it was not nothing
+
+An independent multi-agent audit read the finished tree against the requirements with no access
+to this session's account of what was built. It confirmed **thirty gaps**, several P0, each
+adversarially re-verified before being accepted. The ones that mattered most:
+
+- **A symlink walked straight out of the sandbox** (ADR-088). Path containment was lexical only —
+  its own docstring admitted "symlink-free" while docs/13 §11 required otherwise, and
+  `packages/security` had been resolving symlinks all along. Two containment implementations, and
+  the filesystem tools used the weak one. Proven by probe: `fs.read_file` returned
+  `"TOP SECRET HOST FILE CONTENTS"` from outside the workspace.
+- **Every tenant's agent shared one workspace** (ADR-090). Project A's agent could read, overwrite,
+  delete or *list* project B's files. `projectId` was threaded to the handlers and discarded — the
+  one place the `project_id` predicate that IS the authorization model had no equivalent.
+- **Tool enablement was a project permission governing a process-global mutation** (ADR-089). Any
+  self-registered account could enable an MCP tool for every tenant — defeating the
+  disabled-by-default rule that exists because remote MCP servers are untrusted.
+- **The coding agent failed 100% of the time.** `fix_failing_test` planned nodes naming two tools
+  ADR-062 had deleted, so the planner threw and every such task went straight to FAILED.
+- **No asset ever loaded in a browser**, uploads were unauthenticated, and two pages crashed —
+  four frontend contract defects (ADR-091).
+- **Narration played over the wrong shot** from scene 2 onward: audio was concatenated gapless
+  against clips that kept their own lengths, and the subtitle grid was a third timeline again.
+- **`POST /api/v1/rag/query` spent tokens with no quota check** — the one hole through FR-063.
+- **Five ADRs cited in fifteen places did not exist**, and the "authoritative" feature matrix
+  contradicted the code on twelve rows.
+
+Every one is fixed and committed, each with a regression test that reproduces the original
+behaviour. That an audit of a tree I had just declared finished found thirty real gaps is the
+most useful thing in this report: it is the difference between believing the work is done and
+checking.
 
 ### A lint gate that can fail — ADR-086
 
