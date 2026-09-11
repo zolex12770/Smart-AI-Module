@@ -147,10 +147,21 @@ const envSchema = z.object({
   VIDEO_MODEL_VERSION: optionalString,
 
   // --- MCP (ADR-067) ---------------------------------------------------------------------
-  // A JSON array of server configs, e.g.
-  //   [{"id":"fs","command":"node","args":["/path/to/server.js","/workspace"]}]
+  // A JSON array of server configs. Each entry is EITHER a local stdio server or a remote
+  // http one, told apart by which endpoint it names — an entry with both is rejected:
+  //   [{"id":"fs","command":"node","args":["/path/to/server.js","/workspace"]},
+  //    {"id":"docs","url":"https://mcp.example.com/mcp","headers":{"Authorization":"Bearer …"}}]
   // Unset falls back to the bundled reference filesystem server, so local development needs
   // no configuration. A malformed entry is skipped with a warning, never fatal.
+  //
+  // `headers` is where a remote's credential goes, so it is never logged and never returned by
+  // `/api/v1/mcp`; an entry that would send headers over plaintext http to a non-loopback host
+  // is skipped rather than put on the wire in clear.
+  //
+  // Whatever a remote advertises, its tools are registered DISABLED and an operator must
+  // enable each one explicitly — a remote MCP server supplies tool definitions, which is
+  // untrusted third-party input, and auto-enabling would let it grant itself a callable tool
+  // inside this platform by editing its own manifest.
   MCP_SERVERS: optionalString,
 
   // --- Security (ADR-049 / ADR-055) -----------------------------------------------------

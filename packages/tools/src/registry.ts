@@ -70,6 +70,24 @@ export class ToolRegistry {
     return this.entries.get(id)?.definition;
   }
 
+  /**
+   * Removes a registration outright — the counterpart `register` has always needed.
+   *
+   * Because `register` refuses to overwrite, an id can only ever be reclaimed by being
+   * removed first, and nothing could remove one. That made `McpManager.reconnect` fail in a
+   * way no test caught (the manager's suite stubs the connector): disconnect disabled a dead
+   * server's tools but left them registered, so the reconnect's rediscovery hit
+   * "Tool ... is already registered" on every id and the server could never come back. It
+   * also left a disconnected server's tools listed and callable-looking, holding a handler
+   * closed over a client whose transport is gone.
+   *
+   * Returns whether anything was removed, so a caller unwinding a partial registration can
+   * distinguish "removed" from "never got that far" without a try/catch.
+   */
+  unregister(id: string): boolean {
+    return this.entries.delete(id);
+  }
+
   list(): ToolDefinition[] {
     return [...this.entries.values()].map((e) => e.definition);
   }
