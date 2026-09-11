@@ -34,15 +34,17 @@ function retryPolicyForTool(toolId: string, lookupTool: ToolLookup) {
 }
 
 /**
- * Deterministic, rule-based planning for two known task types.
+ * Rule-based planning for the known task shapes.
  *
- * Honest scope note: docs/11_AGENT_LOOP.md's PLANNING state is designed for an
- * LLM-driven planner that reasons about arbitrary requests. Building that well needs a
- * real reasoning model (Phase 2, not yet wired to a real API key in this environment) —
- * a planner built against the mock provider would just be theater. This rule-based
- * planner is a genuine, honest stand-in that exercises the full state machine, task
- * graph, tool-calling, and persistence machinery for real, for two known request shapes.
- * Swapping this for an LLM-driven planner later is a planner.ts change only — nothing
+ * Honest scope note: docs/11_AGENT_LOOP.md's PLANNING state is designed for an LLM-driven
+ * planner that reasons about arbitrary requests, and this is not that — it is a switch. What
+ * it plans, though, is no longer uniformly a fixed recipe: `autonomous` (ADR-064) and
+ * `fix_failing_test` both plan a single `reasoning` node and let the model decide the steps,
+ * because for those two the steps genuinely are not knowable in advance. The rest stay
+ * deterministic because they are cheap, predictable and well-tested, not because a recipe is
+ * the ceiling.
+ *
+ * Swapping this for an LLM-driven planner later remains a planner.ts change only — nothing
  * downstream (dispatcher, verification, persistence) needs to change.
  */
 export function planTask(
@@ -261,76 +263,110 @@ If the context does not contain the answer, reply exactly: "The provided documen
 }
 
 /**
- * Real, narrow, deterministic "coding agent" pipeline — see the honest scope note in
- * packages/tools/src/native/coding.ts. Given a directory and a test file that prints a
- * `FIX_NEEDED path=... find=... replace=...` line on failure, this: runs the test,
- * parses the failure directive, applies the exact fix, and re-runs the test to confirm
- * it now passes — four real steps, no simulated ones.
+ * The tools the coding loop cannot run without. Looked up through `requireTool` rather than
+ * filtered silently: without a way to run the test, read the code, or change it there is no
+ * loop at all, and letting the model discover that at turn one spends a real model call to
+ * reach the same conclusion the planner could have reached for free.
+ */
+const CODING_AGENT_REQUIRED_TOOLS = ["terminal.run_command", "code.read_lines", "code.apply_patch"] as const;
+
+/**
+ * Navigation tools the loop is far better with and still correct without — they are how the
+ * model finds the source a test exercises instead of guessing at filenames. Included only when
+ * registered, because a deployment that has not registered `fs.search` should get a coding
+ * agent that reads and patches, not a task type that refuses to plan.
+ */
+const CODING_AGENT_OPTIONAL_TOOLS = ["fs.read_file", "fs.list_directory", "fs.search", "fs.glob"] as const;
+
+/**
+ * The coding agent — a model-driven fix/verify loop, not a script.
+ *
+ * THIS PLANNER WAS DEAD, and had been since ADR-062. It planned nodes for
+ * `code.parse_fix_directive` and `code.apply_literal_fix`; ADR-062 deleted both tools when it
+ * replaced directive-matching with real patching, so `requireTool` threw `unknown tool` here,
+ * the engine caught it, and every `fix_failing_test` task went straight to FAILED — the
+ * platform's headline coding capability failing 100% of the time. Nothing noticed because the
+ * planner tests pass a `lookupTool` that manufactures a definition for any id asked of it, so
+ * the one thing this function needed from the real registry was the one thing no test supplied.
+ * The regression test added with this change plans every member of `taskTypeSchema` against a
+ * lookup backed by the REAL native tool ids, which is the check that would have caught it.
+ *
+ * The repair is deliberately NOT "re-point the old four-node recipe at `code.apply_patch`".
+ * That recipe could only ever apply a fix the failing test had already spelled out for itself
+ * in a `FIX_NEEDED path=... find=... replace=...` line — the fix was authored by the test, not
+ * by the agent, which is exactly the fake ADR-062 removed. The brief asks for
+ * FAIL -> the model analyses -> patch -> test -> analyse the failure -> patch -> PASS, and the
+ * only thing in this repository that can decide what a patch should contain is a model. So
+ * this plans the shape `planAutonomous` already proves out: one `reasoning` node whose goal
+ * states the fix-verify loop and whose `allowedTools` narrows the model to the tools that loop
+ * needs. Nothing downstream changes — approval, retries, persistence and crash recovery are the
+ * same machinery the autonomous type already runs through.
+ *
+ * Verification is `test_suite`, NOT `schema_check`. The node's output is the model's own account
+ * of what it did, and a model reporting that the tests pass is not evidence that they pass — it
+ * is the model grading itself, which docs/11_AGENT_LOOP.md principle 1 forbids. The harness
+ * re-runs the command and reads the exit code (verify.ts `test_suite`), so the task can only
+ * reach COMPLETED if the test really is green. The consequence is intended: where the
+ * composition root supplies no sandboxed command runner, this task FAILS with "refusing to treat
+ * an unrunnable check as passed" rather than completing on the model's word.
  */
 function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLookup): CreateTaskNodeInput[] {
-  const testDir = String(input.testDir ?? ".");
-  const testFile = String(input.testFile ?? "");
+  const testDir = String(input.testDir ?? ".").trim() || ".";
+  const testFile = String(input.testFile ?? "").trim();
+  if (!testFile) {
+    // Previously this defaulted to "", planning `node ""` — a task that could only ever fail,
+    // with a failure message about argv rather than about the missing field.
+    throw new Error('planTask: a "fix_failing_test" task requires a non-empty `testFile`.');
+  }
 
-  const runTest1 = uuid();
-  const parseFix = uuid();
-  const applyFix = uuid();
+  for (const toolId of CODING_AGENT_REQUIRED_TOOLS) requireTool(toolId, lookupTool);
+  const allowedTools = [
+    ...CODING_AGENT_REQUIRED_TOOLS,
+    ...CODING_AGENT_OPTIONAL_TOOLS.filter((toolId) => lookupTool(toolId) !== undefined),
+  ];
+
+  /**
+   * The goal carries the loop, because running the loop is the model's job. Two of its
+   * instructions are load-bearing rather than decorative: "fix the source, not the test" closes
+   * the cheapest route from red to green (editing the assertion), and "never report a success
+   * you did not observe" is what makes giving up honest — `test_suite` verification catches a
+   * false claim either way, but a model that reports its own failure produces a far more useful
+   * failure reason than one caught lying about it.
+   */
+  const goal = [
+    `A test in this workspace is failing. Fix the code so that it passes.`,
+    ``,
+    `The test is run as: node ${testFile}`,
+    `Working directory, relative to the workspace root: ${testDir}`,
+    ``,
+    `Work in this loop, and do not stop before the test is green:`,
+    `1. Run the test with terminal.run_command and read the ACTUAL failure output.`,
+    `2. Locate the source the test exercises and read the relevant lines with code.read_lines`,
+    `   before changing anything. Do not patch a file you have not read.`,
+    `3. Fix the SOURCE, not the test: apply a unified diff with code.apply_patch. Never edit`,
+    `   ${testFile} to agree with the code, and never weaken or delete an assertion.`,
+    `4. Run the test again. If it still fails, read the new failure and return to step 2.`,
+    ``,
+    `When the test exits 0, reply with what was broken, what you changed, and the exit code of`,
+    `the final run. If you cannot make it pass, say so plainly and say why — never report a`,
+    `success you did not observe.`,
+  ].join("\n");
 
   return [
     {
-      id: runTest1,
-      type: "atomic",
-      kind: "tool_call",
-      dependsOn: [],
-      input: { command: "node", args: [testFile], cwd: testDir },
-      toolId: "terminal.run_command",
-      timeoutMs: 30_000,
-      verificationMethod: "schema_check",
-      verificationSpec: { requiredKeys: ["exitCode", "stdout"] },
-      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
-      retryPolicy: retryPolicyForTool("terminal.run_command", lookupTool),
-    },
-    {
-      id: parseFix,
-      type: "atomic",
-      kind: "tool_call",
-      dependsOn: [runTest1],
-      input: { text: `{{${runTest1}.output.stdout}}` },
-      toolId: "code.parse_fix_directive",
-      timeoutMs: 10_000,
-      verificationMethod: "schema_check",
-      verificationSpec: { requiredKeys: ["path", "find", "replace"] },
-      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
-      retryPolicy: retryPolicyForTool("code.parse_fix_directive", lookupTool),
-    },
-    {
-      id: applyFix,
-      type: "atomic",
-      kind: "tool_call",
-      dependsOn: [parseFix],
-      input: {
-        path: `{{${parseFix}.output.path}}`,
-        find: `{{${parseFix}.output.find}}`,
-        replace: `{{${parseFix}.output.replace}}`,
-      },
-      toolId: "code.apply_literal_fix",
-      timeoutMs: 10_000,
-      verificationMethod: "schema_check",
-      verificationSpec: { requiredKeys: ["path"] },
-      approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
-      retryPolicy: retryPolicyForTool("code.apply_literal_fix", lookupTool),
-    },
-    {
       id: uuid(),
       type: "atomic",
-      kind: "tool_call",
-      dependsOn: [applyFix],
-      input: { command: "node", args: [testFile], cwd: testDir },
-      toolId: "terminal.run_command",
-      timeoutMs: 30_000,
-      verificationMethod: "deterministic_compare",
-      verificationSpec: { field: "exitCode", equals: 0 },
+      kind: "reasoning",
+      dependsOn: [],
+      // `testDir`/`testFile` are echoed alongside the goal so an operator reading the persisted
+      // row can see what the task was pointed at without parsing prose out of the prompt.
+      input: { goal, allowedTools, testDir, testFile },
+      // The same ceiling an autonomous run gets: a fix-verify loop legitimately spans many
+      // turns, and the loop's own iteration and token limits are the real bound.
+      timeoutMs: 10 * 60_000,
+      verificationMethod: "test_suite",
+      verificationSpec: { command: "node", args: [testFile], workspaceRoot: testDir, timeoutMs: 60_000 },
       approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
-      retryPolicy: retryPolicyForTool("terminal.run_command", lookupTool),
     },
   ];
 }

@@ -62,7 +62,14 @@ import { createRagTools, processDocumentIngestion, processDocumentScan } from "@
 import { ClamAvScanner, type MalwareScanner } from "@ai-platform/scanning";
 import { AuthService, createSandbox, type ExecutionSandbox } from "@ai-platform/security";
 import { signupRequestSchema, type EmbeddingProvider } from "@ai-platform/shared";
-import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
+import {
+  createCodingTools,
+  createFilesystemTools,
+  createSearchTools,
+  createTerminalTools,
+  resolveSandboxedPath,
+  ToolRegistry,
+} from "@ai-platform/tools";
 import { MockVideoProvider } from "@ai-platform/video-mock";
 import { ReplicateVideoProvider } from "@ai-platform/video-replicate";
 import { sql } from "drizzle-orm";
@@ -409,6 +416,12 @@ async function main() {
     // provider key and the database URL — must never reach a command a model wrote.
     ...createTerminalTools(sandboxRoot, sandbox),
     ...createCodingTools(sandboxRoot),
+    // `fs.search` / `fs.glob`. These were written, exported and unit-tested for ADR-062 and
+    // then never added to this loop, so FR-010 ("where is X defined?") was unmeetable in the
+    // running product no matter what the model asked for: the tools existed everywhere except
+    // in the registry the agent actually sees. A coding agent that can read and patch but
+    // cannot search has to guess at filenames.
+    ...createSearchTools(sandboxRoot),
     ...createRagTools({ chunkRepo: documentChunks, documentRepo: documents, embeddings }),
   ]) {
     toolRegistry.register(definition, handler);
@@ -821,7 +834,7 @@ async function main() {
         if (!task) return { allowed: false, reason: `Task "${taskId}" no longer exists.` };
         return quota.checkLlmTokens(task.projectId, estimatedTokens);
       },
-      record: async ({ provider, model, inputTokens, outputTokens, taskId, nodeId }) => {
+      record: async ({ provider, model, inputTokens, outputTokens, taskId, nodeId, idempotencyKey }) => {
         // ADR-049: a usage row must name the project that spent. The meter callback carries
         // only task and node ids — a task node is not an HTTP request and has no AuthContext
         // to read — so the task row is the authority. `getUnscoped` exists for exactly this
@@ -851,9 +864,13 @@ async function main() {
           // No HTTP request id here: the call originates from a task node, not a request.
           // The node id is the durable identifier an operator would trace it back by.
           requestId: nodeId,
-          // ADR-054 — one model call per model_call node, so the node is the natural key for
-          // this charge: a node re-executed by crash recovery cannot bill the project twice.
-          idempotencyKey: `agent.node:${nodeId}`,
+          // ADR-054 — the engine supplies the key, because only it knows how many billable
+          // calls a node makes. This used to be composed here as `agent.node:${nodeId}`, which
+          // is correct for a `model_call` node and silently wrong for a `reasoning` node: every
+          // turn after the first collided on the unique index below and was dropped, so a
+          // multi-turn agent run billed for one turn. See `ModelCallMeter.record` in
+          // packages/agent-core/src/engine.ts.
+          idempotencyKey,
         });
         logger.info(
           {
@@ -870,6 +887,65 @@ async function main() {
         );
       },
     },
+    /**
+     * `test_suite` verification, wired to the same hardened sandbox the agent's own terminal
+     * tool runs through (ADR-075, ADR-077).
+     *
+     * It was never wired. verify.ts documents that the composition root supplies this and that
+     * an absent runner FAILS the check rather than passing it — so `test_suite` verification
+     * could not pass anywhere in the running product, while the docstring read as though the
+     * wire were connected. That matters now beyond tidiness: `fix_failing_test` verifies this
+     * way, because the alternative is completing a coding task on the model's own report that
+     * the tests pass.
+     *
+     * The two guards below are `terminal.run_command`'s, repeated rather than reused: routing
+     * through the registry would need a project and a user, and a verification spec carries
+     * neither. They are not decorative. `verificationSpec.args` is built from the
+     * caller-supplied `testFile`, and `node` treats a single argv token like `--eval=<code>` as
+     * a flag rather than a filename — that exact input, through that exact field, read a file
+     * from outside the sandbox on a live instance of this platform (docs/29 Phase 11).
+     */
+    runTestCommand: async (spec) => {
+      if (spec.command !== "node") {
+        throw new Error(`Test command "${spec.command}" is not allow-listed; only "node" may be run in the sandbox.`);
+      }
+      const workdir = resolveSandboxedPath(sandboxRoot, spec.workspaceRoot ?? ".");
+      const args = (spec.args ?? []).map(String);
+      for (const arg of args) {
+        if (arg.startsWith("-")) {
+          throw new Error(
+            `Test argument "${arg}" looks like a command-line flag, which a test command never legitimately needs — rejected.`
+          );
+        }
+        // Resolved against the already-sandboxed workdir, the same base node itself will use.
+        resolveSandboxedPath(sandboxRoot, arg, workdir);
+      }
+      const run = await sandbox.run({
+        command: spec.command,
+        args,
+        workdir,
+        ...(spec.timeoutMs ? { limits: { timeoutMs: spec.timeoutMs } } : {}),
+      });
+      // A run that was killed is not a run that failed, and reporting it as an exit code would
+      // put "the tests failed" in the node's failure reason when the truth is "the tests never
+      // finished" — two situations that call for different responses from a human and from a
+      // retry. Thrown so the engine records the real reason instead.
+      if (run.timedOut) {
+        throw new Error(`The test command exceeded its time limit and was terminated after ${run.durationMs}ms.`);
+      }
+      if (run.cancelled) {
+        throw new Error("The test command was cancelled before it finished.");
+      }
+      return { exitCode: run.exitCode ?? -1, stdout: run.stdout, stderr: run.stderr };
+    },
+    /**
+     * `judgeOutput` is deliberately NOT wired, and verify.ts says so in as many words rather
+     * than implying otherwise. A model judging a model is the weakest evidence this platform
+     * accepts; enabling it by default would make it the easiest verification to reach for, and
+     * every method above it is grounded in something outside the model. A node planned with
+     * `model_judge` therefore fails with "refusing to treat an unrunnable check as passed",
+     * which is the honest outcome — nothing in this repository plans one.
+     */
     taskRepo: tasks,
     nodeRepo: taskNodes,
     transitionRepo: taskTransitions,

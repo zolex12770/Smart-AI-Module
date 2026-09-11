@@ -66,6 +66,19 @@ export interface ModelCallMeter {
     outputTokens: number;
     taskId: string;
     nodeId: string;
+    /**
+     * The natural key for THIS charge (ADR-054), supplied by the engine rather than derived
+     * downstream from the node id.
+     *
+     * It had to move here because only the engine knows how many billable model calls a node
+     * makes. The composition root keyed every charge `agent.node:<nodeId>`, which is right for
+     * a `model_call` node — one node, one call — and silently wrong for a `reasoning` node,
+     * which makes one call per turn: the ledger's unique index on the idempotency key accepted
+     * turn 1 and dropped every later turn, so a ten-turn agent run billed for one turn. The
+     * key is now unique per turn, and still stable across a re-execution of the same turn,
+     * which is the property ADR-054 actually wanted.
+     */
+    idempotencyKey: string;
   }): Promise<void>;
 }
 
@@ -662,6 +675,43 @@ export class AgentEngine {
      */
     const approval: { pending: { call: ToolCall; reason: string } | null } = { pending: null };
 
+    /**
+     * Which turn of THIS NODE'S conversation the loop is on, counted across resumes.
+     *
+     * `runReasoningLoop` restarts its own `iteration` at 1 every time it is entered, so a node
+     * that parked for approval and was resumed would produce a second turn 1 — and keying the
+     * charge on the loop's iteration alone would make the resumed turns collide with the
+     * original ones and be dropped as duplicates. The assistant turns already in the transcript
+     * are the stable offset: a resume continues from where it stopped, while a crash-recovery
+     * re-execution of the same persisted transcript replays the same numbers, which is exactly
+     * the ADR-054 dedupe this key is for.
+     */
+    const priorTurns = priorMessages.filter((m) => m.role === "assistant").length;
+    let turn = priorTurns;
+
+    /**
+     * ADR-046's "refuse before spending", applied per TURN rather than once per node.
+     *
+     * `executeModelCallNode` has always checked quota before its single provider call; this
+     * path checked nothing at all, so an agent task could spend an unbounded number of turns'
+     * worth of tokens against an exhausted quota — the larger of the two holes, since a
+     * reasoning node is the expensive kind of node. The check goes immediately before each
+     * turn's provider call because that is the only point where refusing still prevents the
+     * spend; a single pre-flight check on the goal would authorise a ten-turn run on the
+     * strength of a one-turn estimate.
+     */
+    const checkTurnQuota = async (messages: ChatMessage[]): Promise<void> => {
+      if (!this.deps.meter) return;
+      const estimated = estimatePromptTokens(messages.map((m) => m.content).join(" "));
+      const check = await this.deps.meter.checkTokens(estimated, { taskId: task.id, nodeId: node.id });
+      // Thrown, not returned: the loop has no "refused" outcome, and the throw is caught below
+      // and recorded as this node's failure reason — the same end state a refused `model_call`
+      // node reaches, with the same message.
+      if (!check.allowed) throw new Error(check.reason ?? "Token quota exceeded.");
+    };
+    const modelRouter = this.deps.modelRouter;
+    const meter = this.deps.meter;
+
     try {
       const result = await this.withNodeDeadline(
         node,
@@ -669,11 +719,13 @@ export class AgentEngine {
         runReasoningLoop(
           {
             tools,
-            streamChat: (request) =>
-              this.deps.modelRouter.streamChat(
+            async *streamChat(request) {
+              await checkTurnQuota(request.messages);
+              yield* modelRouter.streamChat(
                 { messages: request.messages, tools: request.tools, toolChoice: request.toolChoice },
                 { signal: controller.signal }
-              ),
+              );
+            },
             executeTool: async ({ call }) => {
               // Approval is resolved per call, per project — the four modes are real (ADR-059).
               if (!preApprovedCallIds.has(call.id)) {
@@ -699,8 +751,13 @@ export class AgentEngine {
               };
             },
             onEvent: (event) => {
-              if (event.type === "usage" && this.deps.meter) {
-                void this.deps.meter
+              // The loop emits `iteration` immediately before each turn's provider call and
+              // `usage` immediately after it, so this counter names the turn the usage belongs
+              // to. `turn` is seeded from the transcript, not from zero, so a resumed run
+              // continues the numbering instead of restarting it (see `priorTurns`).
+              if (event.type === "iteration") turn = priorTurns + event.iteration;
+              if (event.type === "usage" && meter) {
+                void meter
                   .record({
                     provider: "reasoning",
                     model: "loop",
@@ -708,6 +765,14 @@ export class AgentEngine {
                     outputTokens: event.outputTokens,
                     taskId: task.id,
                     nodeId: node.id,
+                    /**
+                     * Per TURN, not per node — this is the fix for a reasoning node billing
+                     * for exactly one of its turns. Every turn used to be recorded under
+                     * `agent.node:<nodeId>`, and `usage_records`' unique index on the
+                     * idempotency key silently discarded all but the first, so a ten-iteration
+                     * agent run charged the project for one iteration's tokens.
+                     */
+                    idempotencyKey: `agent.node:${node.id}:turn:${turn}`,
                   })
                   .catch(() => undefined);
               }
@@ -826,6 +891,9 @@ export class AgentEngine {
           outputTokens: result.usage.outputTokens,
           taskId: task.id,
           nodeId: node.id,
+          // One model call per `model_call` node, so the node id alone is the natural key
+          // (ADR-054): a node re-executed by crash recovery must not bill the project twice.
+          idempotencyKey: `agent.node:${node.id}`,
         });
       }
       await this.verifyAndAdvance(task.id, node, byId, {
