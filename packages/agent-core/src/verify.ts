@@ -19,14 +19,22 @@ export interface VerificationContext {
   dependencyOutput(nodeId: string): Record<string, unknown> | null;
   /**
    * Runs the node's test command in the sandbox and reports the exit code. Supplied by the
-   * composition root; absent in a context that has no sandbox (the API process constructs one,
-   * so in practice this is present wherever `test_suite` can legitimately be planned).
+   * composition root, which is the only place that knows where code is allowed to execute —
+   * `apps/api` wires it to the same hardened `ExecutionSandbox` the agent's terminal tool uses.
+   * Absent in a context with no sandbox, in which case `test_suite` FAILS rather than passes.
    */
   runTestCommand?(spec: TestSuiteSpec): Promise<{ exitCode: number; stdout: string; stderr: string }>;
   /**
-   * Asks a model to judge the output against a rubric. Last-resort per
-   * docs/11_AGENT_LOOP.md — a model judging a model is the weakest evidence this platform
-   * accepts, which is why it is never a default and always names its rubric explicitly.
+   * Asks a model to judge the output against a rubric. Last-resort per docs/11_AGENT_LOOP.md —
+   * a model judging a model is the weakest evidence this platform accepts, which is why it is
+   * never a default and always names its rubric explicitly.
+   *
+   * NOT WIRED, and this says so rather than implying otherwise: `apps/api`'s composition root
+   * deliberately passes no judge, on the grounds that enabling the weakest form of verification
+   * by default makes it the easiest one to reach for. `model_judge` therefore always fails
+   * there with "refusing to treat an unrunnable check as passed", and nothing in this
+   * repository plans a node that uses it. Wiring it is a one-line change in that composition
+   * root — an explicit decision, not an accident of omission.
    */
   judge?(spec: ModelJudgeSpec, output: Record<string, unknown>): Promise<{ pass: boolean; reason?: string }>;
 }
@@ -46,10 +54,14 @@ export interface ModelJudgeSpec {
 /**
  * Grounded verification, not model self-assessment — docs/11_AGENT_LOOP.md principle 1.
  *
- * Every method is now implemented (ADR-075). The three that used to throw did so for a good
- * reason — a missing verification method must never be mistaken for a passed one — and that
- * rule still holds: a method whose context is unavailable FAILS the node rather than passing
- * it, so an unrunnable check can never be mistaken for a satisfied one.
+ * Every method is implemented here (ADR-075), but "implemented" is not the same as "available":
+ * two of them need something this function cannot supply itself, and both are honest about it.
+ * `test_suite` needs a sandboxed command runner, which `apps/api` wires to its real
+ * `ExecutionSandbox`; `model_judge` needs a judging model, which `apps/api` deliberately does
+ * NOT wire (see `VerificationContext.judge`), so that method always fails there. The rule the
+ * three once-throwing methods were written around still holds and is what makes that safe: a
+ * method whose context is unavailable FAILS the node rather than passing it, so an unrunnable
+ * check can never be mistaken for a satisfied one.
  *
  * `human` is the one exception to "implemented", and deliberately so: a human verdict is not
  * something this function can compute. It reads the verdict the approval flow already
