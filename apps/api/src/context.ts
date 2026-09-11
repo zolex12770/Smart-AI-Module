@@ -63,9 +63,11 @@ export interface AppContext {
   scanner: MalwareScanner | null;
   /** When true and `scanner` is null, uploads are refused (503) rather than accepted unscanned. */
   uploadScanRequired: boolean;
-  /** False in production, where the mock-only image/video providers (ADR-009) may not run
-   * (ADR-013): the routes refuse with a 503 instead of queueing work no worker will do.
-   * docs/26_DECISIONS.md ADR-045. */
+  /** False when nothing real is configured and the mock may not run — which is every
+   * production boot, since ADR-013 forbids a mock there. The routes then refuse with a real
+   * capability error instead of queueing work no worker will do (ADR-045). Since ADR-065 and
+   * ADR-075 both capabilities have a real provider, so "false" now means unconfigured rather
+   * than unimplemented. */
   /**
    * Image and video are separate capabilities with separate providers (ADR-065): a deployment
    * can have a real image server and no video one, and reporting them through a single flag

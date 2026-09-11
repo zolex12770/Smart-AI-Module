@@ -35,6 +35,7 @@
     "@ai-platform/shared": "*",
     "@ai-platform/tools": "*",
     "@ai-platform/video-mock": "*",
+    "@ai-platform/video-replicate": "*",
     "@fastify/cookie": "^11.1.2",
     "@fastify/cors": "^11.3.0",
     "@fastify/helmet": "^13.1.1",

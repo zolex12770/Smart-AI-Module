@@ -47,7 +47,8 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
 
       const parsed = videoProjectRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
-      // ADR-045 — see images.ts; video generation is mock-only too.
+      // ADR-045 — see images.ts. Unchanged by ADR-075's real provider: a deployment that has
+      // configured none still refuses here rather than queueing scenes no worker will run.
       if (!ctx.videoGenerationAvailable) throw new CapabilityUnavailableError(VIDEO_UNAVAILABLE);
 
       // FR-063 — the whole project's requested duration is checked against the monthly

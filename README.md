@@ -49,7 +49,7 @@ Real providers activate automatically when their environment variable is set —
 
 With no key set, chat runs on the mock provider (clearly labels its own responses as such). With a real key set, the router uses that provider and automatically falls back to the mock if the real call fails before producing any output.
 
-Image and video generation ship mock-only until real provider credentials are supplied — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-009. Cloud deployment is documentation/IaC only until explicitly authorized — see ADR-011.
+Image and video generation each have a real provider adapter — any OpenAI-compatible `/v1/images/generations` server (ADR-065) and Replicate's predictions API (ADR-075) — and each falls back to a clearly-labelled mock in development and to a real capability error in production when nothing is configured. No credentials for either were available in the environment that built them, so both are fixture-tested rather than end-to-end verified. Cloud deployment is documentation/IaC only until explicitly authorized — see ADR-011.
 
 ## Cloud deployment
 

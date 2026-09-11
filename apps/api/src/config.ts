@@ -123,6 +123,18 @@ const envSchema = z.object({
   IMAGE_SUPPORTS_NEGATIVE_PROMPT: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   IMAGE_SUPPORTS_SEED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 
+  // --- Real video generation (ADR-075) --------------------------------------------------
+  // Video is named, not URL-shaped like the two above, because there is no cross-vendor wire
+  // format for it (ADR-065): an adapter is written against one vendor's asynchronous contract,
+  // so the deployment has to say WHICH one. `replicate` is the only implementation today;
+  // an unrecognised name fails the boot rather than being ignored into a silent no-capability
+  // state, which is the whole point of parsing configuration here.
+  VIDEO_PROVIDER: z.enum(["replicate"]).optional(),
+  VIDEO_API_TOKEN: optionalString,
+  // Replicate pins a model VERSION hash, not a model name — the same name republished is a
+  // different model with different inputs, so reproducibility depends on the exact version.
+  VIDEO_MODEL_VERSION: optionalString,
+
   // --- MCP (ADR-067) ---------------------------------------------------------------------
   // A JSON array of server configs, e.g.
   //   [{"id":"fs","command":"node","args":["/path/to/server.js","/workspace"]}]
@@ -185,7 +197,29 @@ const envSchema = z.object({
   MONTHLY_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
   DAILY_IMAGE_LIMIT: z.coerce.number().int().positive().optional(),
   MONTHLY_VIDEO_SECONDS_LIMIT: z.coerce.number().int().positive().optional(),
-});
+})
+  /**
+   * A half-configured video provider is refused on boot — ADR-075.
+   *
+   * The image variables can afford to fall back quietly (an incomplete IMAGE_* set simply
+   * leaves the mock in place, and development is the case that produces one). VIDEO_PROVIDER
+   * cannot: naming a provider is an explicit statement that this deployment generates real
+   * video, and the credentials are what make that true. Falling back from it would leave an
+   * operator who typed the variable looking at a 501 with nothing anywhere saying why, and in
+   * production — where the mock is forbidden (ADR-013) — the capability would simply vanish.
+   */
+  .superRefine((config, ctx) => {
+    if (!config.VIDEO_PROVIDER) return;
+    for (const key of ["VIDEO_API_TOKEN", "VIDEO_MODEL_VERSION"] as const) {
+      if (!config[key]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [key],
+          message: `VIDEO_PROVIDER=${config.VIDEO_PROVIDER} requires ${key}. Unset VIDEO_PROVIDER to leave video generation unavailable instead.`,
+        });
+      }
+    }
+  });
 
 export type AppConfig = z.infer<typeof envSchema>;
 

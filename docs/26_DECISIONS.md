@@ -1130,3 +1130,28 @@ The most important cell on the page reads **"MOCK — not a real model"**, and t
 
 **Date:** 2026-09-06
 **Impact:** `apps/web/app/platform/page.tsx`, `apps/web/app/lib/app-chrome.tsx`, `apps/web/e2e/auth-and-isolation.spec.ts`, `apps/web/package.json`.
+
+---
+
+## ADR-075: A real video provider, and the asynchronous lifecycle it forces
+
+**Decision:** `packages/providers/video-replicate` implements `VideoProvider` against Replicate's real `predictions` API — submit, poll, download, store — and apps/api constructs it when `VIDEO_PROVIDER=replicate` is configured with `VIDEO_API_TOKEN` and `VIDEO_MODEL_VERSION`.
+
+**Why this reverses ADR-065's "no video adapter".** ADR-065 declined to write one because there is no cross-vendor wire format for video the way `/v1/images/generations` is one for images, so an adapter would buy a single vendor. Replicate answers that objection rather than ignoring it: it is *itself* a provider-neutral layer — one `predictions` shape over hundreds of hosted video models ([[05_IMAGE_GENERATION_RESEARCH]] §2.5) — so this one adapter reaches all of them and changing model is a `VIDEO_MODEL_VERSION` change, not a new package. The `VideoProvider` interface stays the seam; a Runway or Veo adapter later is still a new package and no change to apps/api.
+
+**What being genuinely asynchronous forces, and what each thing prevents:**
+
+- **Cancellation POSTs Replicate's cancel endpoint**, not just breaks the loop. [[07_LONG_RUNNING_JOB_ARCHITECTURE]] §1.2 is explicit that cancellation "must propagate to the provider's own cancel endpoint where one exists": a loop that merely stops leaves a prediction on a GPU that bills by the second, with no handle left to stop it. The cancel request deliberately does **not** carry the caller's `AbortSignal` — by then it is aborted, and it would abort the one request whose job is to stop the billing.
+- **A hard wall-clock deadline**, not a poll budget. A cold start is 10–60s before generation even starts (§2.5), so a count of polls bounds nothing; only elapsed time bounds what a stuck prediction can cost. Hitting it cancels, then reports failure.
+- **The bytes are downloaded and handed to `store`.** Replicate's `output` is an expiring delivery URL; returning it as an `assetId` would produce scenes that quietly 404 later. The account token is *not* sent with that download — the delivery CDN is a different host and has no business seeing the credential.
+
+**Two different kinds of bad news get two different shapes.** A prediction that ran and failed is a per-scene outcome: `status: "failed"` carrying Replicate's own message, which the scene worker records and retries. A rejected token, an exhausted account or a Replicate outage is not an outcome but a condition an operator must act on, so it throws the matching typed error (`UnauthorizedError`, `QuotaExceededError`, `RateLimitError`, `ServiceUnavailableError`) and keeps a distinction a single error string erases — a scene worker that saw "failed" would retry forever against a credential that will never work.
+
+**Dimensions are measured, not assumed.** `GeneratedVideo` needs width, height and duration; a prediction response carries none of them, and "what size does this model emit" is not a property of an adapter fronting hundreds of models. A small MP4 header reader takes them from the bytes that were actually produced, and reports `0` with `dimensionsProbed: false` for a container it cannot read rather than filling in a plausible `1280x720`.
+
+**Unset changes nothing.** No `VIDEO_PROVIDER` is exactly the previous behaviour: the GIF mock in development (ADR-030, still forbidden in production by ADR-013) and a real `CapabilityUnavailableError` in production. A *half*-configured one fails the boot instead, because naming a provider is a statement that this deployment generates real video and a quiet fallback would leave an operator staring at a 501 with nothing saying why.
+
+**Honest verification status:** unit-tested against fixtures of the documented prediction shapes, including both `output` forms, the failure, auth, cancel and deadline paths. No Replicate token was available, so a real end-to-end generation is unverified — the same status every hosted adapter here carries (ADR-023/ADR-024).
+
+**Date:** 2026-09-11
+**Impact:** New `packages/providers/video-replicate/*`; `apps/api/src/{config,index}.ts`, `apps/api/src/routes/v1/{images,videos}.ts`, `.env.example`.

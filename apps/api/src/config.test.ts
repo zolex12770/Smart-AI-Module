@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadConfig, loadDotEnvFiles } from "./config.js";
 
 /**
@@ -94,6 +94,84 @@ describe("loadConfig treats an empty environment value as unset", () => {
     const config = loadConfig();
     expect(config.DATABASE_URL).toBeUndefined();
     expect(config.CLAMD_HOST).toBeUndefined();
+  });
+});
+
+/**
+ * docs/26_DECISIONS.md ADR-075. Naming a video provider is an explicit statement that this
+ * deployment generates real video, so a half-configured one must not quietly degrade into "no
+ * capability": the operator who typed the variable would get a 501 with nothing anywhere
+ * saying why, and in production, where the mock is forbidden (ADR-013), the capability would
+ * simply vanish. `process.exit` is substituted here because stopping the boot IS the behaviour
+ * under test — there is no other way to observe a process exiting from inside it.
+ */
+describe("loadConfig refuses a half-configured video provider", () => {
+  const KEYS = ["VIDEO_PROVIDER", "VIDEO_API_TOKEN", "VIDEO_MODEL_VERSION"];
+  const VERSION = "9f747673945c62801b13b84701c783929c0ee784e4748ec062204894dda1a351";
+  const saved: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    for (const k of KEYS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    vi.restoreAllMocks();
+  });
+
+  function expectBootRefusal(): void {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("BOOT REFUSED");
+    }) as never);
+    expect(() => loadConfig()).toThrow("BOOT REFUSED");
+  }
+
+  it("accepts the complete set", () => {
+    process.env.VIDEO_PROVIDER = "replicate";
+    process.env.VIDEO_API_TOKEN = "r8_TESTONLY_not_a_real_token";
+    process.env.VIDEO_MODEL_VERSION = VERSION;
+
+    const config = loadConfig();
+    expect(config.VIDEO_PROVIDER).toBe("replicate");
+    expect(config.VIDEO_MODEL_VERSION).toBe(VERSION);
+  });
+
+  it("stops the boot when the token is missing", () => {
+    process.env.VIDEO_PROVIDER = "replicate";
+    process.env.VIDEO_MODEL_VERSION = VERSION;
+
+    expectBootRefusal();
+  });
+
+  it("stops the boot when the model version is blank — the .env.example copy-paste case", () => {
+    process.env.VIDEO_PROVIDER = "replicate";
+    process.env.VIDEO_API_TOKEN = "r8_TESTONLY_not_a_real_token";
+    process.env.VIDEO_MODEL_VERSION = "   ";
+
+    expectBootRefusal();
+  });
+
+  it("stops the boot on a provider name nothing implements, rather than ignoring it", () => {
+    process.env.VIDEO_PROVIDER = "runway";
+    process.env.VIDEO_API_TOKEN = "key";
+    process.env.VIDEO_MODEL_VERSION = "gen4_turbo";
+
+    expectBootRefusal();
+  });
+
+  it("leaves video unconfigured, and the boot untouched, when none of the three is set", () => {
+    const config = loadConfig();
+
+    expect(config.VIDEO_PROVIDER).toBeUndefined();
+    expect(config.VIDEO_API_TOKEN).toBeUndefined();
+    expect(config.VIDEO_MODEL_VERSION).toBeUndefined();
   });
 });
 
