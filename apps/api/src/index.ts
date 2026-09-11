@@ -47,7 +47,16 @@ import {
   type SpeechProvider,
 } from "@ai-platform/media";
 import { estimateLlmCostUsd, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
-import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/observability";
+import {
+  createLogger,
+  initMetrics,
+  initTracing,
+  observeQueueDepth,
+  recordDeadLetter,
+  recordJobProcessed,
+  withSpan,
+  type Logger,
+} from "@ai-platform/observability";
 import { QuotaManager } from "@ai-platform/quota";
 import { createRagTools, processDocumentIngestion, processDocumentScan } from "@ai-platform/rag";
 import { ClamAvScanner, type MalwareScanner } from "@ai-platform/scanning";
@@ -215,6 +224,10 @@ async function main() {
   // as "worker", not misfiled under "api", once the two run as separate Cloud Run units.
   const serviceName = config.ROLE === "worker" ? "worker" : "api";
   initTracing(serviceName);
+  // Metrics are initialised beside tracing (ADR-082). It must happen before ANY instrument is
+  // resolved: `metrics.getMeter()` called with no provider registered returns a no-op meter and
+  // caches it, so an instrument created earlier would record nothing, forever, with no error.
+  initMetrics(serviceName);
   const logger = createLogger(serviceName);
   logger.info({ role: config.ROLE, http: runs.http, workers: runs.workers }, "booting");
 
@@ -1085,6 +1098,10 @@ async function runJob<T>(
           },
           "job completed"
         );
+        // The same event as the log line above, counted rather than narrated (ADR-082). A log
+        // answers "what happened to THIS job"; only a metric answers "is the failure rate
+        // climbing", which is the question an alert is built on.
+        recordJobProcessed({ queue: params.queue, outcome: "success", durationMs: Date.now() - startedAt });
         return result;
       } catch (err) {
         jobLogger.error(
@@ -1099,6 +1116,7 @@ async function runJob<T>(
           },
           "job failed"
         );
+        recordJobProcessed({ queue: params.queue, outcome: "failure", durationMs: Date.now() - startedAt });
         throw err;
       }
     }

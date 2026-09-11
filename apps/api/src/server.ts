@@ -4,7 +4,7 @@ import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
-import type { Logger } from "@ai-platform/observability";
+import { recordHttpRequest, type Logger } from "@ai-platform/observability";
 import type { AppConfig } from "./config.js";
 import type { AppContext } from "./context.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
@@ -145,6 +145,29 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   // memory when buffered for the content sniff + asset-store write. Exceeding it surfaces
   // as a real 413 through the central error handler, not a silent truncation.
   await app.register(multipart, { limits: { files: 1, fileSize: UPLOAD_MAX_BYTES, fields: 5 } });
+
+  /**
+   * RED-method HTTP metrics — docs/20_OBSERVABILITY.md §2.1, ADR-082.
+   *
+   * `onResponse` rather than a wrapper around each route: a hook cannot be forgotten by a route
+   * added later, which is the same reasoning that put `tool.call`'s span in the registry rather
+   * than at its call sites (ADR-073).
+   *
+   * The label is `routeOptions.url` — the route PATTERN (`/api/v1/files/:id`) — never
+   * `request.url`. Labelling by resolved URL would mint a new Prometheus time series for every
+   * document id the platform has ever served, which is the classic way to take down a metrics
+   * backend. A request that matched no route has no pattern; it is bucketed as `unmatched` so
+   * 404 scanning traffic stays visible as one series instead of unbounded many.
+   */
+  app.addHook("onResponse", async (request, reply) => {
+    recordHttpRequest({
+      route: request.routeOptions?.url ?? "unmatched",
+      method: request.method,
+      statusCode: reply.statusCode,
+      // Fastify measures this itself, from the moment the request was received.
+      durationMs: reply.elapsedTime,
+    });
+  });
 
   registerErrorHandler(app);
 

@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
-import { SpanStatusCode, withSpan } from "@ai-platform/observability";
+import {
+  SpanStatusCode,
+  recordProviderCall,
+  recordProviderFallback,
+  recordTokenUsage,
+  withSpan,
+} from "@ai-platform/observability";
 import {
   chatRequestSchema,
   NotFoundError,
@@ -326,6 +332,34 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                   // turn conflicts on the unique index instead of double-charging.
                   idempotencyKey: `llm:message:${assistantMessage.id}`,
                 });
+
+                /**
+                 * The same facts as the usage row and the span, as METRICS (ADR-082).
+                 *
+                 * Not redundant: the ledger answers "what does this project owe" exactly, and a
+                 * span answers "what happened in this request". Neither answers "is p95 latency
+                 * climbing" or "is this provider's error rate up", which is what an alert fires
+                 * on. Labels are bounded — provider and model only, never project or request id,
+                 * which would grow the series count without limit.
+                 */
+                recordProviderCall({
+                  provider: event.provider,
+                  model: event.model,
+                  status: "success",
+                  durationMs: Date.now() - startedAt,
+                });
+                recordTokenUsage({
+                  provider: event.provider,
+                  model: event.model,
+                  inputTokens: event.usage.inputTokens,
+                  outputTokens: event.usage.outputTokens,
+                  estimatedCostUsd: estimateLlmCostUsd(event.provider, event.model, event.usage),
+                });
+                for (const from of fellBackFrom) {
+                  // Every provider the router skipped, counted. A rising fallback count is the
+                  // earliest signal that an adapter or an upstream is degraded (ADR-044).
+                  recordProviderFallback({ from, to: event.provider });
+                }
                 span.setAttributes({
                   "gen_ai.system": event.provider,
                   "gen_ai.request.model": event.model,

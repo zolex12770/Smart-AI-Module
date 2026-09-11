@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
-import { NotFoundError, ValidationError, type Permission } from "@ai-platform/shared";
+import { NotFoundError, ServiceUnavailableError, ValidationError, type Permission } from "@ai-platform/shared";
 import { z } from "zod";
+import { scrapeMetrics } from "@ai-platform/observability";
 import type { AppContext } from "../../context.js";
 import { requireProject, requireUser } from "../../plugins/auth.js";
 
@@ -223,6 +224,28 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
         videoGeneration: ctx.videoGenerationAvailable,
       },
     };
+  });
+
+  /**
+   * Prometheus scrape — docs/20_OBSERVABILITY.md §2.1, ADR-082.
+   *
+   * System-admin only, for the same reason as every other `/admin` route AND one specific to
+   * this one: the exposition carries token and cost counters. `PrometheusExporter` would have
+   * served these on an unauthenticated :9464 by default, publishing spend to anyone who could
+   * reach the port; collecting on demand and serving here means one port and one auth model.
+   *
+   * Returns 503 rather than an empty body when metrics were never initialised — a scrape that
+   * silently returns nothing looks identical to a system where nothing has happened, and a
+   * monitoring system would record flat zeroes instead of an outage.
+   */
+  app.get("/api/v1/admin/metrics", async (request, reply) => {
+    requireSystemAdmin(request);
+    const exposition = await scrapeMetrics();
+    if (exposition === null) {
+      throw new ServiceUnavailableError("Metrics are not initialised in this process.");
+    }
+    // The content type Prometheus expects; a scraper given `application/json` ignores the body.
+    return reply.header("content-type", "text/plain; version=0.0.4; charset=utf-8").send(exposition);
   });
 
   app.get("/api/v1/admin/stats", async (request) => {

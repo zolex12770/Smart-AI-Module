@@ -1,4 +1,4 @@
-import { withSpan, type Span } from "@ai-platform/observability";
+import { recordToolCall, withSpan, type Span } from "@ai-platform/observability";
 import {
   PermissionError,
   ValidationError,
@@ -146,7 +146,18 @@ export class ToolRegistry {
         project_id: context.projectId,
         user_id: context.userId,
       },
-      (span) => this.invoke(span, toolId, args, context)
+      async (span) => {
+        // The outcome the span records is the one the metric records, so a dashboard and a trace
+        // can never disagree about the same call. A holder rather than a return-value change
+        // because `invoke` writes it at several early-return points (unknown tool, disabled,
+        // invalid arguments) that never reach the handler.
+        const outcome = { value: "unknown" };
+        const result = await this.invoke(span, toolId, args, context, outcome);
+        // Counted as well as spanned (ADR-082): "which tools fail, and how often" is a rate
+        // question, and a span answers it only by scanning every trace.
+        recordToolCall({ tool: toolId, outcome: outcome.value });
+        return result;
+      }
     );
   }
 
@@ -154,7 +165,8 @@ export class ToolRegistry {
     span: Span,
     toolId: string,
     args: Record<string, unknown>,
-    context: ToolInvocationContext
+    context: ToolInvocationContext,
+    outcome: { value: string }
   ): Promise<ToolCallResult> {
     const entry = this.entries.get(toolId);
     if (!entry) {
@@ -162,11 +174,13 @@ export class ToolRegistry {
       // model-driven loop (the model guessed a name), not an error in the platform. Marking it
       // ERROR would bury real failures under model hallucinations.
       span.setAttribute("tool.outcome", "unknown_tool");
+      outcome.value = "unknown_tool";
       return { ok: false, error: `Unknown tool "${toolId}".` };
     }
     span.setAttribute("tool.risk_level", entry.definition.riskLevel);
     if (!entry.definition.enabled) {
       span.setAttribute("tool.outcome", "disabled");
+      outcome.value = "disabled";
       return { ok: false, error: `Tool "${toolId}" is disabled. An operator must enable it explicitly.` };
     }
 
@@ -176,6 +190,7 @@ export class ToolRegistry {
       // Returned rather than thrown: when a model supplied the arguments, this message is
       // fed back so it can correct itself, which is more useful than failing the run.
       span.setAttribute("tool.outcome", "invalid_arguments");
+      outcome.value = "invalid_arguments";
       return { ok: false, error: err instanceof ValidationError ? err.message : String(err) };
     }
 
@@ -187,10 +202,12 @@ export class ToolRegistry {
       );
       if (result.ok) await this.options.markUsed?.(context.projectId, toolId);
       span.setAttribute("tool.outcome", result.ok ? "ok" : "failed");
+      outcome.value = result.ok ? "ok" : "failed";
       return result;
     } catch (err) {
       if (err instanceof PermissionError) throw err;
       span.setAttribute("tool.outcome", "error");
+      outcome.value = "error";
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
