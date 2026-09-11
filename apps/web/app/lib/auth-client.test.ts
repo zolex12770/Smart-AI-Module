@@ -194,3 +194,42 @@ describe("csrf and project storage helpers", () => {
     expect(getSelectedProjectId()).toBe("p-42");
   });
 });
+
+/**
+ * ADR-091 — the three frontend contract defects the final audit found. Each is a claim about a
+ * REQUEST the browser makes, so each is asserted on the request that actually went out.
+ */
+describe("requests the API will actually accept", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    document.cookie = "aip_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  });
+
+  it("uploads through apiFetch with credentials, CSRF and project scope", async () => {
+    document.cookie = "aip_csrf=tok";
+    window.localStorage.setItem("aip.selectedProjectId", "project-1");
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ document: { id: "d1" } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const form = new FormData();
+    form.append("file", new Blob(["hello"], { type: "text/plain" }), "a.txt");
+    await apiFetch("/api/v1/files/upload", { method: "POST", body: form });
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    // POST /api/v1/files/upload calls requireProject before reading a byte, and a cookie-
+    // authenticated mutation also needs the CSRF token. uploadFile used to call `fetch` directly
+    // and send none of the three, so every upload was refused.
+    expect(init.credentials).toBe("include");
+    expect((init.headers as Headers).get("x-csrf-token")).toBe("tok");
+    expect((init.headers as Headers).get("x-project-id")).toBe("project-1");
+    // And the multipart body must reach fetch untouched, with NO content type — the browser
+    // supplies one carrying the boundary token, and setting our own would corrupt the request.
+    expect(init.body).toBeInstanceOf(FormData);
+    expect((init.headers as Headers).get("Content-Type")).toBeNull();
+  });
+});

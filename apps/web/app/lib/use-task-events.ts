@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Task, TaskNode, TaskState } from "@ai-platform/shared";
 import { API_URL } from "./api";
+import { getSelectedProjectId } from "./auth-client";
 
 interface TaskEventPayload {
   type: "state" | "node" | "transition" | "completed" | "failed";
@@ -30,7 +31,19 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
   const sourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
-    const source = new EventSource(`${API_URL}/api/v1/agent/tasks/${taskId}/events`);
+    // The endpoint states its own contract: "An EventSource cannot set headers, so a browser
+    // subscribes with `?projectId=...`" (apps/api/src/routes/v1/agent.ts). This hook opened a
+    // bare URL, so `requireProject` had no scope to authorize against and answered "A
+    // projectId is required" — the stream never opened and the task screen showed whatever it
+    // was seeded with, frozen, with no error anywhere the user could see.
+    //
+    // `withCredentials` is the other half: without it the browser omits the session cookie on
+    // a cross-origin EventSource (the API is a separate deployment, hence `credentials:
+    // "include"` in apiFetch), leaving the connection unauthenticated even with a scope.
+    const url = new URL(`${API_URL}/api/v1/agent/tasks/${encodeURIComponent(taskId)}/events`);
+    const projectId = getSelectedProjectId();
+    if (projectId) url.searchParams.set("projectId", projectId);
+    const source = new EventSource(url.toString(), { withCredentials: true });
     sourceRef.current = source;
 
     const onState = (e: MessageEvent) => {
