@@ -1382,3 +1382,20 @@ A symlink inside the workspace pointing outside it, read through the real `fs.re
 
 **Date:** 2026-09-11
 **Impact:** `packages/tools/src/native/sandbox-path.ts` + `symlink-containment.test.ts` (12 tests).
+
+---
+
+## ADR-089: Tool enablement is a deployment decision, not a project one
+
+**Decision:** `POST /api/v1/tools/:id/enable` requires a system administrator, not the project-scoped `tools:manage`.
+
+**The mismatch.** `ctx.toolRegistry` is a single process-wide instance and `setEnabled` takes no project, so the effect of this route was always deployment-wide — while the permission guarding it was one every user holds in the project their own signup creates. Any self-registered account could disable a tool for every tenant, or ENABLE one of the MCP-discovered tools that ADR-083 deliberately registers disabled, on everyone's behalf. That last one is the escalation that matters: the disabled-by-default rule exists precisely because a remote MCP server is untrusted, and a project-scoped permission could switch it on globally.
+
+**The fix matches the permission to the blast radius** rather than pretending the radius is smaller. 404 to everyone else, like every other admin action (ADR-049).
+
+**Per-project tool policy would be the richer answer** — a project could then enable a tool for itself without affecting anyone — and it is a real schema change that is NOT done. This is deliberately the narrow fix that closes the escalation today, and it is recorded as narrow so nobody mistakes it for the full design.
+
+Found by the final zero-gap audit.
+
+**Date:** 2026-09-11
+**Impact:** `apps/api/src/routes/v1/platform.ts`.

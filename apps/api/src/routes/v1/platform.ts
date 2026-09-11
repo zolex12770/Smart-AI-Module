@@ -94,8 +94,25 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
 
   const enableToolSchema = z.object({ enabled: z.boolean().default(true) }).strict().partial({ enabled: true });
 
+  /**
+   * Enabling or disabling a tool is a DEPLOYMENT decision, not a project one — ADR-089.
+   *
+   * This used to require `tools:manage`, a PROJECT-scoped permission that every user holds in the
+   * project their own signup creates. But `ctx.toolRegistry` is a single process-wide instance and
+   * `setEnabled` takes no project, so the effect was global: any self-registered user could
+   * disable a tool for every tenant in the deployment, or — worse — ENABLE one of the MCP-
+   * discovered tools that ADR-083 deliberately registers disabled, on everyone's behalf.
+   *
+   * A project-scoped permission governing a process-global mutation is the mismatch; the fix is
+   * to match the permission to the blast radius rather than to pretend the radius is smaller.
+   * System-admin, like every other `/admin` action, and 404 to everyone else for the same reason
+   * (ADR-049: confirming an endpoint exists is itself a disclosure).
+   *
+   * Per-PROJECT tool policy would be the richer answer and is a real schema change — it is not
+   * done, and this is deliberately the narrow fix that closes the escalation today.
+   */
   app.post<{ Params: { id: string } }>("/api/v1/tools/:id/enable", async (request) => {
-    await requireProject(request, ctx.auth, "tools:manage");
+    requireSystemAdmin(request);
     const parsed = enableToolSchema.safeParse(request.body ?? {});
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const definition = ctx.toolRegistry.setEnabled(request.params.id, parsed.data.enabled ?? true);
@@ -260,12 +277,22 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
   });
 }
 
-/** Permissions this module requires, exported so a test can assert the surface is protected. */
-export const PLATFORM_ROUTE_PERMISSIONS: Record<string, Permission> = {
+/**
+ * Permissions this module requires, exported so a test can assert the surface is protected.
+ *
+ * `"system-admin"` is not a `Permission` — the RBAC permission set is project-scoped by
+ * construction (ADR-049), and a system administrator is a property of the USER, checked by
+ * `requireSystemAdmin` rather than granted through a project role. It is spelled out here anyway
+ * so this table describes the whole surface: a route missing from it reads as unprotected, and
+ * silently omitting the admin routes would make the strongest guard the least visible.
+ */
+export const PLATFORM_ROUTE_PERMISSIONS: Record<string, Permission | "system-admin"> = {
   "GET /api/v1/models": "project:read",
   "GET /api/v1/providers": "project:read",
   "GET /api/v1/tools": "project:read",
-  "POST /api/v1/tools/:id/enable": "tools:manage",
+  // ADR-089: system-admin, not `tools:manage` — the registry is process-global, so a
+  // project-scoped permission governed a deployment-wide mutation.
+  "POST /api/v1/tools/:id/enable": "system-admin",
   "GET /api/v1/mcp": "project:read",
   "POST /api/v1/mcp/:id/reconnect": "mcp:manage",
   "GET /api/v1/jobs": "project:read",
