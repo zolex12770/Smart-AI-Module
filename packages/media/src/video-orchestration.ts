@@ -7,7 +7,8 @@ import type {
 } from "@ai-platform/database";
 import type { VideoProjectRequest, VideoProvider } from "@ai-platform/shared";
 import type { JobQueue } from "@ai-platform/jobs";
-import { planScenes } from "./video-storyboard.js";
+import { writeVideoScript, type ScriptModel } from "./video-script.js";
+import type { SpeechProvider } from "./speech.js";
 import type { AssetStore } from "./asset-store.js";
 
 /**
@@ -55,33 +56,58 @@ export interface CreateVideoProjectOptions {
 }
 
 export async function createVideoProject(
-  deps: Pick<VideoOrchestrationDeps, "projectRepo" | "sceneRepo">,
+  deps: Pick<VideoOrchestrationDeps, "projectRepo" | "sceneRepo"> & { scriptModel?: ScriptModel },
   input: CreateVideoProjectOptions
 ): Promise<VideoProject> {
-  const planned = planScenes(input.request);
+  /**
+   * The script and storyboard stages now really run — docs/07 Part 2 §2.2 stages 1-2, ADR-080.
+   *
+   * This used to call `planScenes` directly, whose entire shot description was the string
+   * `"Scene 3 of 7: <the user's prompt>"`. Every scene therefore asked the video provider for
+   * the same picture, and nothing was ever narrated. `writeVideoScript` asks a model for a real
+   * storyboard and falls back to that same deterministic decomposition when there is no chat
+   * provider — recording WHICH happened on the project, because a mechanical decomposition that
+   * looks authored is exactly the kind of fake completion this platform refuses.
+   */
+  const script = await writeVideoScript({ model: deps.scriptModel }, input.request);
   const project = await deps.projectRepo.create({
     id: input.videoProjectId,
     projectId: input.projectId,
     createdByUserId: input.createdByUserId,
     prompt: input.request.prompt,
+    // Persisted so the API and the UI can show what was written, and so the distinction between
+    // an authored and a mechanical storyboard survives past this function.
+    script: {
+      title: script.title,
+      scriptSource: script.scriptSource,
+      model: script.model,
+      fallbackReason: script.fallbackReason,
+      scenes: script.scenes.map((scene) => ({
+        sceneIndex: scene.sceneIndex,
+        shotDescription: scene.shotDescription,
+        // `undefined` rather than null for a silent scene: `VideoScriptScene.narration` is
+        // optional, and an explicit null would serialise a field that means "absent".
+        narration: scene.narration ?? undefined,
+        durationSeconds: scene.durationSeconds,
+      })),
+    },
     targetDurationSeconds: input.request.targetDurationSeconds,
     sceneClipSeconds: input.request.sceneClipSeconds,
-    sceneCount: planned.length,
-    // Created straight into `generating_scenes`, not ADR-053's `planning`: `planScenes` has
-    // already decided every scene by the time this line runs, so no script stage remains to
-    // advance the project, and a row parked in `planning` forever would be a status that
-    // lies about what is happening.
+    sceneCount: script.scenes.length,
+    // Straight into `generating_scenes`: the script stage has already completed by the time this
+    // line runs (it is awaited above), so no stage remains that `planning` would be waiting for,
+    // and a row parked there forever would be a status that lies about what is happening.
     status: "generating_scenes",
   });
   await deps.sceneRepo.createMany(
     { projectId: input.projectId, videoProjectId: input.videoProjectId },
-    // No `narration`: the deterministic planner writes shot descriptions only (see
-    // video-storyboard.ts), so these scenes are honestly silent until ADR-053's
-    // model-written script stage supplies lines, rather than carrying a placeholder.
-    planned.map((s) => ({
+    script.scenes.map((s) => ({
       id: uuid(),
       sceneIndex: s.sceneIndex,
       shotDescription: s.shotDescription,
+      // Null when no script stage ran, never an empty string: the audio stage must be able to
+      // tell "there is no script" from "this scene is deliberately silent" (ADR-079).
+      narration: s.narration,
       durationSeconds: s.durationSeconds,
     }))
   );
@@ -154,6 +180,13 @@ export async function orchestrateVideoProject(
 export interface VideoSceneProcessingDeps extends VideoOrchestrationDeps {
   assetStore: AssetStore;
   provider: VideoProvider;
+  /**
+   * Narration synthesis (ADR-079). Absent means no speech provider is configured and the scene
+   * stays silent — which the render stage then reports as `skipped_no_narration` rather than
+   * muxing silence and calling it a voice-over.
+   */
+  speech?: SpeechProvider;
+  logger?: { warn(obj: unknown, msg: string): void };
 }
 
 /** Runs inside the `video.generate_scene` job worker — one scene, one provider call. */
@@ -186,7 +219,45 @@ export async function processVideoScene(
         incrementRetry: true,
       });
     } else {
-      await deps.sceneRepo.updateStatus(scope, sceneId, "succeeded", { assetId: result.video.assetId });
+      /**
+       * The narration stage, per scene — docs/07 Part 2 §2.2 stage 5, ADR-079.
+       *
+       * It runs HERE, in the same job as the clip, rather than in its own queue: the two are
+       * the same unit of work for one scene, they retry together, and a separate queue would
+       * add a second failure mode (a scene whose clip succeeded and whose audio was dead-lettered
+       * elsewhere) for no gain in parallelism that matters at this scale.
+       *
+       * A failed synthesis does NOT fail the scene. The clip is real and usable, so the scene
+       * succeeds with no audio asset and the render composes it silently — degrading the video
+       * rather than throwing away work that was already paid for.
+       */
+      let audioAssetId: string | undefined;
+      const narration = (scene.narration ?? "").trim();
+      if (deps.speech && narration !== "") {
+        try {
+          const audio = await deps.speech.synthesize({ text: narration });
+          audioAssetId = await deps.assetStore.store(
+            scope.projectId,
+            audio.bytes,
+            audio.mimeType,
+            audio.ext,
+            "video"
+          );
+        } catch (error) {
+          deps.logger?.warn(
+            {
+              sceneId,
+              videoProjectId: scope.videoProjectId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "narration synthesis failed — the scene keeps its clip and renders silently"
+          );
+        }
+      }
+      await deps.sceneRepo.updateStatus(scope, sceneId, "succeeded", {
+        assetId: result.video.assetId,
+        ...(audioAssetId ? { audioAssetId } : {}),
+      });
     }
   } catch (err) {
     await deps.sceneRepo.updateStatus(scope, sceneId, "failed", {

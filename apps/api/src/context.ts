@@ -16,7 +16,7 @@ import type {
 } from "@ai-platform/database";
 import type { EmbeddingService } from "@ai-platform/embeddings";
 import type { JobQueue } from "@ai-platform/jobs";
-import type { AssetStore } from "@ai-platform/media";
+import type { AssetStore, SpeechProvider } from "@ai-platform/media";
 import type { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import type { McpManager } from "@ai-platform/mcp";
 import type { QuotaManager } from "@ai-platform/quota";
@@ -73,6 +73,14 @@ export interface AppContext {
    */
   imageGenerationAvailable: boolean;
   videoGenerationAvailable: boolean;
+  /**
+   * Narration synthesis for long-form video (ADR-079). Null means no speech provider is
+   * configured, and the render stage then skips the audio track and records that it did —
+   * never substituting silence for a voice-over.
+   */
+  speech: SpeechProvider | null;
+  /** Reported by `/api/v1/models` so an operator can see the narration stage's real state. */
+  speechAvailable: boolean;
 
   /**
    * The database handle itself, for the two consumers that are genuinely not repositories:

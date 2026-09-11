@@ -5,6 +5,14 @@ import { join } from "node:path";
 import type { AssetRepository, VideoProjectRepository, VideoSceneRepository } from "@ai-platform/database";
 import type { AssetStore } from "./asset-store.js";
 import type { VideoProjectScope } from "./video-orchestration.js";
+import {
+  buildSubtitleCues,
+  ffprobePathFor,
+  measureAudioDurationSeconds,
+  renderSrt,
+  renderVtt,
+  type SubtitleSceneInput,
+} from "./subtitles.js";
 
 const RENDER_WIDTH = 640;
 const RENDER_HEIGHT = 360;
@@ -17,6 +25,23 @@ export interface VideoRenderDeps {
   assetStore: AssetStore;
   /** Defaults to `"ffmpeg"` (resolved via PATH). Overridable so tests/deployments can pin a path. */
   ffmpegPath?: string;
+}
+
+/**
+ * What the composed render produced besides the video — ADR-081.
+ *
+ * Returned rather than only persisted so the caller (and its tests) can assert on it directly,
+ * and so a partially-composed render is legible: narration present but subtitles absent is a
+ * real state, and it is not the same as either being skipped.
+ */
+export interface VideoRenderOutcome {
+  renderStatus: "succeeded" | "skipped_no_ffmpeg" | "failed";
+  assetId: string | null;
+  /** Whether a narration track was muxed in, and why not when it was not. */
+  audioStatus: "included" | "skipped_no_narration";
+  /** Asset id of the sidecar `.srt`, when subtitles were produced. */
+  subtitleAssetId: string | null;
+  subtitleVttAssetId: string | null;
 }
 
 /**
@@ -40,7 +65,10 @@ export interface VideoRenderDeps {
  * written under it, so a `video.render` payload naming another tenant's video resolves to
  * nothing instead of rendering it.
  */
-export async function processVideoRender(deps: VideoRenderDeps, scope: VideoProjectScope): Promise<void> {
+export async function processVideoRender(
+  deps: VideoRenderDeps,
+  scope: VideoProjectScope
+): Promise<VideoRenderOutcome> {
   const ffmpegPath = deps.ffmpegPath ?? "ffmpeg";
   const project = await deps.projectRepo.get(scope.projectId, scope.videoProjectId);
   if (!project) {
@@ -59,7 +87,13 @@ export async function processVideoRender(deps: VideoRenderDeps, scope: VideoProj
         "its clip is available individually via its own asset id; final MP4 packaging was skipped.",
     });
     await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "succeeded");
-    return;
+    return {
+      renderStatus: "skipped_no_ffmpeg",
+      assetId: null,
+      audioStatus: "skipped_no_narration",
+      subtitleAssetId: null,
+      subtitleVttAssetId: null,
+    };
   }
 
   const allScenes = await deps.sceneRepo.listByVideoProject(scope);
@@ -103,8 +137,139 @@ export async function processVideoRender(deps: VideoRenderDeps, scope: VideoProj
       .join("\n");
     await writeFile(concatListPath, concatList, "utf8");
 
-    const finalPath = join(workDir, "final.mp4");
-    await runFfmpeg(ffmpegPath, ["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", finalPath]);
+    const silentPath = join(workDir, "silent.mp4");
+    await runFfmpeg(ffmpegPath, ["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", silentPath]);
+
+    /**
+     * Narration and subtitles — docs/07 Part 2 §2.2 stages 5-7, ADR-079/081.
+     *
+     * Everything below is conditional on the scenes actually HAVING narration, which they only
+     * do when a script stage ran (ADR-080) and a speech provider was configured (ADR-079). A
+     * deployment with neither still renders exactly the video it rendered before, and the
+     * outcome says `skipped_no_narration` rather than implying a silent track was intended.
+     */
+    const ffprobePath = ffprobePathFor(ffmpegPath);
+    const narrated = succeededScenes.filter((scene) => scene.audioAssetId && (scene.narration ?? "").trim() !== "");
+
+    const subtitleInputs: SubtitleSceneInput[] = [];
+    const narrationPaths: Array<{ sceneIndex: number; path: string }> = [];
+    for (const scene of succeededScenes) {
+      let audioDurationSeconds: number | null = null;
+      if (scene.audioAssetId) {
+        const audioAsset = await deps.assetRepo.get(scope.projectId, scene.audioAssetId);
+        if (audioAsset) {
+          const audioPath = join(workDir, `narration_${String(scene.sceneIndex).padStart(4, "0")}.wav`);
+          await writeFile(audioPath, await deps.assetStore.read(audioAsset));
+          narrationPaths.push({ sceneIndex: scene.sceneIndex, path: audioPath });
+          // Measured, never estimated: a words-per-minute guess drifts and the error accumulates
+          // across scenes until the captions describe a different part of the video (ADR-081).
+          audioDurationSeconds = await measureAudioDurationSeconds(ffprobePath, audioPath);
+        }
+      }
+      subtitleInputs.push({
+        sceneIndex: scene.sceneIndex,
+        narration: scene.narration ?? null,
+        durationSeconds: scene.durationSeconds,
+        audioDurationSeconds,
+      });
+    }
+
+    let finalPath = silentPath;
+    let audioStatus: VideoRenderOutcome["audioStatus"] = "skipped_no_narration";
+
+    if (narrated.length > 0 && narrationPaths.length > 0) {
+      // The narration clips are concatenated on the same timeline as the video, then muxed as a
+      // second stream. `-shortest` is deliberately NOT used: it would truncate the video to the
+      // audio, silently dropping the tail of a scene whose narration ran short.
+      const audioListPath = join(workDir, "audio-concat.txt");
+      await writeFile(
+        audioListPath,
+        narrationPaths
+          .sort((a, b) => a.sceneIndex - b.sceneIndex)
+          .map((n) => `file '${n.path.split("\\").join("/").replace(/'/g, "'\\''")}'`)
+          .join("\n"),
+        "utf8"
+      );
+      const narrationPath = join(workDir, "narration.wav");
+      await runFfmpeg(ffmpegPath, ["-y", "-f", "concat", "-safe", "0", "-i", audioListPath, "-c", "copy", narrationPath]);
+
+      const withAudioPath = join(workDir, "with-audio.mp4");
+      await runFfmpeg(ffmpegPath, [
+        "-y",
+        "-i",
+        silentPath,
+        "-i",
+        narrationPath,
+        // Copy the video rather than re-encoding it: it was already normalised to H.264 above,
+        // and a second encode would cost quality and time for nothing.
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        withAudioPath,
+      ]);
+      finalPath = withAudioPath;
+      audioStatus = "included";
+    }
+
+    const cues = buildSubtitleCues(subtitleInputs);
+    let subtitleAssetId: string | null = null;
+    let subtitleVttAssetId: string | null = null;
+
+    if (cues.length > 0) {
+      const srt = renderSrt(cues);
+      const srtPath = join(workDir, "subtitles.srt");
+      await writeFile(srtPath, srt, "utf8");
+
+      // Muxed as a real `mov_text` track AND stored as sidecars: a downloaded MP4 carries its
+      // captions with it, while a browser `<track>` needs a separate WebVTT file it can fetch.
+      const withSubsPath = join(workDir, "with-subs.mp4");
+      try {
+        await runFfmpeg(ffmpegPath, [
+          "-y",
+          "-i",
+          finalPath,
+          "-i",
+          srtPath,
+          "-c",
+          "copy",
+          "-c:s",
+          "mov_text",
+          "-map",
+          "0",
+          "-map",
+          "1",
+          withSubsPath,
+        ]);
+        finalPath = withSubsPath;
+      } catch (subtitleError) {
+        // A build without the mov_text encoder must not lose the whole render. The sidecars
+        // below still ship, so the captions exist either way — they just are not embedded.
+        const detail = subtitleError instanceof Error ? subtitleError.message : String(subtitleError);
+        void detail;
+      }
+
+      subtitleAssetId = await deps.assetStore.store(
+        scope.projectId,
+        Buffer.from(srt, "utf8"),
+        "application/x-subrip",
+        "srt",
+        "video"
+      );
+      subtitleVttAssetId = await deps.assetStore.store(
+        scope.projectId,
+        Buffer.from(renderVtt(cues), "utf8"),
+        "text/vtt",
+        "vtt",
+        "video"
+      );
+    }
 
     const finalBytes = await readFile(finalPath);
     // Owned by the same tenant as the clips it was assembled from — nothing else could serve it.
@@ -119,6 +284,8 @@ export async function processVideoRender(deps: VideoRenderDeps, scope: VideoProj
       scope.videoProjectId,
       succeededScenes.length === allScenes.length ? "succeeded" : "partially_succeeded"
     );
+
+    return { renderStatus: "succeeded", assetId, audioStatus, subtitleAssetId, subtitleVttAssetId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {

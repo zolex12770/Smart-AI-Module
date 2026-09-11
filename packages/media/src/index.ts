@@ -4,3 +4,6 @@ export * from "./image-generation.js";
 export * from "./video-storyboard.js";
 export * from "./video-orchestration.js";
 export * from "./video-render.js";
+export * from "./speech.js";
+export * from "./video-script.js";
+export * from "./subtitles.js";

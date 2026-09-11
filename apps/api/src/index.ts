@@ -38,10 +38,13 @@ import { McpManager, parseMcpServerConfigs } from "@ai-platform/mcp";
 import {
   CloudStorageAssetStore,
   LocalAssetStore,
+  OpenAiSpeechProvider,
+  SapiSpeechProvider,
   processImageGeneration,
   processVideoRender,
   processVideoScene,
   type AssetStore,
+  type SpeechProvider,
 } from "@ai-platform/media";
 import { estimateLlmCostUsd, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createLogger, initTracing, withSpan, type Logger } from "@ai-platform/observability";
@@ -611,7 +614,17 @@ async function main() {
           const { projectId, userId, videoProjectId, sceneId, requestId } = videoSceneJobSchema.parse(raw);
           await runJob(logger, { queue: "video.generate_scene", jobId: sceneId, projectId, requestId }, async () => {
             await processVideoScene(
-              { projectRepo: videoProjects, sceneRepo: videoScenes, jobQueue, assetStore, provider: videoProvider },
+              {
+                projectRepo: videoProjects,
+                sceneRepo: videoScenes,
+                jobQueue,
+                assetStore,
+                provider: videoProvider,
+                // Narration for this scene (ADR-079). Undefined when unconfigured, and the
+                // scene then stays honestly silent rather than carrying a silent audio asset.
+                ...(speech ? { speech } : {}),
+                logger,
+              },
               { projectId, videoProjectId },
               sceneId,
               requestId
@@ -818,8 +831,48 @@ async function main() {
   // non-terminal or in-flight state by a previous process before serving new requests.
   await engine.resumeAll();
 
+  /**
+   * Narration synthesis — docs/26_DECISIONS.md ADR-079.
+   *
+   * Constructed only when configured. There is deliberately no default and no silent fallback: a
+   * pipeline with no speech provider renders without an audio track and reports
+   * `skipped_no_narration`, exactly as it already reports `skipped_no_ffmpeg`. Muxing silence and
+   * calling it a voice-over would be a fake success an operator could not detect.
+   */
+  let speech: SpeechProvider | null = null;
+  try {
+    if (config.SPEECH_PROVIDER === "openai") {
+      if (!config.SPEECH_BASE_URL || !config.SPEECH_MODEL) {
+        logger.warn({}, "SPEECH_PROVIDER=openai but SPEECH_BASE_URL/SPEECH_MODEL are unset — narration is disabled");
+      } else {
+        speech = new OpenAiSpeechProvider({
+          baseUrl: config.SPEECH_BASE_URL,
+          model: config.SPEECH_MODEL,
+          apiKey: config.SPEECH_API_KEY,
+          defaultVoice: config.SPEECH_VOICE,
+        });
+      }
+    } else if (config.SPEECH_PROVIDER === "sapi") {
+      speech = new SapiSpeechProvider({ voice: config.SPEECH_VOICE });
+    }
+  } catch (error) {
+    // A misconfigured OPTIONAL capability must never stop a boot — the rule MCP already follows
+    // (ADR-067). Narration is disabled and the reason is logged loudly.
+    logger.warn(
+      { error: error instanceof Error ? error.message : String(error) },
+      "speech provider could not be constructed — narration is disabled"
+    );
+    speech = null;
+  }
+  logger.info(
+    { provider: speech?.name ?? null, available: speech !== null },
+    speech ? "speech provider registered" : "no speech provider configured — long-form video renders without narration"
+  );
+
   const ctx: AppContext = {
     db,
+    speech,
+    speechAvailable: speech !== null,
     router: modelRouter,
     conversations: new PgConversationRepository(db),
     messages: new PgMessageRepository(db),

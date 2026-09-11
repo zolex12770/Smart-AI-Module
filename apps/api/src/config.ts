@@ -123,6 +123,18 @@ const envSchema = z.object({
   IMAGE_SUPPORTS_NEGATIVE_PROMPT: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   IMAGE_SUPPORTS_SEED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
 
+  // --- Narration for long-form video (ADR-079) -------------------------------------------
+  // `openai` speaks `/v1/audio/speech` — OpenAI itself, or a self-hosted server that copies the
+  // shape (Kokoro-FastAPI, openedai-speech, LocalAI). `sapi` is the operating system's own
+  // offline synthesiser and needs no server at all, but exists only on Windows. Unset means the
+  // pipeline renders WITHOUT narration and says so (`audioStatus: skipped_no_narration`) rather
+  // than muxing silence and calling it a voice-over.
+  SPEECH_PROVIDER: z.enum(["openai", "sapi", "none"]).default("none"),
+  SPEECH_BASE_URL: optionalString,
+  SPEECH_MODEL: optionalString,
+  SPEECH_API_KEY: optionalString,
+  SPEECH_VOICE: optionalString,
+
   // --- MCP (ADR-067) ---------------------------------------------------------------------
   // A JSON array of server configs, e.g.
   //   [{"id":"fs","command":"node","args":["/path/to/server.js","/workspace"]}]

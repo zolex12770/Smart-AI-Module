@@ -60,7 +60,15 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
 
       const scope: VideoProjectScope = { projectId, videoProjectId: uuid() };
       const project = await createVideoProject(
-        { projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes },
+        {
+          projectRepo: ctx.videoProjects,
+          sceneRepo: ctx.videoScenes,
+          // The script/storyboard stage (ADR-080). The router IS the script model — one chat
+          // path, so the storyboard benefits from the same fallback, retry and circuit breaking
+          // as every other model call. Absent only when no chat provider is configured, which is
+          // exactly when the deterministic planner should take over.
+          scriptModel: ctx.router,
+        },
         {
           ...scope,
           // Attribution from the credential, never from the body (ADR-049).

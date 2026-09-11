@@ -35,6 +35,19 @@ export interface VideoScript {
   /** One-paragraph through-line, kept so a re-plan can stay consistent with the first pass. */
   summary?: string;
   scenes: VideoScriptScene[];
+  /**
+   * Who actually wrote this — ADR-080. `model` means a real script stage ran; `deterministic`
+   * means the mechanical decomposition produced the scenes and nothing was authored.
+   *
+   * Persisted rather than inferred because the two are indistinguishable from the scene rows
+   * alone, and a mechanical storyboard that reads as authored is exactly the kind of fake
+   * completion this platform refuses. Optional only so rows written before ADR-080 still parse.
+   */
+  scriptSource?: "model" | "deterministic";
+  /** The model that wrote it, or null on the deterministic path. */
+  model?: string | null;
+  /** Why it fell back, when it did — an operator's only clue that the script stage failed. */
+  fallbackReason?: string | null;
 }
 
 export interface VideoProject {
@@ -76,6 +89,13 @@ export interface CreateVideoProjectInput {
    * an honest initial status.
    */
   status?: VideoProjectStatus;
+  /**
+   * The model-written script and storyboard (ADR-080), or a record that the deterministic
+   * planner produced the scenes instead. Persisted so the distinction between an authored
+   * storyboard and a mechanical decomposition survives past creation — a caller must be able to
+   * tell them apart, and only one of them is a script.
+   */
+  script?: VideoScript;
 }
 
 export interface VideoProjectRepository {
@@ -142,7 +162,7 @@ export class PgVideoProjectRepository implements VideoProjectRepository {
       projectId: input.projectId,
       createdByUserId: input.createdByUserId,
       prompt: input.prompt,
-      script: null,
+      script: input.script ?? null,
       targetDurationSeconds: input.targetDurationSeconds,
       sceneClipSeconds: input.sceneClipSeconds,
       sceneCount: input.sceneCount,
