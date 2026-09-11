@@ -285,7 +285,25 @@ async function openClient(
 
   const sseClient = newClient();
   try {
-    await sseClient.connect(new SSEClientTransport(url, { requestInit }), { timeout });
+    /**
+     * `withTimeout` around the WHOLE connect, not just the `timeout` option.
+     *
+     * `Client.connect` awaits `transport.start()` BEFORE it sends the timeout-bearing
+     * `initialize` request, and `SSEClientTransport.start()` resolves only when the server emits
+     * its `endpoint` event. A legacy server that answers the POST with 405 (triggering this
+     * fallback) and then accepts the GET event stream without ever emitting `endpoint` leaves
+     * this promise pending forever — the `timeout` option never gets a chance to apply, because
+     * the request it governs is never sent. Reproduced against a real node:http server:
+     * `connectTimeoutMs: 500` and the promise was still pending at 5016ms.
+     *
+     * A hung MCP connect is not a small thing: `startAll` awaits it at boot, so one unresponsive
+     * optional integration would stop the platform from starting at all — the precise failure
+     * ADR-067 introduced the manager to prevent.
+     */
+    await withTimeout(
+      sseClient.connect(new SSEClientTransport(url, { requestInit }), { timeout }),
+      timeout
+    );
   } catch (err) {
     await sseClient.close().catch(() => undefined);
     throw describeHttpFailure(config.id, url, err);
@@ -352,10 +370,30 @@ export function parseHttpUrl(raw: string, serverId: string): URL {
   return url;
 }
 
-/** True for a loopback host, where plaintext http carries no credential over a network. */
+/**
+ * True for a loopback host, where plaintext http carries no credential over a network.
+ *
+ * THE PREVIOUS TEST WAS `/^127\./`, WHICH IS A CREDENTIAL LEAK. That matches any hostname merely
+ * BEGINNING with "127." — including `127.0.0.1.attacker.tld`, a perfectly ordinary DNS name an
+ * attacker can point anywhere. A config naming it over plain http passed the guard that exists to
+ * refuse exactly that, and the bearer token in `headers` went out in clear to the attacker's
+ * server. Caught by review before it shipped; the test below pins it.
+ *
+ * The replacement matches a real IPv4 literal in 127.0.0.0/8: four numeric octets, each in range.
+ * A DNS name cannot satisfy it, because a trailing label makes the last part non-numeric.
+ */
 export function isLoopbackHost(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  return host === "localhost" || host === "::1" || /^127\./.test(host);
+  if (host === "localhost" || host === "::1") return true;
+  // IPv4-mapped IPv6 loopback, which a URL parser will hand back in this form.
+  if (host === "::ffff:127.0.0.1") return true;
+
+  const octets = host.split(".");
+  if (octets.length !== 4) return false;
+  if (!octets.every((part) => /^\d{1,3}$/.test(part))) return false;
+  const numbers = octets.map(Number);
+  if (numbers.some((n) => n > 255)) return false;
+  return numbers[0] === 127;
 }
 
 async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
