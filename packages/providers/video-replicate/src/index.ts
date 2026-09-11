@@ -250,7 +250,31 @@ export class ReplicateVideoProvider implements VideoProvider {
       );
     }
 
-    const settled = await this.pollUntilSettled(pollUrl, cancelUrl, submitted, deadlineAt, signal);
+    /**
+     * ANY failure from here on must cancel the prediction — defect found in review.
+     *
+     * `pollUntilSettled` cancelled on abort and on the deadline and nothing else, so a transient
+     * error on a single poll threw straight out: the prediction kept running on a billed GPU
+     * with nothing left holding its id. Verified before this fix — a 429 on the second poll
+     * produced exactly [POST /predictions, GET, GET] and ZERO cancel requests.
+     *
+     * It compounds: `processVideoScene` catches the throw, marks the scene failed with
+     * `incrementRetry`, and pg-boss retries — submitting a BRAND NEW prediction while the
+     * abandoned one runs to completion. Every retry doubles the orphan count. Replicate
+     * rate-limits its API, and ~30 polls per scene across 150 scenes makes a 429 routine rather
+     * than exotic.
+     *
+     * The download is inside the same guard: it happens after the prediction has succeeded and
+     * been billed, but a failure there still leaves nothing to collect, and cancelling a
+     * finished prediction is a harmless no-op.
+     */
+    let settled;
+    try {
+      settled = await this.pollUntilSettled(pollUrl, cancelUrl, submitted, deadlineAt, signal);
+    } catch (error) {
+      await this.cancelQuietly(cancelUrl);
+      throw error;
+    }
     if ("result" in settled) return settled.result;
     const prediction = settled.prediction;
 
@@ -279,7 +303,17 @@ export class ReplicateVideoProvider implements VideoProvider {
       );
     }
 
-    const { bytes, mimeType, ext } = await this.download(outputUrl, signal);
+    let downloaded;
+    try {
+      downloaded = await this.download(outputUrl, signal);
+    } catch (error) {
+      // See above: the prediction is already finished, so this cancel is a no-op — but it costs
+      // nothing and keeps "every exit from this function releases the prediction" true without
+      // exceptions a reader has to remember.
+      await this.cancelQuietly(cancelUrl);
+      throw error;
+    }
+    const { bytes, mimeType, ext } = downloaded;
     const probe = probeMp4(bytes);
     const assetId = await store(bytes, mimeType, ext);
 
@@ -329,14 +363,14 @@ export class ReplicateVideoProvider implements VideoProvider {
       },
     };
 
-    const res = await this.request(`${this.baseUrl}/predictions`, {
+    const { text: submitBody } = await this.request(`${this.baseUrl}/predictions`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal,
       what: "submitting the prediction",
     });
-    const prediction = (await parseJson(res, "the prediction submission")) as ReplicatePrediction;
+    const prediction = parseJson(submitBody ?? "", "the prediction submission") as ReplicatePrediction;
     if (!prediction.id && !prediction.urls?.get) {
       throw new ProviderError("Replicate returned a prediction with no id and no URLs.");
     }
@@ -384,8 +418,12 @@ export class ReplicateVideoProvider implements VideoProvider {
         return { result: await this.cancelAndReport(cancelUrl, predictionId, "by its caller") };
       }
 
-      const res = await this.request(pollUrl, { method: "GET", signal, what: "polling the prediction" });
-      prediction = (await parseJson(res, "a prediction poll")) as ReplicatePrediction;
+      const { text: pollBody } = await this.request(pollUrl, {
+        method: "GET",
+        signal,
+        what: "polling the prediction",
+      });
+      prediction = parseJson(pollBody ?? "", "a prediction poll") as ReplicatePrediction;
       interval = Math.min(Math.round(interval * POLL_BACKOFF_FACTOR), this.maxPollIntervalMs);
     }
 
@@ -444,6 +482,24 @@ export class ReplicateVideoProvider implements VideoProvider {
     };
   }
 
+  /**
+   * Best-effort cancel on an error path.
+   *
+   * Deliberately swallows its own failure: this runs while an error is already propagating, and
+   * a failed cancel must not replace the real cause with a less useful one. The original error
+   * is what the operator needs; the cancel is an attempt to stop the meter.
+   */
+  private async cancelQuietly(cancelUrl: string | null): Promise<void> {
+    if (!cancelUrl) return;
+    try {
+      // `signal: undefined` on purpose — reusing the caller's signal would abort the very
+      // request that stops the billing, which is the opposite of the point.
+      await this.request(cancelUrl, { method: "POST", signal: undefined, what: "canceling the prediction" });
+    } catch {
+      /* the original error is the one worth reporting */
+    }
+  }
+
   /** Downloads the produced clip. The bytes are the deliverable; the URL is not. */
   private async download(
     outputUrl: string,
@@ -452,9 +508,19 @@ export class ReplicateVideoProvider implements VideoProvider {
     // No Authorization header: the output lives on Replicate's delivery CDN, a different host
     // from the API, and attaching the account token to a third-party fetch would leak the
     // credential to whatever host the prediction's output happened to name.
-    const res = await this.request(outputUrl, { method: "GET", signal, what: "downloading the generated video", authorize: false });
-    const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length === 0) {
+    const { res, bytes } = await this.request(outputUrl, {
+      method: "GET",
+      signal,
+      what: "downloading the generated video",
+      authorize: false,
+      // Read as bytes inside the request's own signal lifetime; see `request`.
+      expect: "bytes",
+      // The CDN is not the API (defect 3): a 404 from a delivery host means the output expired
+      // or the URL is wrong, and telling an operator to "check VIDEO_API_TOKEN" — which the
+      // API's status table does — sends them to fix something that is not broken.
+      statusContext: "cdn",
+    });
+    if (!bytes || bytes.length === 0) {
       throw new ProviderError(`Replicate's output URL returned an empty body: ${outputUrl}`);
     }
     return { bytes, ...resolveMediaType(outputUrl, res.headers.get("content-type")) };
@@ -467,6 +533,14 @@ export class ReplicateVideoProvider implements VideoProvider {
   private async request(
     url: string,
     init: {
+      /** `bytes` for the video download; anything else reads the body as text. */
+      expect?: "bytes" | "text";
+      /**
+       * Which status table to map a failure through. The delivery CDN is a different service
+       * from the API and its statuses mean different things — a 404 there is an expired output,
+       * not a missing prediction, and 401 there is not a bad API token (no token is sent).
+       */
+      statusContext?: "api" | "cdn";
       method: string;
       headers?: Record<string, string>;
       body?: string;
@@ -474,7 +548,7 @@ export class ReplicateVideoProvider implements VideoProvider {
       what: string;
       authorize?: boolean;
     }
-  ): Promise<Response> {
+  ): Promise<{ res: Response; bytes: Buffer | null; text: string | null }> {
     const link = linkAbort(this.requestTimeoutMs, init.signal);
     try {
       const res = await this.fetchImpl(url, {
@@ -486,8 +560,31 @@ export class ReplicateVideoProvider implements VideoProvider {
         ...(init.body !== undefined ? { body: init.body } : {}),
         signal: link.signal,
       });
-      if (!res.ok) await throwForStatus(res, init.what);
-      return res;
+      if (!res.ok) await throwForStatus(res, init.what, init.statusContext ?? "api");
+      /**
+       * The body is read HERE, inside the signal's lifetime — not returned for the caller to
+       * read later.
+       *
+       * `finally` calls `link.dispose()`, which clears the request timer and removes the
+       * external abort listener. A caller that read the body after that ran it on no signal at
+       * all: a server or CDN that sends headers and then stalls the connection pinned the worker
+       * forever, past both the request timeout and the wall-clock deadline. Verified before this
+       * fix — a 50ms deadline against a body stream that never enqueued was still hanging at
+       * 1502ms, with no rejection and no cancel.
+       *
+       * `bytes` for a binary download, `text` for JSON: reading both would double the memory of
+       * a video, and reading the wrong one consumes the stream so the other can never run.
+       */
+      const readBody: Promise<{ bytes: Buffer | null; text: string | null }> =
+        init.expect === "bytes"
+          ? res.arrayBuffer().then((buf) => ({ bytes: Buffer.from(buf), text: null }))
+          : safeText(res).then((text) => ({ bytes: null, text }));
+      const payload = await withDeadline(
+        readBody,
+        this.requestTimeoutMs,
+        `reading the response body while ${init.what}`
+      );
+      return { res, ...payload };
     } catch (err) {
       // Every typed error from `@ai-platform/shared` — including the ones `throwForStatus`
       // just raised — passes through untouched; only a genuine transport failure is rewritten.
@@ -512,9 +609,29 @@ export class ReplicateVideoProvider implements VideoProvider {
  * fix the token, top up the account, wait, retry later — and that is precisely what a single
  * "provider failed" string throws away.
  */
-async function throwForStatus(res: Response, what: string): Promise<never> {
+async function throwForStatus(res: Response, what: string, context: "api" | "cdn" = "api"): Promise<never> {
   const detail = truncate(await safeText(res));
   const suffix = detail ? ` ${detail}` : "";
+  if (context === "cdn") {
+    /**
+     * The delivery CDN, not the API — defect found in review.
+     *
+     * Routing these through the API's table produced actively misleading advice: a 404 from the
+     * CDN became "prediction not found, check the id", and a 401 became "check VIDEO_API_TOKEN",
+     * when no token is sent to the CDN at all. An operator following either would go and fix
+     * something that is not broken.
+     */
+    if (res.status === 404 || res.status === 410) {
+      throw new NotFoundError(
+        `Replicate's delivery CDN no longer has the generated video (${res.status}) while ${what}. ` +
+          `Prediction outputs expire; the clip must be regenerated.${suffix}`
+      );
+    }
+    throw new ServiceUnavailableError(
+      `Replicate's delivery CDN returned ${res.status} ${res.statusText} while ${what}. ` +
+        `This is the output host, not the API — the account and token are not implicated.${suffix}`
+    );
+  }
   switch (res.status) {
     case 401:
       throw new UnauthorizedError(
@@ -642,8 +759,34 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-async function parseJson(res: Response, what: string): Promise<unknown> {
-  const text = await safeText(res);
+/**
+ * Races a promise against a timer.
+ *
+ * Used for the response BODY specifically, because aborting a fetch is not guaranteed to reject
+ * an already-returned body stream: whether the abort propagates into the stream depends on the
+ * fetch implementation, and a stalled body is exactly the case where that matters. Relying on it
+ * would make this adapter's only protection against a half-open connection an implementation
+ * detail of whatever runtime it happens to be running on.
+ *
+ * The timer is unreffed so it can never hold the process open on its own.
+ */
+async function withDeadline<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new ServiceUnavailableError(`Replicate stalled after ${ms}ms ${what}.`)), ms);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/** Parses a body this module has ALREADY read — see `request`, which reads inside the signal. */
+function parseJson(text: string, what: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
