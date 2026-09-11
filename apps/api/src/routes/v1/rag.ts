@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import {
   NotFoundError,
   PermissionError,
+  QuotaExceededError,
   ServiceUnavailableError,
   ValidationError,
   type AuthContext,
@@ -16,7 +17,7 @@ import {
   sniffDocumentBytes,
   UPLOAD_ALLOWED_TYPES,
 } from "@ai-platform/rag";
-import { estimateLlmCostUsd } from "@ai-platform/model-router";
+import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import type { AppContext } from "../../context.js";
@@ -121,6 +122,12 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
     await ctx.jobQueue.enqueue("document.ingest", {
       documentId: document.id,
       projectId: scopeOf(authCtx),
+      // Who asked for the work, carried with it. `jobScopeSchema` (apps/api/src/index.ts) has
+      // always declared this field and no enqueue site ever set it, so every worker that
+      // wanted to name the asker got `undefined` instead. A background job has no session to
+      // recover it from afterwards: either the request that created the job records it here,
+      // or it is gone for good.
+      userId: authCtx.user.id,
       requestId: request.id,
     });
     reply.status(202).send({ document });
@@ -192,6 +199,9 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       await ctx.jobQueue.enqueue(ctx.scanner ? "document.scan" : "document.ingest", {
         documentId: document.id,
         projectId: scopeOf(authCtx),
+        // See the ingest route above: the uploader travels with the job because nothing
+        // downstream can work out who they were once the request is over.
+        userId: authCtx.user.id,
         requestId: request.id,
       });
       reply.status(202).send({ document });
@@ -308,6 +318,36 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
 
       const context = results.map((r, i) => `[${i + 1}] ${r.filename} (chunk ${r.chunkIndex}):\n${r.content}`).join("\n\n");
+
+      /**
+       * FR-063 — the budget check this endpoint was missing (docs/22_COST_AND_QUOTA_STRATEGY.md).
+       *
+       * Every other budget-spending path refuses before it spends: chat.ts consults
+       * `checkLlmTokens`, images.ts `checkImageGeneration`, videos.ts `checkVideoSeconds`. This
+       * route called the model with no check at all, which made it a way straight through the
+       * token budget — and a cheap one to find, because a RAG prompt is *larger* than the chat
+       * prompt it is compared against: the retrieved passages are prompt input the caller never
+       * typed. A project already at its ceiling could keep spending here indefinitely.
+       *
+       * Placed where chat.ts places it, and for the same two reasons: after the whole prompt is
+       * assembled, so the passages are counted rather than smuggled in behind the estimate, and
+       * before the provider call, so a refusal costs nothing. Deliberately *after* the two early
+       * returns above — `retrieveOnly` and "nothing retrieved" never reach a model, and refusing
+       * a request that was never going to spend would misreport why it was refused.
+       *
+       * Same contract as chat.ts: real token counts are not known until the provider answers, so
+       * this rough estimate decides only whether to reject now; the usage row written below is
+       * always the real post-call figure. Same error and same default message, so a client
+       * cannot tell a RAG quota refusal from a chat one — they are the same event.
+       */
+      const estimatedTokens = estimatePromptTokens(`${RAG_SYSTEM_PROMPT} ${context} ${parsed.data.question}`);
+      // Per project (ADR-049), taken from the authenticated scope and never from the body: a
+      // check against a caller-supplied tenant would let anyone spend someone else's allowance.
+      const quotaCheck = await ctx.quota.checkLlmTokens(projectId, estimatedTokens);
+      if (!quotaCheck.allowed) {
+        throw new QuotaExceededError(quotaCheck.reason ?? "Token quota exceeded.");
+      }
+
       // The router streams; this endpoint does not. Draining to the terminal `done` event is
       // the whole adaptation — the alternative, a second non-streaming path through every
       // adapter, would be a second thing to keep correct for no gain.

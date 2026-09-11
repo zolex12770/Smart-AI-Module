@@ -171,9 +171,23 @@ export class ToolRegistry {
         // invalid arguments) that never reach the handler.
         const outcome = { value: "unknown" };
         const result = await this.invoke(span, toolId, args, context, outcome);
-        // Counted as well as spanned (ADR-082): "which tools fail, and how often" is a rate
-        // question, and a span answers it only by scanning every trace.
-        recordToolCall({ tool: toolId, outcome: outcome.value });
+        /**
+         * Counted as well as spanned (ADR-082): "which tools fail, and how often" is a rate
+         * question, and a span answers it only by scanning every trace.
+         *
+         * A tool that is not registered is counted as the literal `unknown_tool`, never under
+         * the name that was asked for. `tool_name` is a Prometheus label, and metrics.ts
+         * guarantees that "every label is bounded by construction" — the registry's own key set
+         * is what bounds this one. Passing `toolId` through unchecked broke that guarantee in
+         * the one case where the value is attacker- or model-controlled: a model that invents a
+         * name (a normal event in a driven loop — `invoke` has a whole branch for it) minted a
+         * brand new time series on every call, and a loop that hallucinates a fresh name each
+         * turn is an unbounded-cardinality explosion in the metrics backend, which degrades
+         * every other query that shares it. The span still carries the exact `tool.id`, so the
+         * name that was actually attempted is not lost — it lives where high-cardinality data
+         * belongs. `outcome` is untouched: it already takes one of a fixed set of values.
+         */
+        recordToolCall({ tool: this.entries.has(toolId) ? toolId : "unknown_tool", outcome: outcome.value });
         return result;
       }
     );
