@@ -64,6 +64,7 @@ import { AuthService, createSandbox, type ExecutionSandbox } from "@ai-platform/
 import { signupRequestSchema, type EmbeddingProvider } from "@ai-platform/shared";
 import { createCodingTools, createFilesystemTools, createTerminalTools, ToolRegistry } from "@ai-platform/tools";
 import { MockVideoProvider } from "@ai-platform/video-mock";
+import { ReplicateVideoProvider } from "@ai-platform/video-replicate";
 import { sql } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
@@ -448,7 +449,15 @@ async function main() {
     expireInSeconds: 120,
   });
   await jobQueue.ensureQueueWithDeadLetter("image.generate", { retryLimit: 1, expireInSeconds: 60 });
-  await jobQueue.ensureQueueWithDeadLetter("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
+  // 15 minutes, not the 60s the mock needed — ADR-085. `expireInSeconds` is how long a job may
+  // sit `active` before pg-boss decides the worker died and lets another claim it, and a real
+  // video prediction routinely runs for minutes: a cold model can take 60s to load before
+  // generation starts (docs/05 §2.5) and generation itself is several multiples of the clip's
+  // length (docs/06 §2.2). At 60s every real scene would be re-claimed mid-flight, so two
+  // workers would poll — and pay for — the same prediction, and the scene would thrash until
+  // its retries ran out. It sits above the provider's own 10-minute deadline so the provider
+  // always gives up first, with room left for the download and the cancel.
+  await jobQueue.ensureQueueWithDeadLetter("video.generate_scene", { retryLimit: 1, expireInSeconds: 900 });
   await jobQueue.ensureQueueWithDeadLetter("video.render", { retryLimit: 1, expireInSeconds: 300 });
 
   // `queue_depth` (docs/20_OBSERVABILITY.md §2.1) — the gauge that answers "are the workers
@@ -457,11 +466,11 @@ async function main() {
   // them, including the ones sitting at zero, rather than only whichever had work at boot.
   observeQueueDepth(() => jobQueue.queueDepths());
 
-  // Image generation (docs/05_IMAGE_GENERATION_RESEARCH.md) — mock-only until real
-  // credentials exist (docs/26_DECISIONS.md ADR-009), but genuinely runs through the same
-  // async job system a real (slow) provider would need, per docs/07 §1.6's "mock-provider
-  // parity" directive — never resolved inline. Long-form video (docs/07 Part 2, ADR-030) —
-  // mock-only per the same policy; `video.generate_scene` runs with bounded concurrency
+  // Image generation (docs/05_IMAGE_GENERATION_RESEARCH.md) — a real provider when one is
+  // configured (ADR-065), the labelled mock otherwise, and either way it runs through the same
+  // async job system a real (slow) provider needs, per docs/07 §1.6's "mock-provider parity"
+  // directive — never resolved inline. Long-form video (docs/07 Part 2, ADR-030/ADR-085) —
+  // the same three states; `video.generate_scene` runs with bounded concurrency
   // (docs/07 §1.6: "not all 150 scenes fire at once"), `video.render` shells out to a system
   // ffmpeg if one is present. The repositories/providers are constructed in every role
   // (the api role's routes read them too); only the workers are role-gated.
@@ -510,17 +519,31 @@ async function main() {
   const imageGenerationAvailable = imageProvider !== null;
 
   /**
-   * Video has no real provider yet, and this is the honest consequence — ADR-065.
+   * Video generation — ADR-085, and the same three-state shape as images above.
    *
-   * Unlike chat and images, there is no cross-vendor wire format for video generation: Runway,
-   * Luma, Veo and Replicate each expose a different asynchronous contract, so there is no
-   * single adapter that would make the platform vendor-neutral the way the OpenAI-compatible
-   * ones do. Rather than ship an adapter for one vendor and call the capability done, the
-   * `VideoProvider` interface stays the seam and production has no implementation of it: the
-   * routes report a real capability error. The GIF-producing mock remains development-only
-   * and, per ADR-013, cannot exist in production at all.
+   * ADR-065 declined to ship a video adapter because there is no cross-vendor wire format for
+   * video — Runway, Luma and Veo each expose a different asynchronous contract — and one
+   * vendor's adapter would have bought one vendor. Replicate is the answer to that objection
+   * rather than an exception to it: it is itself an aggregator, one `predictions` API over
+   * hundreds of hosted video models (docs/05 §2.5), so this single adapter reaches all of them
+   * and changing model is a `VIDEO_MODEL_VERSION` change. The `VideoProvider` interface is
+   * still the seam, so a second adapter is a new package and no change here.
+   *
+   * `VIDEO_PROVIDER` unset is unchanged from before this existed: the GIF-producing mock in
+   * development (labelled as a mock, and forbidden in production by ADR-013), and no video
+   * capability at all in production, with the routes reporting a real capability error rather
+   * than queueing work no worker will do. Configuration cannot be half-done — config.ts
+   * refuses to boot without the token and the model version — so there is no state in which
+   * this constructs a provider that cannot actually generate anything.
    */
-  const videoProvider = config.NODE_ENV !== "production" ? new MockVideoProvider() : null;
+  const realVideoProvider =
+    config.VIDEO_PROVIDER === "replicate" && config.VIDEO_API_TOKEN && config.VIDEO_MODEL_VERSION
+      ? new ReplicateVideoProvider({
+          apiToken: config.VIDEO_API_TOKEN,
+          modelVersion: config.VIDEO_MODEL_VERSION,
+        })
+      : null;
+  const videoProvider = realVideoProvider ?? (config.NODE_ENV !== "production" ? new MockVideoProvider() : null);
   const videoGenerationAvailable = videoProvider !== null;
 
   logger.info(
@@ -541,7 +564,7 @@ async function main() {
   }
   if (videoProvider?.isMock) {
     logger.warn(
-      "VIDEO GENERATION IS MOCKED — output is an animated GIF, not video (ADR-030). No real video provider is implemented"
+      "VIDEO GENERATION IS MOCKED — output is an animated GIF, not video (ADR-030). Set VIDEO_PROVIDER, VIDEO_API_TOKEN and VIDEO_MODEL_VERSION for real generation"
     );
   }
 

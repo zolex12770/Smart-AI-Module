@@ -19,10 +19,14 @@
 > -> dead-letter queues with inspect and replay; Observability -> the full span tree, asserted.
 >
 > **Statuses that did NOT change:** Image generation has a real provider adapter but no real
-> credentials in this environment; **video generation still has no real provider at all** and is
-> reported as unavailable rather than faked; long-form video keeps its honest
-> `skipped_no_ffmpeg` behaviour. The audit below remains accurate for everything it says about
-> those.
+> credentials in this environment; long-form video keeps its honest `skipped_no_ffmpeg`
+> behaviour. The audit below remains accurate for everything it says about those.
+>
+> **Changed since (ADR-085):** video generation now has a real provider adapter too —
+> `packages/providers/video-replicate`, against Replicate's asynchronous predictions API, with
+> real polling, a hard deadline and cancellation that reaches the provider's cancel endpoint.
+> Like the image adapter it is fixture-tested and has no real credentials here, and with
+> `VIDEO_PROVIDER` unset the platform still reports video as unavailable rather than faking it.
 
 
 
@@ -317,12 +321,21 @@ created, or deleted during the audit except this report.
 |   |   |   |   `-- index.ts
 |   |   |   |-- package.json
 |   |   |   `-- tsconfig.json
-|   |   `-- video-mock/
+|   |   |-- video-mock/
+|   |   |   |-- src/
+|   |   |   |   |-- gif-encoder.test.ts
+|   |   |   |   |-- gif-encoder.ts
+|   |   |   |   |-- index.test.ts
+|   |   |   |   `-- index.ts
+|   |   |   |-- package.json
+|   |   |   `-- tsconfig.json
+|   |   `-- video-replicate/
 |   |       |-- src/
-|   |       |   |-- gif-encoder.test.ts
-|   |       |   |-- gif-encoder.ts
 |   |       |   |-- index.test.ts
-|   |       |   `-- index.ts
+|   |       |   |-- index.ts
+|   |       |   |-- mp4-fixtures.ts
+|   |       |   |-- mp4-probe.test.ts
+|   |       |   `-- mp4-probe.ts
 |   |       |-- package.json
 |   |       `-- tsconfig.json
 |   |-- quota/

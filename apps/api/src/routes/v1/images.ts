@@ -29,7 +29,7 @@ import { requireProject } from "../../plugins/auth.js";
 export const IMAGE_UNAVAILABLE =
   "Image generation is not available on this deployment: no image provider is configured. Set IMAGE_BASE_URL and IMAGE_MODEL to enable it. Nothing was queued.";
 export const VIDEO_UNAVAILABLE =
-  "Video generation is not available on this deployment: no real video provider is implemented (docs/26_DECISIONS.md ADR-065). Nothing was queued.";
+  "Video generation is not available on this deployment: no video provider is configured. Set VIDEO_PROVIDER, VIDEO_API_TOKEN and VIDEO_MODEL_VERSION to enable it. Nothing was queued.";
 
 /**
  * Narrows the project scope `requireProject` always sets. See the identical helper in
