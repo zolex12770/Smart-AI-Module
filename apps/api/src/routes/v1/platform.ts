@@ -109,8 +109,14 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
       servers: ctx.mcp.status().map((server) => ({
         id: server.id,
         status: server.status,
+        // Which wire it came up on — stdio, Streamable HTTP, or the deprecated SSE fallback.
+        transport: server.transport,
         toolCount: server.toolIds.length,
         toolIds: server.toolIds,
+        // Tools this server offered and was refused because the id was already taken. Shown,
+        // not just logged: on a remote server that is what a name-squatting attempt looks
+        // like, and a boot-time log line is not where anyone goes looking for it.
+        refusedToolIds: server.refusedToolIds,
         lastError: server.lastError,
         connectedAt: server.connectedAt,
       })),
