@@ -88,7 +88,18 @@ key, `DATABASE_URL`), and the "timeout" only rejected a promise while the child 
 - Re-registering a tool id is refused, so one server cannot silently replace another's tool — or
   re-enable one an operator disabled.
 - MCP-discovered tools register **disabled**; enabling one is an explicit, authenticated,
-  permission-checked action.
+  permission-checked action. Verified live on a running platform: 14 discovered tools, 0 enabled,
+  against 8 native tools all enabled.
+- **A remote (HTTP) MCP server is untrusted third-party code supplying tool DEFINITIONS** — a
+  materially different position from a local subprocess an operator launched (ADR-083). An id
+  collision is refused rather than resolved, so a server cannot rename its tool to `fs.write_file`
+  and impersonate a native one; the refused ids are reported on `/api/v1/mcp` so an operator can
+  see what a server tried to claim. Disconnecting a server now really UNREGISTERS its tools —
+  previously they were only disabled, which also meant reconnect had never worked.
+- Plaintext `http` to a non-loopback MCP server carrying credential headers is refused. The first
+  implementation of that check used `/^127\./`, which matched `127.0.0.1.attacker.tld` — an
+  ordinary DNS name pointing anywhere — and sent the bearer token in clear. Caught in review; the
+  host is now parsed as a real IPv4 literal, pinned by a regression test.
 
 ## 6. Input handling
 
@@ -105,6 +116,12 @@ key, `DATABASE_URL`), and the "timeout" only rejected a promise while the child 
   directory that merely shares the root's prefix.
 - The terminal tool uses an argument array with `shell: false` and an allow-list; a real historical
   `--eval=` argument-injection exploit is pinned by a regression test.
+- **Every model-authored command runs through `ExecutionSandbox`, not a bare `spawn`** (ADR-077).
+  This was not true until it was fixed: the tool called `spawn` with no `env`, and Node hands a
+  child the parent's entire `process.env` — so a command a model wrote could print every provider
+  key and the database URL, which a probe against that code path demonstrated. The defect was that
+  TWO execution paths existed and the tool registry was wired to the unhardened one. A regression
+  test now dumps the child's whole environment and asserts no canary appears anywhere in it.
 
 ## 7. Secrets
 
@@ -112,7 +129,11 @@ key, `DATABASE_URL`), and the "timeout" only rejected a promise while the child 
   including a negative case so ordinary fields are not over-redacted).
 - `.env` files are loaded natively; a real environment variable always wins over a file value, and
   nothing is loaded under `NODE_ENV=test`.
-- Child processes receive only the variables they are explicitly given.
+- Child processes receive only the variables they are explicitly given — built from scratch
+  (`PATH`, plus the few Windows loader variables), never filtered from the parent's, because an
+  allow-list of names to strip has to be updated for every new secret and the one nobody
+  remembers is the one that leaks. See the terminal-tool note in §6: this sentence was in this
+  document before it was true of the path that actually ran.
 - CI runs gitleaks, and every commit in this repository was preceded by a staged-diff secret scan.
 
 ## 8. Audit
