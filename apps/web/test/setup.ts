@@ -21,8 +21,14 @@ export class FakeEventSource {
   readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
   closed = false;
   onerror: ((event: Event) => void) | null = null;
+  /** Mirrors the real `EventSource.withCredentials`: false unless the caller opted in. */
+  readonly withCredentials: boolean;
 
-  constructor(readonly url: string) {
+  constructor(
+    readonly url: string,
+    init?: EventSourceInit
+  ) {
+    this.withCredentials = init?.withCredentials ?? false;
     FakeEventSource.instances.push(this);
   }
 

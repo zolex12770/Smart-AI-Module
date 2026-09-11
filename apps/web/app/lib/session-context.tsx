@@ -122,8 +122,19 @@ export function useSession(): SessionState {
 /**
  * Wraps a screen that requires a signed-in user. Renders nothing until the session is
  * resolved, so no authenticated screen ever paints with a null user.
+ *
+ * `requireProject` is on by default because nearly every screen reads project-scoped data and
+ * would only produce 400s without a selection. Settings turns it off: it is the screen the
+ * no-project message below sends the user to, so gating it on having a project would make that
+ * instruction impossible to follow — the account with no project could never create one.
  */
-export function RequireSession({ children }: { children: ReactNode }) {
+export function RequireSession({
+  children,
+  requireProject = true,
+}: {
+  children: ReactNode;
+  requireProject?: boolean;
+}) {
   const { status, projectId, projects } = useSession();
   if (status === "loading") {
     return <p className="page-state">Loading your session…</p>;
@@ -131,7 +142,7 @@ export function RequireSession({ children }: { children: ReactNode }) {
   if (status === "anonymous") {
     return <p className="page-state">Redirecting to sign in…</p>;
   }
-  if (!projectId && projects.length === 0) {
+  if (requireProject && !projectId && projects.length === 0) {
     return <p className="page-state">This account has no project yet. Create one from Settings.</p>;
   }
   return <>{children}</>;

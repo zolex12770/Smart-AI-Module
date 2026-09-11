@@ -1,4 +1,4 @@
-import { apiFetch } from "./auth-client";
+import { apiFetch, getSelectedProjectId } from "./auth-client";
 import type { GeneratedImage, ImageGenerationRequest, Task, TaskNode, TaskType, VideoProjectRequest } from "@ai-platform/shared";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
@@ -164,20 +164,28 @@ export const listFiles = () => request<{ documents: DocumentRecord[] }>("/api/v1
 export const ingestFile = (path: string) =>
   request<{ document: DocumentRecord }>("/api/v1/files", { method: "POST", body: JSON.stringify({ path }) });
 
-/** Real multipart upload (ADR-041). Deliberately NOT through `request()`: the browser must set
- * the multipart Content-Type itself (it includes the boundary), so no JSON header here. */
+export const getFile = (id: string) => request<{ document: DocumentRecord }>(`/api/v1/files/${id}`);
+
+/**
+ * Real multipart upload (ADR-041), through `apiFetch` like everything else.
+ *
+ * It used to call `fetch` directly — the same mistake the module note above describes, left
+ * behind when the other 24 functions were converted, and for the same stated reason: "the
+ * browser must set the multipart Content-Type itself". That reason is real but it never
+ * required bypassing `apiFetch`; it only required `apiFetch` not to declare a content type for
+ * a `FormData` body, which it now does not. The bypass cost all three things
+ * `POST /api/v1/files/upload` requires — the session cookie (`credentials: "include"`), the
+ * double-submit CSRF header, and the `x-project-id` scope `requireProject` authorizes against
+ * — so every upload from this screen was a 401 against the authenticated API.
+ *
+ * `request()` is still the wrong wrapper here: it JSON-parses string bodies, which a
+ * `FormData` is not. Calling `apiFetch` directly is the correct route.
+ */
 export async function uploadFile(file: File): Promise<{ document: DocumentRecord }> {
   const form = new FormData();
   form.append("file", file, file.name);
-  const res = await fetch(`${API_URL}/api/v1/files/upload`, { method: "POST", body: form });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Upload failed (${res.status}): ${body.slice(0, 300)}`);
-  }
-  return (await res.json()) as { document: DocumentRecord };
+  return apiFetch<{ document: DocumentRecord }>("/api/v1/files/upload", { method: "POST", body: form });
 }
-
-// --- Memory / settings ---------------------------------------------------------------------
 
 export interface MemoryItem {
   id: string;
@@ -197,13 +205,72 @@ export interface MemoryItem {
   lastUsedAt?: string | null;
 }
 
+// --- API keys ------------------------------------------------------------------------------
+
+/**
+ * A key as it can be listed: everything except the secret. The plaintext key exists in exactly
+ * one response — the 201 from `createApiKey` — and is never retrievable again (the server
+ * stores only its SHA-256), which is why `ApiKeyCreated` below is a separate shape.
+ */
+export interface ApiKeySummary {
+  id: string;
+  name: string;
+  /** Non-secret display prefix (e.g. `aip_live_ab12`) — the only way to identify a key later. */
+  keyPrefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+}
+
+export interface ApiKeyCreated {
+  apiKey: { id: string; keyPrefix: string; expiresAt: string | null };
+  /** Shown once, here, and nowhere else ever. */
+  key: string;
+  warning: string;
+}
+
+export const listApiKeys = () => request<{ apiKeys: ApiKeySummary[] }>("/api/v1/api-keys");
+export const createApiKey = (name: string, expiresInDays?: number) =>
+  request<ApiKeyCreated>("/api/v1/api-keys", {
+    method: "POST",
+    body: JSON.stringify(expiresInDays === undefined ? { name } : { name, expiresInDays }),
+  });
+export const revokeApiKey = (id: string) => request<{ ok: true }>(`/api/v1/api-keys/${id}`, { method: "DELETE" });
+
+// --- Memory --------------------------------------------------------------------------------
+
 export const listMemory = () => request<{ items: MemoryItem[] }>("/api/v1/memory");
 export const addMemory = (scope: MemoryItem["scope"], content: string) =>
   request<{ item: MemoryItem }>("/api/v1/memory", { method: "POST", body: JSON.stringify({ scope, content }) });
 export const deleteMemory = (id: string) => request<{ ok: true }>(`/api/v1/memory/${id}`, { method: "DELETE" });
 
-export function assetUrl(assetId: string): string {
-  return `${API_URL}/api/v1/assets/${assetId}`;
+/**
+ * The URL an `<img>`, `<video>` or `<audio>` element loads asset bytes from.
+ *
+ * The `?projectId=` is not decoration — without it nothing on this app displays. `GET
+ * /api/v1/assets/:id` goes through `requireProject(..., "project:read")` (ADR-049), and for a
+ * cookie session that helper *requires* a named project: with none it throws "A projectId is
+ * required". A `<img src>` cannot send `x-project-id`, the header every other call in this
+ * module uses — a browser offers no way to attach a header to a subresource load. So the scope
+ * travels in the query string, which is the same path `apps/api/src/plugins/auth.ts`'s
+ * `extractProjectId` already reads for the SSE endpoint (see the comment on
+ * `/api/v1/agent/tasks/:id/events`: "An EventSource cannot set headers, so a browser
+ * subscribes with `?projectId=...`"). This is that precedent, not a second mechanism.
+ *
+ * The session cookie still authenticates the load: it rides along on the subresource request
+ * because it is `SameSite=none; Secure` wherever the API is a different site (apps/api's
+ * `cookieSameSite`), and same-site in local development.
+ *
+ * `projectId` overrides the stored selection for a caller that already holds one — most
+ * callers omit it and get the project the rest of the app is scoped to.
+ */
+export function assetUrl(assetId: string, projectId?: string | null): string {
+  const url = `${API_URL}/api/v1/assets/${encodeURIComponent(assetId)}`;
+  const scope = projectId ?? getSelectedProjectId();
+  // No scope means no session has resolved yet; emitting a bare URL keeps the failure a plain
+  // 400 from the API rather than a request claiming a project that is not the user's.
+  return scope ? `${url}?projectId=${encodeURIComponent(scope)}` : url;
 }
 
 export type { GeneratedImage };

@@ -67,6 +67,10 @@ export class ApiError extends Error {
 }
 
 export interface ApiFetchOptions extends Omit<RequestInit, "body"> {
+  /**
+   * Serialised as JSON, unless it is a `FormData` — see the note on `apiFetch` about why
+   * multipart has to pass through untouched.
+   */
   body?: unknown;
   /** Overrides the stored selection; most callers should omit it. */
   projectId?: string | null;
@@ -78,13 +82,30 @@ export interface ApiFetchOptions extends Omit<RequestInit, "body"> {
  * The single entry point for talking to the backend. The frontend never touches the database
  * and holds no business logic — it calls the API, which owns authorization (product brief §2,
  * §25).
+ *
+ * A `FormData` body is the one thing that is NOT serialised here, and that exception is what
+ * lets the multipart upload (ADR-041) go through this function instead of around it. Two
+ * properties have to hold for `POST /api/v1/files/upload` to work at all:
+ *
+ * - The body must reach `fetch` as the `FormData` object itself. `JSON.stringify(formData)`
+ *   produces `"{}"` — the upload would arrive empty and the route would reject it with
+ *   "Multipart body must include a file field".
+ * - No `Content-Type` header may be set. The multipart content type carries a boundary token
+ *   that only the browser knows; declaring `application/json` (or even a bare
+ *   `multipart/form-data` without the boundary) makes @fastify/multipart unable to parse the
+ *   body. Leaving the header off is what lets `fetch` write the correct one with its boundary.
+ *
+ * Routing the upload through here rather than a bare `fetch` is the point: credentials, the
+ * CSRF header and the project scope are added in exactly one place, and an upload that skips
+ * them is a 401 — which is precisely the bug this exception exists to fix.
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
   const { body, projectId, unscoped, headers, ...rest } = options;
   const method = (rest.method ?? "GET").toUpperCase();
   const finalHeaders = new Headers(headers);
+  const isMultipart = typeof FormData !== "undefined" && body instanceof FormData;
 
-  if (body !== undefined) finalHeaders.set("Content-Type", "application/json");
+  if (body !== undefined && !isMultipart) finalHeaders.set("Content-Type", "application/json");
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
     const csrf = readCsrfToken();
     // Without this the server rejects the request; surfacing it here gives a clearer error
@@ -102,7 +123,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     headers: finalHeaders,
     // Sends the httpOnly session cookie cross-origin (the API is a separate deployment).
     credentials: "include",
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body: body === undefined ? undefined : isMultipart ? (body as FormData) : JSON.stringify(body),
   });
 
   if (!response.ok) {
