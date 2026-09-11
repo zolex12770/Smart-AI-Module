@@ -21,6 +21,9 @@ import {
   PgVideoProjectRepository,
   PgVideoSceneRepository,
   PgUsageRecordRepository,
+  type TaskNodeRepository,
+  type TaskRepository,
+  type TaskTransitionRepository,
   projects as projectsTable,
   users as usersTable,
 } from "@ai-platform/database";
@@ -52,8 +55,10 @@ import {
   initMetrics,
   initTracing,
   observeQueueDepth,
+  recordAgentRun,
   recordDeadLetter,
   recordJobProcessed,
+  recordMediaJob,
   withSpan,
   type Logger,
 } from "@ai-platform/observability";
@@ -630,12 +635,40 @@ async function main() {
       await jobQueue.registerWorker<unknown>("image.generate", async (raw) => {
         const { projectId, userId, generationId, requestId } = imageJobSchema.parse(raw);
         await runJob(logger, { queue: "image.generate", jobId: generationId, projectId, requestId }, async () => {
-          await processImageGeneration(
-            { generationRepo: imageGenerations, assetStore, provider: imageProvider },
-            projectId,
-            generationId
-          );
-          const generation = await imageGenerations.get(projectId, generationId);
+          // Measured around the provider call itself, not around the whole job: `runJob`'s
+          // `job_duration_seconds` already covers queue-handler overhead, and the question
+          // `generation_duration_seconds` answers is "how long does this provider take".
+          const startedAt = Date.now();
+          let generation: Awaited<ReturnType<typeof imageGenerations.get>> = undefined;
+          try {
+            await processImageGeneration(
+              { generationRepo: imageGenerations, assetStore, provider: imageProvider },
+              projectId,
+              generationId
+            );
+            generation = await imageGenerations.get(projectId, generationId);
+          } finally {
+            /**
+             * docs/20_OBSERVABILITY.md §2.1 `generation_duration_seconds` / `generation_total`.
+             *
+             * Specified since Phase 12 and never once emitted: `recordMediaJob` had no
+             * production call site at all, so the media dashboards those two metrics back had
+             * no data behind them — an operator could not answer "are image generations slower
+             * or failing more than yesterday" from anything but log archaeology.
+             *
+             * In `finally` rather than after the call, because a provider that throws is
+             * exactly the case the failure rate exists to show; recording only on the happy
+             * path would make `generation_total{outcome="failure"}` permanently zero while
+             * generations failed. An unset `generation` means the read never happened (the call
+             * threw), which is a failure by definition.
+             */
+            recordMediaJob({
+              mediaType: "image",
+              provider: generation?.providerName ?? imageProvider.name,
+              outcome: generation?.status === "succeeded" ? "success" : "failure",
+              durationMs: Date.now() - startedAt,
+            });
+          }
           logger.info(
             {
               request_id: requestId,
@@ -676,32 +709,62 @@ async function main() {
         async (raw) => {
           const { projectId, userId, videoProjectId, sceneId, requestId } = videoSceneJobSchema.parse(raw);
           await runJob(logger, { queue: "video.generate_scene", jobId: sceneId, projectId, requestId }, async () => {
-            await processVideoScene(
-              {
-                projectRepo: videoProjects,
-                sceneRepo: videoScenes,
-                jobQueue,
-                assetStore,
-                provider: videoProvider,
-                // Narration for this scene (ADR-079). Undefined when unconfigured, and the
-                // scene then stays honestly silent rather than carrying a silent audio asset.
-                ...(speech ? { speech } : {}),
-                logger,
-              },
-              { projectId, videoProjectId },
-              sceneId,
-              requestId
-            );
-            // FR-061/FR-063 — recorded per scene (the real unit of work), only on real success,
-            // for the same reason as the image job above. A scene is read through its parent
-            // video project *and* the tenant project: scenes carry no project_id of their own
-            // (ADR-049), so the scope object is what turns this read into an access control.
-            const scene = await videoScenes.get({ projectId, videoProjectId }, sceneId);
+            // See the image worker: the provider call is what `generation_duration_seconds`
+            // is about, so the clock starts here and not at job pickup.
+            const startedAt = Date.now();
+            let scene: Awaited<ReturnType<typeof videoScenes.get>> = undefined;
+            try {
+              await processVideoScene(
+                {
+                  projectRepo: videoProjects,
+                  sceneRepo: videoScenes,
+                  jobQueue,
+                  assetStore,
+                  provider: videoProvider,
+                  // Narration for this scene (ADR-079). Undefined when unconfigured, and the
+                  // scene then stays honestly silent rather than carrying a silent audio asset.
+                  ...(speech ? { speech } : {}),
+                  logger,
+                },
+                { projectId, videoProjectId },
+                sceneId,
+                requestId
+              );
+              // FR-061/FR-063 — recorded per scene (the real unit of work), only on real
+              // success, for the same reason as the image job above. A scene is read through
+              // its parent video project *and* the tenant project: scenes carry no project_id
+              // of their own (ADR-049), so the scope object is what turns this read into an
+              // access control.
+              scene = await videoScenes.get({ projectId, videoProjectId }, sceneId);
+            } finally {
+              // docs/20 §2.1, same reasoning as the image worker — a scene is the unit of
+              // video generation, so it is the unit this metric counts.
+              recordMediaJob({
+                mediaType: "video",
+                provider: videoProvider.name,
+                outcome: scene?.status === "succeeded" ? "success" : "failure",
+                durationMs: Date.now() - startedAt,
+              });
+            }
             if (scene?.status === "succeeded") {
+              /**
+               * Who to charge this scene to (ADR-049's `usage_records.user_id`).
+               *
+               * Unlike the image job, `userId` is not on this payload and cannot be put there
+               * from here: scene jobs are enqueued by `orchestrateVideoProject` in
+               * packages/media, which also fans out from the render/completion path where no
+               * request and no caller exist. The video project row is the authority instead —
+               * `created_by_user_id` is stamped from the credential by POST /api/v1/videos —
+               * and it is the same person the payload would have named. Without it every video
+               * usage row carried a null user, so the ledger could say which project spent but
+               * never which member, which is precisely the attribution it exists to provide.
+               * The payload still wins when a future enqueue site does set it.
+               */
+              const videoProject = await videoProjects.get(projectId, videoProjectId);
               await usage.create({
                 id: uuid(),
                 projectId,
-                userId: userId ?? null,
+                userId: userId ?? videoProject?.createdByUserId ?? null,
                 kind: "video",
                 provider: videoProvider.name,
                 model: null,
@@ -948,7 +1011,11 @@ async function main() {
      */
     taskRepo: tasks,
     nodeRepo: taskNodes,
-    transitionRepo: taskTransitions,
+    // Instrumented, not raw: this is where a finished agent run becomes a metric (see
+    // `withAgentRunMetrics`). The engine is handed the wrapper rather than the repository so
+    // every terminal state is counted, whoever caused it — the run that finishes on its own,
+    // the one a user cancels, and the one crash recovery resumes and then fails.
+    transitionRepo: withAgentRunMetrics(taskTransitions, { taskRepo: tasks, nodeRepo: taskNodes, logger }),
     toolRegistry,
     modelRouter,
   });
@@ -1172,6 +1239,88 @@ main().catch((err) => {
   console.error("Fatal startup error:", err);
   process.exit(1);
 });
+
+/** The task states an agent run ends in, and the `recordAgentRun` outcome each one is.
+ *  Task states are upper-case and node statuses are lower-case (packages/shared task-graph.ts),
+ *  which is what lets this lookup tell a finished RUN from a finished NODE: both are appended
+ *  to the same transition log, and only the run is a run. */
+const AGENT_RUN_OUTCOMES = {
+  COMPLETED: "success",
+  FAILED: "failed",
+  CANCELLED: "cancelled",
+} as const;
+
+/**
+ * Emits `agent_run_duration_seconds` / `agent_step_count` — docs/20_OBSERVABILITY.md §2.1.
+ *
+ * WHAT WAS MISSING. `recordAgentRun` was specified, implemented and exported, and had no
+ * production call site anywhere: the two agent metrics an operator would actually alert on —
+ * "are runs getting slower" and "is the planner looping" — were permanently empty. Everything
+ * else about a run was observable (a span per run, a usage row per model call, a transition
+ * row per state change), which made the gap easy to miss and impossible to work around: a
+ * histogram cannot be reconstructed after the fact from logs.
+ *
+ * WHY HERE, of all places. The engine has no run-completion hook, and packages/agent-core is
+ * off-limits to this change, so the call has to go somewhere apps/api already owns. Every
+ * terminal state passes through `transitionRepo.append` exactly once — `transitionTask` is the
+ * only writer and it appends after it has updated the task row — so wrapping the repository
+ * counts every run, whatever ended it: one that finished on its own, one a user cancelled
+ * through the API, one crash recovery resumed and then failed. Subscribing per task in the
+ * route handler was the alternative, and it would have counted only runs this process started
+ * and leaked a listener for every run that never terminates.
+ *
+ * It reads the task and its nodes rather than tracking them in memory because those are the
+ * facts as they were actually persisted; an in-memory counter would go wrong on exactly the
+ * runs that matter (resumed after a restart, replanned, or executed by a second instance).
+ * One extra pair of reads per run, at the moment the run ends — not per step.
+ *
+ * Nothing here may fail a transition. The state change is the real work and the metric is a
+ * side effect of it, so a failed read is logged and swallowed; a run that ends correctly but
+ * goes uncounted is a gap in a dashboard, while a transition lost to a metrics error would be
+ * a task stuck in a non-terminal state forever.
+ */
+function withAgentRunMetrics(
+  transitionRepo: TaskTransitionRepository,
+  deps: { taskRepo: TaskRepository; nodeRepo: TaskNodeRepository; logger: Logger }
+): TaskTransitionRepository {
+  return {
+    listByTask: (projectId, taskId) => transitionRepo.listByTask(projectId, taskId),
+    listByTaskUnscoped: (taskId) => transitionRepo.listByTaskUnscoped(taskId),
+    async append(input) {
+      const transition = await transitionRepo.append(input);
+      const outcome = AGENT_RUN_OUTCOMES[input.toState as keyof typeof AGENT_RUN_OUTCOMES];
+      if (outcome) {
+        try {
+          // Unscoped reads, and legitimately so: the ids come from the engine's own execution
+          // and never from a caller, and a metric spans every project by definition (the same
+          // reasoning as the engine meter's `getUnscoped` above). No label carries either id —
+          // `recordAgentRun` is labelled by outcome alone, so cardinality stays bounded.
+          const task = await deps.taskRepo.getUnscoped(input.taskId);
+          if (task) {
+            const nodes = await deps.nodeRepo.listByRootUnscoped(input.taskId);
+            recordAgentRun({
+              outcome,
+              // The whole run, from the moment the task row was created — including time spent
+              // waiting for a human approval, which is honest: "how long until a user got an
+              // answer" is the question this histogram is read for.
+              durationMs: Date.now() - task.createdAt,
+              // Nodes in the plan, which is what a "step" is for this engine (docs/11 §3.2).
+              // A replanned task carries its replacement nodes, so this counts the plan that
+              // actually ran, not every node that ever existed.
+              stepCount: nodes.length,
+            });
+          }
+        } catch (err) {
+          deps.logger.warn(
+            { err, task_id: input.taskId, to_state: input.toState },
+            "agent run finished but could not be recorded as a metric"
+          );
+        }
+      }
+      return transition;
+    },
+  };
+}
 
 /**
  * docs/20_OBSERVABILITY.md §3.3 (`job.process` span) + §1.2 (structured job log fields) —

@@ -85,9 +85,16 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
       // the row. It is what makes the job VISIBLE to its owner: pg-boss has no notion of a
       // tenant, so `GET /api/v1/jobs` scopes on this payload field, and a job without it was
       // simply invisible to everyone (ADR-072).
+      // `userId` is what attributes the spend. The worker writes `usage_records.user_id` from
+      // this field (apps/api/src/index.ts's image.generate worker) and has no other way to
+      // learn it: a job runs without a session, and by the time it runs the request that knew
+      // who asked is long gone. It was never set, so every image usage row ever written had a
+      // null user — the ledger could say which project spent but never which person, which is
+      // exactly the attribution `jobScopeSchema` documents this field as providing.
       await ctx.jobQueue.enqueue("image.generate", {
         generationId: id,
         projectId: scopeOf(authCtx),
+        userId: authCtx.user.id,
         requestId: request.id,
       });
       reply.status(202).send({ generation });
