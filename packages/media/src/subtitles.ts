@@ -29,7 +29,12 @@ export interface SubtitleSceneInput {
   sceneIndex: number;
   /** Null for a scene with no narration; the cue is then omitted rather than left blank. */
   narration: string | null;
-  /** The scene's clip length — the fallback when there is no measurable audio. */
+  /**
+   * The scene's clip length, as the render stage MEASURED it off the normalised clip — not the
+   * length the storyboard planned for it. The two differ routinely (providers quantise, frame-rate
+   * conversion rounds), and a cue grid built from planned numbers describes a video that was never
+   * composed.
+   */
   durationSeconds: number;
   /** Measured narration length, when the audio exists. */
   audioDurationSeconds?: number | null;
@@ -39,8 +44,11 @@ export interface SubtitleSceneInput {
  * Lays the scenes end to end and gives each its own cue.
  *
  * A scene's slot is the longer of its clip and its narration: if the narration runs past the
- * clip, the render stage extends the clip to cover it (see `video-render.ts`), so the subtitle
- * has to agree with what will actually be composed or every later cue is wrong.
+ * clip, the render stage extends the clip to cover it by holding the last frame, and if the clip
+ * runs past the narration the render stage pads the narration with silence (both in
+ * `video-render.ts`, which feeds this function the very measurements it composed against). The
+ * cue grid therefore IS the composed grid; when the two were computed independently, every cue
+ * after the first scene whose narration overran was wrong, by a margin that grew with each scene.
  */
 export function buildSubtitleCues(scenes: readonly SubtitleSceneInput[]): SubtitleCue[] {
   const cues: SubtitleCue[] = [];
