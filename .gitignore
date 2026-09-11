@@ -27,3 +27,7 @@ apps/web/playwright-report/
 
 # Locally installed verification toolchain (ffmpeg, ollama, terraform, fake-gcs) - ADR-078
 .local-tools/
+
+# Scratch file written by scripts/verify-migrations.sh; removed on exit
+.verify-migrations-apply.mjs
+.migration-check/

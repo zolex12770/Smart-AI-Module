@@ -1344,3 +1344,18 @@ Validation is strict and total: a malformed script becomes a failed render sever
 
 **Date:** 2026-09-11
 **Impact:** `eslint.config.mjs`, `package.json`, `.github/workflows/ci.yml`, `apps/api/src/{index.ts,routes/v1/agent.ts}`, `packages/jobs/src/queue.ts`.
+
+---
+
+## ADR-087: Migration validation from an empty database
+
+**Decision:** `scripts/verify-migrations.sh` applies the checked-in migrations to a genuinely empty database, applies them a second time, asserts every application table exists, and asserts `drizzle-kit generate` produces nothing new. CI runs it.
+
+**What was unverified.** "Migration clean from an empty database" was a completion criterion with nothing checking it. The suite calls `runMigrations` constantly, but always against a fresh in-memory PGlite inside a test that would fail for a hundred other reasons too, so a broken migration was never distinguishable from a broken test.
+
+**The drift check is the one that matters.** The schema is edited by hand while migrations are *generated*, so a column added without regenerating passes every test — the test database is built from the migrations AND the ORM agrees with the schema file — and then fails on the first real deployment, where only the migrations exist. Proven to fail: adding a column to `rate_limit_counters` without a migration made the script report drift.
+
+Applying twice must be a no-op, because a retried deploy and two instances starting at once both run it.
+
+**Date:** 2026-09-11
+**Impact:** `scripts/verify-migrations.sh`, `.github/workflows/ci.yml`, `.gitignore`.

@@ -54,6 +54,13 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # A migration that does not apply to an EMPTY database, or a schema hand-edited without a
+      # regenerated migration, passes every test — the test database is built from the migrations
+      # and the ORM agrees with the schema file — and then fails on the first real deployment,
+      # where only the migrations exist (ADR-087). Cheap, so it runs before the apps build.
+      - name: Verify migrations
+        run: bash scripts/verify-migrations.sh
+
       - name: Build apps
         run: npm run build
 
