@@ -208,8 +208,14 @@ export function parseScriptJson(
    * produced for every scene.
    */
   if (cleaned.length > expectedSceneCount) cleaned.length = expectedSceneCount;
-  while (cleaned.length < expectedSceneCount) {
-    cleaned.push({ ...cleaned[cleaned.length % Math.max(1, cleaned.length)] });
+  // The modulus is the count the model ACTUALLY wrote, captured before any padding pushes onto
+  // the array. Taking it from the growing `cleaned.length` instead made the index `n % n`, which
+  // is 0 for every iteration — so a 2-scene reply padded to 5 produced scenes [0,1,0,0,0] and a
+  // viewer saw the opening shot four times while the code claimed to be "cycling the scenes it
+  // did write". Nothing failed loudly; the video was just wrong.
+  const written = cleaned.length;
+  for (let i = written; written > 0 && i < expectedSceneCount; i++) {
+    cleaned.push({ ...cleaned[i % written] });
   }
 
   const title = typeof record.title === "string" && record.title.trim() !== "" ? record.title.trim() : "Untitled";

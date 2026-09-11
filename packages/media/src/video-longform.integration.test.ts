@@ -128,7 +128,7 @@ describe.skipIf(!hasFfmpeg || !hasSpeech)("long-form video: narration + subtitle
 
     for (const scene of scenes) {
       const clip = await provider.generateVideo(
-        { prompt: scene.shotDescription, durationSeconds: 2, seed: scene.sceneIndex },
+        { prompt: scene.shotDescription, sceneIndex: scene.sceneIndex, durationSeconds: 2, seed: scene.sceneIndex },
         (bytes, mimeType, ext) => store.store(PROJECT, bytes, mimeType, ext, "video")
       );
       expect(clip.status).toBe("succeeded");
@@ -237,7 +237,7 @@ describe.skipIf(!hasFfmpeg || !hasSpeech)("long-form video: narration + subtitle
       [{ id: uuid(), sceneIndex: 0, shotDescription: "a shot", durationSeconds: 2 }]
     );
     const clip = await provider.generateVideo(
-      { prompt: "a shot", durationSeconds: 2, seed: 0 },
+      { prompt: "a shot", sceneIndex: 0, durationSeconds: 2, seed: 0 },
       (bytes, mimeType, ext) => store.store(PROJECT, bytes, mimeType, ext, "video")
     );
     await sceneRepo.updateStatus({ projectId: PROJECT, videoProjectId }, scene.id, "succeeded", {
