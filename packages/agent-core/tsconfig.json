@@ -11,6 +11,7 @@
     { "path": "../shared" }, { "path": "../observability" },
     { "path": "../database" },
     { "path": "../model-router" },
-    { "path": "../tools" }
+    { "path": "../tools" },
+    { "path": "../rag" }
   ]
 }

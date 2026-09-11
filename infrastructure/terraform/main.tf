@@ -263,8 +263,8 @@ resource "google_storage_bucket_iam_member" "worker_uploads_admin" {
 # made real: the two scale and restart independently, and a burst of slow jobs can no
 # longer starve request handling in the same event loop.
 resource "google_cloud_run_v2_service" "api" {
-  name     = "ai-platform-api"
-  location = var.region
+  name                = "ai-platform-api"
+  location            = var.region
   deletion_protection = false
 
   template {
@@ -383,8 +383,8 @@ resource "google_cloud_run_v2_service_iam_member" "api_public" {
 
 # --- Cloud Run: web service -------------------------------------------------------
 resource "google_cloud_run_v2_service" "web" {
-  name     = "ai-platform-web"
-  location = var.region
+  name                = "ai-platform-web"
+  location            = var.region
   deletion_protection = false
 
   template {

@@ -1,7 +1,33 @@
-import { spawn } from "node:child_process";
 import { PERMISSION_LEVEL_DEFAULTS } from "@ai-platform/shared";
 import { resolveSandboxedPath } from "./sandbox-path.js";
 import type { NativeToolEntry } from "./filesystem.js";
+
+/**
+ * The execution surface this tool needs, named structurally.
+ *
+ * Structural rather than an import of `@ai-platform/security`'s `ExecutionSandbox` so that
+ * `packages/tools` keeps no dependency on the security package — the composition root passes
+ * the real sandbox in. There is deliberately NO default: a caller that supplies no sandbox gets
+ * a compile error, not a quiet fallback to an unisolated `spawn`. That fallback is precisely the
+ * bug this parameter exists to make impossible (ADR-077).
+ */
+export interface CommandSandbox {
+  readonly isolation: "docker" | "process";
+  run(request: {
+    command: string;
+    args: string[];
+    workdir: string;
+    env?: Record<string, string>;
+    signal?: AbortSignal;
+  }): Promise<{
+    exitCode: number | null;
+    stdout: string;
+    stderr: string;
+    timedOut: boolean;
+    cancelled: boolean;
+    truncated: boolean;
+  }>;
+}
 
 /**
  * Sandboxed command execution — docs/13_SECURITY_ARCHITECTURE.md's command
@@ -13,13 +39,30 @@ import type { NativeToolEntry } from "./filesystem.js";
  * verified scenario that needs them; adding an unexercised allow-list entry now would
  * be untested attack surface, not a real capability.
  *
- * Uses `child_process.spawn` with `shell: false` and an argument array — never string
+ * Arguments are passed as an array with `shell: false` all the way down — never string
  * concatenation into a shell command — so there is no shell-injection surface regardless
  * of what a model puts in `args`.
+ *
+ * THIS USED TO LEAK EVERY SECRET THE API PROCESS HELD (ADR-077).
+ *
+ * It called `spawn(command, args, { cwd, shell: false })` directly. Node passes the parent's
+ * entire `process.env` to a child when no `env` is given, so a command authored by a MODEL —
+ * which is the only kind this tool ever runs — could read `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+ * `DATABASE_URL` and every session secret simply by printing them. Demonstrated, not theorised:
+ * a probe run against this exact code path returned
+ *
+ *   stdout: "sk-ant-CANARY-12345 | postgres://u:p@host/db"
+ *
+ * The platform already had the correct machinery — `ExecutionSandbox` builds a minimal
+ * environment from scratch and never inherits the parent's — and this tool simply did not use
+ * it. That is the real defect: TWO execution paths existed, and the hardened one was not the one
+ * wired into the tool registry. There is now one. Delegating also picks up, for free, everything
+ * the ad-hoc spawn lacked: output caps, a real timeout, process-tree termination, and container
+ * isolation when `SANDBOX_RUNTIME=docker`.
  */
 const ALLOWED_COMMANDS = new Set(["node"]);
 
-export function createTerminalTools(root: string): NativeToolEntry[] {
+export function createTerminalTools(root: string, sandbox: CommandSandbox): NativeToolEntry[] {
   const defaults = PERMISSION_LEVEL_DEFAULTS.write_local;
 
   const runCommandTool: NativeToolEntry = {
@@ -49,6 +92,8 @@ export function createTerminalTools(root: string): NativeToolEntry[] {
           exitCode: { type: "number" },
           stdout: { type: "string" },
           stderr: { type: "string" },
+          truncated: { type: "boolean" },
+          isolation: { type: "string" },
         },
       },
       permissionLevel: "write_local",
@@ -60,7 +105,7 @@ export function createTerminalTools(root: string): NativeToolEntry[] {
       retryPolicy: { maxAttempts: 1, backoff: "none", idempotencyRequired: false },
       enabled: true,
     },
-    handler: async (args) => {
+    handler: async (args, context) => {
       const command = String(args.command ?? "");
       if (!ALLOWED_COMMANDS.has(command)) {
         return { ok: false, error: `Command "${command}" is not in the allow-list (${[...ALLOWED_COMMANDS].join(", ")}).` };
@@ -99,26 +144,40 @@ export function createTerminalTools(root: string): NativeToolEntry[] {
         }
       }
 
-      const result = await runProcess(command, cmdArgs, cwd);
-      return { ok: true, output: result };
+      // One execution path, and it is the hardened one (ADR-077). `env` is deliberately not
+      // passed: the sandbox builds a minimal environment from scratch, so the parent's secrets
+      // are absent by construction rather than by a filter someone has to keep updated.
+      const result = await sandbox.run({
+        command,
+        args: cmdArgs,
+        workdir: cwd,
+        signal: context?.signal,
+      });
+
+      // A timeout or a cancellation is NOT a command that exited non-zero, and must not be
+      // reported as one: a model told "exit code 1" concludes the tests failed and starts
+      // "fixing" code that was never run. Both are tool failures, and they say which.
+      if (result.timedOut) {
+        return { ok: false, error: `Command "${command}" exceeded the sandbox time limit and was terminated.` };
+      }
+      if (result.cancelled) {
+        return { ok: false, error: `Command "${command}" was cancelled before it finished.` };
+      }
+
+      return {
+        ok: true,
+        output: {
+          exitCode: result.exitCode ?? -1,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          // Surfaced rather than hidden: a model reasoning about a truncated test log needs to
+          // know the log is truncated, or it will draw confident conclusions from an ellipsis.
+          truncated: result.truncated,
+          isolation: sandbox.isolation,
+        },
+      };
     },
   };
 
   return [runCommandTool];
-}
-
-function runProcess(
-  command: string,
-  args: string[],
-  cwd: string
-): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd, shell: false });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ exitCode: code ?? -1, stdout, stderr }));
-  });
 }

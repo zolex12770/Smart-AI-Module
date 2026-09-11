@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ToolHandler } from "@ai-platform/shared";
+import { ProcessSandbox } from "@ai-platform/security";
 import { createTerminalTools } from "./terminal.js";
 
 /**
@@ -20,7 +21,9 @@ describe("terminal.run_command security", () => {
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "terminal-test-"));
-    const [tool] = createTerminalTools(root);
+    // The real sandbox, not a stub: these are security tests, and a stub would let a
+    // regression in the isolation path pass them (ADR-077).
+    const [tool] = createTerminalTools(root, new ProcessSandbox(root));
     runCommand = tool.handler;
   });
 

@@ -21,6 +21,7 @@
     "@ai-platform/shared": "*"
   },
   "devDependencies": {
+    "@ai-platform/security": "*",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   }

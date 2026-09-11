@@ -27,7 +27,7 @@ import { v4 as uuid } from "uuid";
 import { planTask } from "./planner.js";
 import { runReasoningLoop } from "./reasoning-loop.js";
 import { resolveNodeInput } from "./template.js";
-import { verifyNodeOutput } from "./verify.js";
+import { verifyNodeOutput, type VerificationContext } from "./verify.js";
 import { withSpan } from "@ai-platform/observability";
 
 const TERMINAL_TASK_STATES = ["COMPLETED", "FAILED", "CANCELLED"] as const;
@@ -132,6 +132,17 @@ export interface AgentEngineDeps {
   now?: () => number;
   /** Ceilings for a `reasoning` node's loop (ADR-064). The model cannot raise them. */
   agentLimits?: { maxIterations?: number; maxTokensPerRun?: number };
+  /**
+   * Runs a `test_suite` node's command in the sandbox and reports its exit code (ADR-075).
+   *
+   * Injected rather than built here because WHERE code may execute is the composition root's
+   * decision, not the engine's (docs/13_SECURITY_ARCHITECTURE.md §5) — the same reason
+   * `workspaceRoot` is injected. Absent means `test_suite` verification FAILS rather than
+   * passes: a check that cannot run has not been satisfied.
+   */
+  runTestCommand?: VerificationContext["runTestCommand"];
+  /** Backs `model_judge` verification (ADR-075). Last-resort; absent means that method fails. */
+  judgeOutput?: VerificationContext["judge"];
 }
 
 /** The authenticated principal a task runs as — resolved by the route, never client-supplied. */
@@ -878,7 +889,18 @@ export class AgentEngine {
 
     let result;
     try {
-      result = verifyNodeOutput(nodeWithOutput, output);
+      /**
+       * The verification context (ADR-075). `byId` already holds every node in this task with
+       * its persisted output, so a grounded check — "is this answer supported by what the
+       * retrieval node actually returned" — needs no extra read. The sandbox runner and the
+       * judge are injected at the composition root; a check whose dependency is missing FAILS
+       * rather than passes, so an unrunnable check can never be mistaken for a satisfied one.
+       */
+      result = await verifyNodeOutput(nodeWithOutput, output, {
+        dependencyOutput: (id) => (byId.get(id)?.output as Record<string, unknown> | undefined) ?? null,
+        runTestCommand: this.deps.runTestCommand,
+        judge: this.deps.judgeOutput,
+      });
     } catch (err) {
       await this.handleNodeFailure(taskId, nodeWithOutput, err instanceof Error ? err.message : String(err));
       return;

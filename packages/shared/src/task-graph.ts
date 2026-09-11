@@ -60,6 +60,14 @@ export const verificationMethodSchema = z.enum([
   "none",
   "schema_check",
   "deterministic_compare",
+  /**
+   * Is the answer supported by the passages retrieval actually returned? (ADR-075)
+   *
+   * Distinct from `schema_check`, which only proves a `content` key exists. A real model asked
+   * a question with zero retrieved passages answered by citing "Document 12" — a document that
+   * did not exist — so shape alone is not evidence of grounding.
+   */
+  "grounding_check",
   "test_suite",
   "model_judge",
   "human",

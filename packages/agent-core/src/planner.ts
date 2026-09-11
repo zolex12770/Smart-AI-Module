@@ -234,15 +234,28 @@ function planAnswerFromDocuments(input: Record<string, unknown>, lookupTool: Too
           { role: "system", content: UNTRUSTED_CONTENT_SYSTEM_PROMPT },
           {
             role: "user",
-            content: `Answer the question using only the context below, and cite which numbered source you used.\n\nContext:\n${wrapUntrustedContent(`{{${searchNodeId}.output.context}}`)}\n\nQuestion: ${question}`,
+            content: `Answer the question using ONLY the context below, and cite the numbered source you used, e.g. [1].
+If the context does not contain the answer, reply exactly: "The provided documents do not contain the answer to this question." Never cite a source number that does not appear in the context, and never refer to a document that is not listed there.\n\nContext:\n${wrapUntrustedContent(`{{${searchNodeId}.output.context}}`)}\n\nQuestion: ${question}`,
           },
         ],
       },
       timeoutMs: 30_000,
-      verificationMethod: "schema_check",
-      verificationSpec: { requiredKeys: ["content"] },
+      /**
+       * Grounded, not merely shaped (ADR-075). `schema_check` here only proved a `content` key
+       * existed, which a fabricated answer satisfies exactly as well as a real one — and a REAL
+       * model, asked a question with zero retrieved passages, duly answered by citing
+       * "Document 12, titled 'Payments Service Maintenance Procedures'". No such document
+       * existed; there were no documents at all. The check now reads the retrieval node's
+       * actual results and rejects an answer that cites a marker never offered, or that answers
+       * substantively when nothing was retrieved.
+       *
+       * `maxAttempts: 3` rather than 2 because this rejection is recoverable: the retry
+       * re-prompts, and a second sample often refuses correctly where the first invented.
+       */
+      verificationMethod: "grounding_check",
+      verificationSpec: { field: "content", sourceNodeId: searchNodeId },
       approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
-      retryPolicy: { maxAttempts: 2, backoff: "fixed", classifyFailureAs: null },
+      retryPolicy: { maxAttempts: 3, backoff: "fixed", classifyFailureAs: null },
     },
   ];
 }

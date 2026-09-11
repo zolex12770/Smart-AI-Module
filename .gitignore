@@ -24,3 +24,6 @@ coverage/
 test-results/
 playwright-report/
 apps/web/playwright-report/
+
+# Locally installed verification toolchain (ffmpeg, ollama, terraform, fake-gcs) - ADR-078
+.local-tools/

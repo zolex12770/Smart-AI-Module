@@ -388,7 +388,9 @@ async function main() {
   // cosine comparison is against a different space entirely (ADR-048).
   for (const { definition, handler } of [
     ...createFilesystemTools(sandboxRoot),
-    ...createTerminalTools(sandboxRoot),
+    // The hardened sandbox, not a bare spawn (ADR-077): the parent's environment — every
+    // provider key and the database URL — must never reach a command a model wrote.
+    ...createTerminalTools(sandboxRoot, sandbox),
     ...createCodingTools(sandboxRoot),
     ...createRagTools({ chunkRepo: documentChunks, documentRepo: documents, embeddings }),
   ]) {

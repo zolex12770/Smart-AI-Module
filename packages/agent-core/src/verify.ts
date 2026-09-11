@@ -1,4 +1,5 @@
 import type { TaskNode } from "@ai-platform/shared";
+import { checkGrounding, type RagCitation } from "@ai-platform/rag";
 
 export interface VerificationResult {
   pass: boolean;
@@ -6,14 +7,60 @@ export interface VerificationResult {
 }
 
 /**
- * Grounded verification, not model self-assessment — docs/11_AGENT_LOOP.md principle 1.
- * Only `none`, `schema_check`, and `deterministic_compare` are implemented in this
- * increment. `test_suite` needs the coding agent's sandboxed command runner (Phase 5);
- * `model_judge`/`human` are deliberately last-resort per the docs and not wired up yet.
- * Encountering one of those throws rather than silently passing — a missing
- * verification method must never be mistaken for a passed one.
+ * What a verifier may consult besides the node's own output — docs/26_DECISIONS.md ADR-075.
+ *
+ * Verification used to see only the node and its output, which is enough for a shape check and
+ * not enough for anything grounded: "is this answer supported by the passages that were
+ * retrieved" is a question about a DIFFERENT node's output, and "do the tests pass" is a
+ * question about the world. Both are now expressible.
  */
-export function verifyNodeOutput(node: TaskNode, output: Record<string, unknown>): VerificationResult {
+export interface VerificationContext {
+  /** Output of an upstream node this node depends on, or null if it has none. */
+  dependencyOutput(nodeId: string): Record<string, unknown> | null;
+  /**
+   * Runs the node's test command in the sandbox and reports the exit code. Supplied by the
+   * composition root; absent in a context that has no sandbox (the API process constructs one,
+   * so in practice this is present wherever `test_suite` can legitimately be planned).
+   */
+  runTestCommand?(spec: TestSuiteSpec): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  /**
+   * Asks a model to judge the output against a rubric. Last-resort per
+   * docs/11_AGENT_LOOP.md — a model judging a model is the weakest evidence this platform
+   * accepts, which is why it is never a default and always names its rubric explicitly.
+   */
+  judge?(spec: ModelJudgeSpec, output: Record<string, unknown>): Promise<{ pass: boolean; reason?: string }>;
+}
+
+export interface TestSuiteSpec {
+  command: string;
+  args?: string[];
+  workspaceRoot?: string;
+  timeoutMs?: number;
+}
+
+export interface ModelJudgeSpec {
+  rubric: string;
+  field?: string;
+}
+
+/**
+ * Grounded verification, not model self-assessment — docs/11_AGENT_LOOP.md principle 1.
+ *
+ * Every method is now implemented (ADR-075). The three that used to throw did so for a good
+ * reason — a missing verification method must never be mistaken for a passed one — and that
+ * rule still holds: a method whose context is unavailable FAILS the node rather than passing
+ * it, so an unrunnable check can never be mistaken for a satisfied one.
+ *
+ * `human` is the one exception to "implemented", and deliberately so: a human verdict is not
+ * something this function can compute. It reads the verdict the approval flow already
+ * recorded, and refuses when there is none — which is the correct behaviour for a node that
+ * claims human verification but never obtained it.
+ */
+export async function verifyNodeOutput(
+  node: TaskNode,
+  output: Record<string, unknown>,
+  context?: VerificationContext
+): Promise<VerificationResult> {
   switch (node.verificationMethod) {
     case "none":
       return { pass: true };
@@ -39,17 +86,103 @@ export function verifyNodeOutput(node: TaskNode, output: Record<string, unknown>
         const actual = output[field];
         return actual === spec.equals
           ? { pass: true }
-          : { pass: false, reason: `Output field "${field}" was ${JSON.stringify(actual)}, expected ${JSON.stringify(spec.equals)}.` };
+          : {
+              pass: false,
+              reason: `Output field "${field}" was ${JSON.stringify(actual)}, expected ${JSON.stringify(spec.equals)}.`,
+            };
       }
       return { pass: true };
     }
 
-    case "test_suite":
-    case "model_judge":
-    case "human":
-      throw new Error(
-        `Verification method "${node.verificationMethod}" is not implemented yet (see PROJECT_STATUS.md) — ` +
-          `refusing to silently treat it as passed.`
-      );
+    /**
+     * Is the answer supported by what retrieval actually returned? — ADR-075.
+     *
+     * Added because a REAL model, asked a question with zero retrieved passages, answered by
+     * citing "Document 12, titled 'Payments Service Maintenance Procedures'". No such document
+     * existed. The prompt already told it to use only the given context; prompts do not bind
+     * models, so the harness checks the answer instead.
+     */
+    case "grounding_check": {
+      const spec = node.verificationSpec ?? {};
+      const sourceNodeId = spec.sourceNodeId as string | undefined;
+      if (!sourceNodeId || !context) {
+        return {
+          pass: false,
+          reason:
+            "grounding_check requires `verificationSpec.sourceNodeId` and a verification context naming the retrieval node. Refusing to treat an unrunnable check as passed.",
+        };
+      }
+      const retrieval = context.dependencyOutput(sourceNodeId);
+      if (!retrieval) {
+        return { pass: false, reason: `grounding_check could not read the output of node "${sourceNodeId}".` };
+      }
+      const citations = (retrieval.citations as RagCitation[] | undefined) ?? [];
+      const results = (retrieval.results as unknown[] | undefined) ?? [];
+      const field = (spec.field as string | undefined) ?? "content";
+      const verdict = checkGrounding({
+        answer: String(output[field] ?? ""),
+        citations,
+        retrievedCount: results.length,
+      });
+      return verdict.grounded ? { pass: true } : { pass: false, reason: verdict.reason };
+    }
+
+    /**
+     * The real thing: run the tests and read the exit code — ADR-075.
+     *
+     * This is what makes the coding agent's loop honest. Without it a "fix" was verified by a
+     * shape check on the model's own report of what it did, which is the model grading itself.
+     */
+    case "test_suite": {
+      const spec = node.verificationSpec as unknown as TestSuiteSpec | undefined;
+      if (!spec?.command) {
+        return { pass: false, reason: "test_suite requires `verificationSpec.command`." };
+      }
+      if (!context?.runTestCommand) {
+        return {
+          pass: false,
+          reason:
+            "test_suite needs a sandboxed command runner and this context has none. Refusing to treat an unrunnable check as passed.",
+        };
+      }
+      const run = await context.runTestCommand(spec);
+      if (run.exitCode === 0) return { pass: true };
+      // The output is the evidence, and it is what the model needs in order to fix the code on
+      // the next attempt — so it goes in the reason, truncated rather than dropped.
+      const detail = `${run.stdout}\n${run.stderr}`.trim().slice(-2000);
+      return { pass: false, reason: `Test command exited ${run.exitCode}.\n${detail}` };
+    }
+
+    case "model_judge": {
+      const spec = node.verificationSpec as unknown as ModelJudgeSpec | undefined;
+      if (!spec?.rubric) {
+        return { pass: false, reason: "model_judge requires `verificationSpec.rubric`." };
+      }
+      if (!context?.judge) {
+        return {
+          pass: false,
+          reason:
+            "model_judge needs a judging model and this context has none. Refusing to treat an unrunnable check as passed.",
+        };
+      }
+      const verdict = await context.judge(spec, output);
+      return verdict.pass ? { pass: true } : { pass: false, reason: verdict.reason ?? "Model judge rejected the output." };
+    }
+
+    /**
+     * A human verdict is read, never computed.
+     *
+     * The approval flow (`approve`/`reject`) is what records it, so this checks that a real
+     * person actually signed off on THIS node rather than inventing a verdict on their behalf.
+     * A node that claims human verification and never obtained it fails, which is the whole
+     * point of asking for one.
+     */
+    case "human": {
+      if (node.approvedAt) return { pass: true };
+      return {
+        pass: false,
+        reason: "This node requires human verification and no approval has been recorded for it.",
+      };
+    }
   }
 }
