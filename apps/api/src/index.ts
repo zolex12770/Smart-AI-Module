@@ -423,7 +423,15 @@ async function main() {
   // `ensureQueue` is idempotent, so whichever process boots first creates the queues and
   // the other finds them already there. Only the worker *registrations* below are gated —
   // an `api`-role process never claims a job, a `worker`-role process never serves HTTP.
-  const jobQueue = new JobQueue(jobQueueOptions);
+  const jobQueue = new JobQueue({
+    ...jobQueueOptions,
+    // ADR-072 gave every queue a dead-letter sibling, but nothing ever counted an arrival:
+    // `job_dead_letter_total` was defined, exported and tested, and never incremented, so the
+    // one queue event that always warrants a page was invisible on the dashboard. The queue
+    // reports the failure that exhausts a job's retries; naming it as a metric is this layer's
+    // job, not the queue package's.
+    onDeadLetter: ({ queue }) => recordDeadLetter({ queue }),
+  });
   await jobQueue.start();
   // Every queue gets a dead-letter queue (ADR-072). Before this, a job that exhausted its
   // retries stopped at `failed`, was archived on the maintenance schedule and then deleted —
@@ -442,6 +450,12 @@ async function main() {
   await jobQueue.ensureQueueWithDeadLetter("image.generate", { retryLimit: 1, expireInSeconds: 60 });
   await jobQueue.ensureQueueWithDeadLetter("video.generate_scene", { retryLimit: 1, expireInSeconds: 60 });
   await jobQueue.ensureQueueWithDeadLetter("video.render", { retryLimit: 1, expireInSeconds: 300 });
+
+  // `queue_depth` (docs/20_OBSERVABILITY.md §2.1) — the gauge that answers "are the workers
+  // keeping up", and the other metric that was built, exported and then never wired to
+  // anything. Registered after the queues are ensured, so the very first scrape reports all of
+  // them, including the ones sitting at zero, rather than only whichever had work at boot.
+  observeQueueDepth(() => jobQueue.queueDepths());
 
   // Image generation (docs/05_IMAGE_GENERATION_RESEARCH.md) — mock-only until real
   // credentials exist (docs/26_DECISIONS.md ADR-009), but genuinely runs through the same

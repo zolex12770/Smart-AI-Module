@@ -13,12 +13,13 @@
     "build:packages": "tsc -b tsconfig.json",
     "build": "npm run build:packages && npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "npm run lint --workspaces --if-present",
+    "lint": "eslint .",
     "test": "npm run test --workspaces --if-present",
     "db:generate": "npm run db:generate -w @ai-platform/database",
     "db:migrate": "npm run db:migrate -w @ai-platform/database"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.5",
     "concurrently": "^10.0.5",
     "eslint": "9.39.5",
     "typescript": "^5.9.3",

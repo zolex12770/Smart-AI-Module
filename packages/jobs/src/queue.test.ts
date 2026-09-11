@@ -32,6 +32,31 @@ describe("JobQueue (real pg-boss on PGlite)", () => {
     await db.close();
   });
 
+  /**
+   * The source for the `queue_depth` gauge (docs/20_OBSERVABILITY.md §2.1). The zero matters as
+   * much as the two: an operator alerting on sustained growth needs a series that exists while
+   * the queue is healthy, or "no data" and "no backlog" become the same reading.
+   */
+  it("reports waiting work per queue, and reports the idle queues as zero rather than omitting them", async () => {
+    await queue.ensureQueue("depth.busy");
+    await queue.ensureQueue("depth.idle");
+
+    await queue.enqueue("depth.busy", { n: 1 });
+    await queue.enqueue("depth.busy", { n: 2 });
+
+    expect(await queue.queueDepths()).toEqual({ "depth.busy": 2, "depth.idle": 0 });
+
+    const done: number[] = [];
+    await queue.registerWorker<{ n: number }>("depth.busy", async (payload) => {
+      done.push(payload.n);
+    });
+    await waitFor(() => done.length === 2);
+
+    // Drained, not merely claimed — a depth that never falls is indistinguishable from a
+    // worker that never runs.
+    expect(await queue.queueDepths()).toEqual({ "depth.busy": 0, "depth.idle": 0 });
+  }, 15_000);
+
   it("enqueues a real job and a real worker processes it", async () => {
     await queue.ensureQueue("test.echo");
     const received: unknown[] = [];

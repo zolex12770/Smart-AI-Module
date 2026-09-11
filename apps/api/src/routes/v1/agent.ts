@@ -54,14 +54,6 @@ const nodeDecisionSchema = z.object({ nodeId: z.string().min(1) });
  */
 const cancelRequestSchema = z.object({ projectId: z.string().optional() }).strict();
 
-/**
- * `enabled` defaults to true so the documented bodyless `POST /api/v1/tools/<id>/enable`
- * (apps/web's tasks page tells the operator to run exactly that) keeps working — but a
- * *wrong* value is now a 400 rather than being coerced by `?? true`, which used to turn
- * `{"enabled": "false"}` into an enable.
- */
-const setToolEnabledSchema = z.object({ enabled: z.boolean().default(true) });
-
 export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void {
   app.post(
     "/api/v1/agent/tasks",

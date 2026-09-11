@@ -46,6 +46,14 @@ jobs:
       - name: Typecheck (all workspaces)
         run: npm run typecheck
 
+      # One root eslint.config.mjs, not a script per workspace: the root `lint` used to fan out
+      # with `--if-present` over 26 workspaces, none of which defined the script, so it exited 0
+      # having read nothing. Placed here for the same reason as typecheck — the type-aware rules
+      # resolve cross-package types through the compiled `dist` — and before the app build
+      # because it is the cheaper of the two.
+      - name: Lint
+        run: npm run lint
+
       - name: Build apps
         run: npm run build
 

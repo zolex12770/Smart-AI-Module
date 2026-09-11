@@ -15,6 +15,15 @@ export interface JobQueueOptions {
    * crash-recovery (stale-lock expiry -> requeue) is observable in seconds, not minutes. */
   superviseIntervalSeconds?: ConstructorOptions["superviseIntervalSeconds"];
   maintenanceIntervalSeconds?: ConstructorOptions["maintenanceIntervalSeconds"];
+  /**
+   * Called on the failure that exhausts a job's retries — the one pg-boss dead-letters.
+   *
+   * A hook rather than a direct metrics call because this package must not know what
+   * observability the platform happens to use; the composition root supplies the meaning. It is
+   * also why the hook is fire-and-forget: a counter that throws must not turn a dead letter into
+   * a second, different failure.
+   */
+  onDeadLetter?: (event: { queue: string; jobId: string }) => void;
 }
 
 /** docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md §1.2 "Queue technology comparison" recommended
@@ -159,8 +168,10 @@ function extractError(output: unknown): string | null {
 
 export class JobQueue {
   private readonly boss: PgBoss;
+  private readonly onDeadLetter?: (event: { queue: string; jobId: string }) => void;
 
   constructor(options: JobQueueOptions) {
+    this.onDeadLetter = options.onDeadLetter;
     // pg-boss's own constructor validation rejects an explicit `undefined` for these
     // (asserts a numeric minimum unconditionally, rather than treating undefined as "use
     // the default") — found by actually booting apps/api, not by inspection. Omit the
@@ -214,16 +225,32 @@ export class JobQueue {
     handler: (payload: T, jobId: string) => Promise<void>,
     options?: WorkOptions
   ): Promise<void> {
-    const run = async (jobs: { data: T; id: string }[]) => {
+    // `includeMetadata` is what puts `retryCount`/`retryLimit`/`deadLetter` on the job. pg-boss
+    // does the dead-lettering itself, asynchronously and out of sight, so this failing attempt is
+    // the only place in this process that can see one coming — and `retryCount === retryLimit` on
+    // an attempt that throws means there is no retry left to take.
+    const run = async (jobs: JobWithMetadata<T>[]) => {
       for (const job of jobs) {
-        await handler(job.data, job.id);
+        try {
+          await handler(job.data, job.id);
+        } catch (err) {
+          if (job.deadLetter && job.retryCount >= job.retryLimit) {
+            this.onDeadLetter?.({ queue: queueName, jobId: job.id });
+          }
+          // Rethrown unchanged: pg-boss decides what happens to the job, this only observes.
+          throw err;
+        }
       }
     };
-    if (options) {
-      await this.boss.work<T>(queueName, options, run);
-    } else {
-      await this.boss.work<T>(queueName, run);
-    }
+    // The options type is spelled out rather than inferred: pg-boss picks the metadata-carrying
+    // handler overload from a *literal* `includeMetadata: true`, and spreading the caller's
+    // optional `WorkOptions` widens it back to `boolean`, which silently selects the overload
+    // whose jobs have no retry fields at all.
+    await this.boss.work<T, void, WorkOptions & { includeMetadata: true }>(
+      queueName,
+      { ...options, includeMetadata: true },
+      run
+    );
   }
 
   /**
@@ -259,6 +286,37 @@ export class JobQueue {
     await this.ensureQueue(deadLetter, { retryLimit: 0 });
     await this.ensureQueue(name, { ...retryPolicy, deadLetter });
     return deadLetter;
+  }
+
+  /**
+   * Pending work per queue — the source for the `queue_depth` gauge docs/20_OBSERVABILITY.md
+   * §2.1 asks for ("alert if sustained growth").
+   *
+   * `created` and `retry` are the two states that mean "waiting for a worker". `active` is
+   * deliberately excluded: counting work already in flight would mask the backlog the gauge
+   * exists to reveal, since a saturated worker pool keeps `active` high and `created` is the
+   * number that actually grows.
+   *
+   * Every ensured queue is reported, including the ones sitting at zero. A series that
+   * disappears when a queue drains is indistinguishable at the alerting layer from a series
+   * that disappears because the process died.
+   */
+  async queueDepths(): Promise<Record<string, number>> {
+    const queues = [...this.ensuredQueues];
+    if (queues.length === 0) return {};
+
+    const rows = await this.query<{ name: string; depth: string | number }>(
+      `select name, count(*) as depth
+         from pgboss.job
+        where name = any($1)
+          and state in ('created', 'retry')
+        group by name`,
+      [queues]
+    );
+
+    const depths: Record<string, number> = Object.fromEntries(queues.map((name) => [name, 0]));
+    for (const row of rows) depths[row.name] = Number(row.depth ?? 0);
+    return depths;
   }
 
   /**

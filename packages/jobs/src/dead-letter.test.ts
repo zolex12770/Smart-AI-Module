@@ -14,15 +14,18 @@ import { JobQueue, deadLetterNameFor, fromPglite, isDeadLetterQueue, sourceQueue
 describe("dead-letter queues and read-only job listing", () => {
   let pg: PGlite;
   let queue: JobQueue;
+  let deadLettered: { queue: string; jobId: string }[];
 
   beforeEach(async () => {
     pg = new PGlite();
+    deadLettered = [];
     queue = new JobQueue({
       db: fromPglite(pg),
       backend: "pglite",
       // Fast maintenance so the archive/expiry machinery is observable in seconds.
       superviseIntervalSeconds: 1,
       maintenanceIntervalSeconds: 1,
+      onDeadLetter: (event) => deadLettered.push(event),
     });
     await queue.start();
   });
@@ -69,6 +72,44 @@ describe("dead-letter queues and read-only job listing", () => {
     expect(attempts).toBe(2);
     expect(dead[0].attempts).toBe(2);
     expect(dead[0].error).toContain("provider unavailable");
+  }, 40_000);
+
+  /**
+   * The hook behind `job_dead_letter_total`. pg-boss moves the job itself, asynchronously and
+   * without an event, so the only observable moment is the attempt that runs out of retries —
+   * which is exactly the moment worth counting, and exactly once.
+   */
+  it("announces the exhausting failure once, not once per attempt", async () => {
+    await queue.ensureQueueWithDeadLetter("counted", { retryLimit: 1, expireInSeconds: 5 });
+
+    let attempts = 0;
+    await queue.registerWorker<{ projectId: string }>("counted", async () => {
+      attempts += 1;
+      throw new Error("provider unavailable");
+    });
+
+    await queue.enqueue("counted", { projectId: "p1" });
+    await waitFor(async () => (await queue.listDeadLetteredForProject("p1")).length > 0, 20_000);
+
+    // Two runs happened; only the second had no retry left. Announcing both would make the
+    // dead-letter count a multiple of the retry limit, which is a worse number than none.
+    expect(attempts).toBe(2);
+    expect(deadLettered).toEqual([{ queue: "counted", jobId: expect.any(String) }]);
+  }, 40_000);
+
+  it("says nothing for a queue with no dead-letter target, because nothing is dead-lettered", async () => {
+    // `ensureQueue`, not `ensureQueueWithDeadLetter` — the job stops at `failed` and is archived
+    // away (the ADR-072 defect), so counting it as a dead letter would report recoveries that
+    // are not there to be made.
+    await queue.ensureQueue("undertaker", { retryLimit: 0, expireInSeconds: 5 });
+    await queue.registerWorker<{ projectId: string }>("undertaker", async () => {
+      throw new Error("no dlq here");
+    });
+
+    await queue.enqueue("undertaker", { projectId: "p1" });
+    await waitFor(async () => (await queue.listForProject("p1")).some((job) => job.state === "failed"), 20_000);
+
+    expect(deadLettered).toEqual([]);
   }, 40_000);
 
   it("replays a dead-lettered job back onto its original queue", async () => {

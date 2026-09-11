@@ -14,7 +14,7 @@ function buildMinimalPdf(pages: string[][]): Buffer {
   const kids = pageObjIds.map((id) => `${id} 0 R`).join(" ");
   objects[2] = `2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>\nendobj\n`;
 
-  let fontObjId = 3 + pages.length * 2;
+  const fontObjId = 3 + pages.length * 2;
   objects[fontObjId] = `${fontObjId} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`;
 
   pages.forEach((lines, i) => {
