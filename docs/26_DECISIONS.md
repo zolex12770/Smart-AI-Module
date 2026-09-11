@@ -1359,3 +1359,26 @@ Applying twice must be a no-op, because a retried deploy and two instances start
 
 **Date:** 2026-09-11
 **Impact:** `scripts/verify-migrations.sh`, `.github/workflows/ci.yml`, `.gitignore`.
+
+---
+
+## ADR-088: Symlink containment in the filesystem tools
+
+**Decision:** `resolveSandboxedPath` resolves symlinks before the containment check, by realpath-ing the deepest existing ancestor of the requested path.
+
+**What was open.** It compared `path.resolve()` output as a string. Its own docstring acknowledged it handled only "a symlink-free lexical escape" — while `docs/13_SECURITY_ARCHITECTURE.md` §11 requires "reject ... symlink escapes (resolve symlinks before the containment check)", and `packages/security/src/sandbox.ts`'s `assertContained` had been doing exactly that all along.
+
+**Two containment implementations, and the filesystem tools used the weak one** — the same shape of defect as ADR-077's two execution paths, and found by the same kind of probe rather than by reading:
+
+```
+RESULT: {"ok":true,"output":{"content":"TOP SECRET HOST FILE CONTENTS", ...}}
+```
+
+A symlink inside the workspace pointing outside it, read through the real `fs.read_file` tool. An agent can create that symlink with the write tools it already holds, or find one in a repository it was asked to work on. The write direction matters at least as much: it is how an agent following a prompt injection would modify a file on the host.
+
+**Why the deepest existing ancestor.** `realpathSync` throws on a path that does not exist, and this must also validate the destination of a write that CREATES a file. A component that does not exist cannot be a symlink, so resolving the deepest existing ancestor and re-appending the lexical tail is exactly as strong as resolving the final path, without requiring it to exist.
+
+**The lexical path is returned, not the real one.** Containment had to be checked against the real destination; the path handed back to `fs` should still be the one the caller named, so a legitimate symlink *inside* the sandbox keeps behaving like a link. The error message deliberately does not echo the resolved destination — the caller is a model, and telling it where its symlink actually pointed hands back the host path the sandbox exists to withhold.
+
+**Date:** 2026-09-11
+**Impact:** `packages/tools/src/native/sandbox-path.ts` + `symlink-containment.test.ts` (12 tests).
