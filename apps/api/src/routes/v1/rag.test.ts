@@ -246,9 +246,15 @@ describe("files (RAG ingestion) + memory routes", () => {
     });
 
     it("CORS preflight for DELETE is allowed (regression: @fastify/cors default methods excluded DELETE, ADR-031)", async () => {
-      const res = await app.inject({ headers: auth.headers, method: "OPTIONS",
+      const res = await app.inject({
+        method: "OPTIONS",
         url: "/api/v1/memory/some-id",
+        // One `headers` key, merged. There were two, and the second silently won — so
+        // `auth.headers` was dropped and this preflight was being sent unauthenticated. It
+        // passed anyway, because CORS preflight is answered before authentication runs, but the
+        // test was not exercising what it appeared to.
         headers: {
+          ...auth.headers,
           origin: "http://localhost:3000",
           "access-control-request-method": "DELETE",
         },
