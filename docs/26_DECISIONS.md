@@ -1305,3 +1305,42 @@ Validation is strict and total: a malformed script becomes a failed render sever
 
 **Date:** 2026-09-11
 **Impact:** New `packages/providers/video-replicate/*`; `apps/api/src/{config,index}.ts`, `apps/api/src/routes/v1/{images,videos}.ts`, `.env.example`.
+
+---
+
+## ADR-083: MCP over HTTP, and what a remote server may not do
+
+**Decision:** MCP servers may be stdio or HTTP (Streamable HTTP, falling back to SSE). A remote server's tools are registered **disabled**, may not take an id an existing tool already holds, and are **unregistered** when the server disconnects.
+
+**What the transport work uncovered.** `disconnect` only called `setEnabled(id, false)`. Since `ToolRegistry.register` refuses to overwrite an id and nothing could remove one, a reconnect's rediscovery failed with `Tool "..." is already registered` — so **reconnect had never worked**. `unregister` exists now, and disconnect really removes.
+
+**A remote MCP server is untrusted third-party code supplying tool DEFINITIONS.** That is a materially different trust position from a local subprocess an operator launched. Three consequences: an id collision is refused rather than resolved (a server that renames its tool to `fs.write_file` would otherwise impersonate a native one), discovered tools arrive disabled and need an explicit authenticated enable, and both the transport and any refused ids are reported on `/api/v1/mcp` so an operator can see what a server tried to claim.
+
+**Two defects review found in the first implementation, both verified before being fixed:**
+
+1. **`isLoopbackHost` used `/^127\./`** — which matches `127.0.0.1.attacker.tld`, an ordinary DNS name pointing anywhere. A config naming it over plain `http` passed the guard that refuses plaintext credentials, and the bearer token went out in clear to the attacker's server. Now parsed as a real IPv4 literal in `127.0.0.0/8`.
+2. **The SSE fallback connect was not time-boxed.** `Client.connect` awaits `transport.start()` *before* sending the timeout-bearing `initialize`, and `SSEClientTransport.start()` resolves only on the server's `endpoint` event — so a server that 405s the POST and then never emits `endpoint` left the promise pending forever. Reproduced at 5016ms against a 500ms timeout. `startAll` awaits this at boot, so one hung optional integration would have stopped the platform from starting: exactly what ADR-067 introduced the manager to prevent.
+
+**Date:** 2026-09-11
+**Impact:** `packages/mcp/src/{client,manager}.ts` + 3 new test files, `packages/tools/src/registry.ts`, `apps/api/src/routes/v1/platform.ts`, `apps/api/src/config.ts`.
+
+---
+
+## ADR-086: A lint gate that can fail
+
+**Decision:** ESLint 9 flat config at the repository root, with three type-aware rules, wired into CI.
+
+**What was there.** `npm run lint` ran `npm run lint --workspaces --if-present`, no workspace defined a `lint` script, and no linter was installed anywhere. The command ran nothing and exited 0; CI did not invoke it at all. A gate that cannot fail is not a gate — the same category of defect as a verification method that throws "not implemented" (ADR-075).
+
+**One root config, not 26 per-package scripts.** A per-package script is one a new package can forget, which is precisely the bug being fixed.
+
+**Type-aware linting is on**, scoped to three rules that share one failure mode — dropped async work: `no-floating-promises`, `await-thenable`, `no-misused-promises`. It costs 12s. Making it work was the real engineering: every workspace tsconfig excludes its own tests, so 58 files have no TS program and type-aware parsing fails on them outright. Solved with `projectService` plus an ignore list expressed **by shape** (`**/*.test.ts`, `**/*.config.ts`, `**/*-fixtures.ts`), so a new package's tests and fixtures are handled without anyone remembering to edit the config — a rule that immediately paid for itself when a third fixture builder arrived with the video provider.
+
+**Style rules were measured and rejected, with the counts recorded in the config** so nobody re-measures: `stylisticTypeChecked` (~40 hits, pure formatting), `no-base-to-string` (24 — all `String(args.path ?? "")` on the `Record<string, unknown>` a model hands a tool, where the `String()` *is* the coercion), and four others. A gate reporting a thousand formatting errors is noise everyone learns to skip.
+
+**Proof it can fail:** removing the `await` from `this.boss.start()` made eslint exit 1 on `no-floating-promises` — a defect `tsc` passes clean.
+
+**Two real bugs found on the first run**, both from ADR-082's metrics work: `observeQueueDepth` and `recordDeadLetter` were imported and never called, so `queue_depth` and `job_dead_letter_total` — one of which docs/20 §2.1 attaches an alert to — had never been emitted. Fixed by wiring them, not by deleting the imports. And a dead `setToolEnabledSchema` whose docstring claimed it hardened an endpoint against coercion; the real route and schema live elsewhere, so it was a refactor leftover taking credit for protection it did not provide.
+
+**Date:** 2026-09-11
+**Impact:** `eslint.config.mjs`, `package.json`, `.github/workflows/ci.yml`, `apps/api/src/{index.ts,routes/v1/agent.ts}`, `packages/jobs/src/queue.ts`.

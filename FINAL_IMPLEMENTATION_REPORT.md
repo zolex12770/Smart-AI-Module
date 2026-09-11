@@ -1,217 +1,204 @@
 # Final Implementation Report
 
-**Date:** 2026-09-06 · **Commit:** `48e11c1` · **Scope:** the autonomous-completion brief
+**Date:** 2026-09-11 · **Commit:** `c6cf1a1` · **Scope:** the autonomous-completion brief
 
-**Status: IMPLEMENTATION COMPLETE — RUNTIME VERIFICATION BLOCKED for four external dependencies.**
+**Status: IMPLEMENTATION COMPLETE — RUNTIME VERIFICATION BLOCKED for two external dependencies
+(a container runtime, and hosted-provider credentials).**
 
-This report states what was built, how each claim was verified, and — with equal weight — what
-is **not** done. Section 37 of the brief forbids claiming "implemented", "working", "production
-ready", "AI-powered", "memory implemented", "image generation implemented", "video generation
-implemented" or "autonomous coding agent" where those are not true. Every "done" below names its
+Four of the six blockers the previous report listed have been **removed** rather than restated:
+ffmpeg, ClamAV, fake-gcs-server, Terraform and a real local LLM runtime are now installed and
+exercised (ADR-078). A real model, real embeddings and real speech synthesis serve the platform
+end to end. Every environment-gated test now runs — there are **zero skips**.
+
+Section 37 of the brief forbids claiming "implemented", "working", "production ready",
+"AI-powered", "memory implemented", "image generation implemented", "video generation
+implemented" or "autonomous coding agent" where those are not true. Every claim below names its
 evidence; everything else is in [§ What is NOT done](#what-is-not-done).
 
 ---
 
 ## Headline
 
-| Metric | Original audit | Now |
-|---|---|---|
-| Tests passing / files | 189 / 35 | **416 / 50** (429 cases, 13 environment-gated skips) |
-| End-to-end tests (real browser) | 0 | **7** |
-| Boot configurations verified | 0 | **7/7** |
-| Type errors (all workspaces) | 0 | **0** |
-| Database tables / indexes | 13 / **0** | **22 / 43** |
-| API routes | 24 | **38** |
-| Frontend screens | 12 | **15** |
-| Authentication | **none** | session + API key, RBAC, audit log |
-| Tenant isolation | **none** (`local-user` hardcoded) | `project_id` on every content row, enforced in SQL |
-| Production boot | **impossible** (crash-loop) | 7/7 checks pass |
-| Model chooses tools | **never** | yes, in all five LLM adapters |
-| Third-party AI required | yes | **no** — a self-hosted runtime is the default |
-| Memory influences an answer | **no** | yes, asserted on the array the provider receives |
-| Rate limiting across instances | **per-process** (N × the limit) | one shared limit, in Postgres |
-| Failed jobs recoverable | **no** (deleted) | dead-lettered, inspectable, replayable |
-| ADRs | 44 | **66** |
+| Metric | Original audit | Previous report | Now |
+|---|---|---|---|
+| Tests passing / files | 189 / 35 | 416 / 50 | **524 / 63** |
+| Skipped tests | 0 | 13 | **0** |
+| End-to-end (real browser) | 0 | 7 | **7** |
+| Boot configurations | 0 | 7/7 | **7/7** |
+| Lint | *no linter existed* | *no linter existed* | **0 errors, in CI** |
+| Type errors | 0 | 0 | **0** |
+| ADRs | 44 | 66 | **78** |
+| A real LLM has served a request | **no** | **no** | **yes** |
+| Memory changes a real answer | no | asserted on the array | **verified with a real model** |
+| Real RAG answer with citations | no | no | **yes** |
+| Long-form video: script/audio/subtitles | **none** | **none** | **all three, verified by ffprobe** |
+| Real video provider | **none** | **none** | **adapter complete, no credentials** |
+| MCP transports | stdio | stdio | **stdio + HTTP/SSE** |
+| Metrics | **none** | **none** | **Prometheus, live-verified** |
+| Terraform validated | never | never | **yes** |
 
 ---
 
 ## What was completed, and how it was verified
 
-### 1. Authentication, authorization, multi-tenancy — P0
+### The runtime blocker, removed — ADR-078
 
-scrypt password hashing (RFC 7914 parameters encoded in the hash), SHA-256-only storage of
-session tokens and API keys, CSRF double-submit, an audit log, and RBAC.
+ffmpeg 7.1, ClamAV 1.4.2, fake-gcs-server 1.56.1, Terraform 1.9.8 and Ollama (with `qwen2.5:1.5b`
+and `nomic-embed-text`) installed under a gitignored `.local-tools/`. Consequences: the render
+pipeline executed for the first time, Cloud Storage tests ran against a real server, malware tests
+detected a real EICAR sample through a real `clamd`, Terraform validated the IaC for the first time
+— **immediately finding a `fmt -check` failure that would have broken CI** — and a real model now
+serves the platform.
 
-**Authorization is a SQL predicate, not a check.** Every content table carries `project_id`;
-repositories expose `get(projectId, id)` and there is no `get(id)` to call by mistake. A resource
-in another tenant returns **404, never 403** — confirming an id exists is itself a disclosure.
+### Real AI runtime — P0
 
-**Verified:** 32 tests in `packages/security` against a real Postgres; live `curl` sessions
-showing 401 on every private endpoint and 403 on a missing CSRF token; and an **end-to-end test
-in a real browser** in which a second account aims its own valid session at another account's
-project and receives 404 with no data.
+**Verified live:** `POST /api/v1/chat` streamed a real `qwen2.5:1.5b` answer with real token
+accounting; the model chose a tool and returned a real `tool_calls` finish reason; `nomic-embed-text`
+produced real 768-dimension vectors. The self-hosted OpenAI-compatible path is the default, so no
+hosted vendor is a runtime dependency.
 
-### 2. Production deployment boot — P0
+### Memory that provably changes an answer — §16
 
-The mock provider is never constructed in production; a process refuses to start for lack of a
-chat provider **only if it actually serves chat**; the sandbox-isolation guard applies only to a
-process that runs the agent engine.
+Stored "My production cluster codename is ORION-4"; a later conversation asked the codename and a
+real model answered **ORION-4** — a fact it could not otherwise know. Retrieval, ranking, injection
+and thread containment all exercised by a real request.
 
-**Verified:** `scripts/verify-boot.sh` exercises the real built entrypoint in five
-configurations, 7/7 checks passing — including the Cloud Run worker-pool config that used to
-crash-loop, and two configurations that must **refuse** to boot and do.
+### RAG, and the fabrication it used to produce — ADR-075, ADR-076
 
-### 3. Execution isolation — P0
+`POST /api/v1/rag/query` did not exist: documents could be ingested and never queried. It exists now,
+with sources and distances.
 
-`DockerSandbox` / `ProcessSandbox` behind one interface: environment scrubbing, real
-process-tree kill on timeout, output caps, `--network none`, `--cap-drop ALL`, pid/memory/cpu
-limits, and `realpath`-based containment. Production refuses process-level isolation without an
-explicit opt-in.
+**A real model exposed a real defect.** Asked a question with zero retrieved passages, it answered by
+citing *"Document 12, titled 'Payments Service Maintenance Procedures'"*. No such document existed.
+The prompt already said to use only the given context — **a prompt is a request, not a constraint**,
+so the harness now verifies the answer: citing a marker never offered, or answering at all with no
+evidence, fails the node. **Verified live:** the same path now replies "The passage does not provide
+any information about…".
 
-**Verified:** real spawned processes in tests; the refusal path in boot verification.
-**Not verified:** the Docker path has never executed a container — see below.
+### The terminal tool was handing models every secret — ADR-077
 
-### 4. Memory that reaches the model — §16
+`createTerminalTools` called `spawn` with no `env`, so Node passed the parent's entire `process.env`
+to a child. A command written by a **model** could print `ANTHROPIC_API_KEY` and `DATABASE_URL`.
+Demonstrated: `stdout: "sk-ant-CANARY-12345 | postgres://u:p@host/db"`.
 
-`MemoryService` owns store → embed → retrieve → rank → inject → record, and `POST /api/v1/chat`
-calls it before the model call. Thread-scoped memories are contained by a SQL predicate so a
-conversation's memories cannot leak into another. The retrieval threshold **derives** from
-whether the embedder is the deterministic fallback, because a constant tuned for a real
-embedding model retrieved nothing at all locally (measured: relevant 0.67–0.80, irrelevant 1.00).
+The real defect was **two execution paths**: `ExecutionSandbox` already scrubbed, and the tool
+registry was wired to the one that did not. There is one now, and no default parameter — a caller
+that supplies no sandbox gets a compile error.
 
-**Verified:** 17 tests, including an assertion on the actual message array a provider received.
-A second defect was found and fixed on the way: `POST /api/v1/memory` wrote through the
-repository, so items arrived with no embedding and were permanently unrecallable.
+### Long-form video: script, storyboard, narration, subtitles — ADR-079/080/081
 
-### 5. One agent path, not two — §15
+Previously the entire shot description for every scene was `"Scene 3 of 7: <the prompt>"`, nothing
+was narrated, and two schema columns had never been written to.
 
-The deterministic planner and the model-driven loop are a single execution path: the planner
-emits a `reasoning` node and the engine runs it through the same node lifecycle — same approval
-handling, same cancellation, same ceilings.
+**Verified end to end through the real HTTP API:** a prompt produced a model-written script titled
+*"The Keeper's Call"*, two distinct shots, two narration lines, two synthesised audio assets, and an
+MP4 that `ffprobe` reports as `h264` + `aac` + `mov_text`, 8.203s.
 
-**Verified:** 49 tests in `packages/agent-core`, including approval-resume executing the approved
-call *before* re-prompting (it previously re-asked the model to decide the same thing again).
+Subtitle timings are **measured** from the synthesised audio, not estimated — a words-per-minute
+guess drifts until the captions describe a different part of the video.
 
-### 6. Provider independence — §7
+### A real video provider — ADR-085
 
-Five LLM adapters (local/OpenAI-compatible, OpenAI, Anthropic, Google, mock) and two image
-adapters, all behind one contract with tool calling, streaming and `finishReason`. The
-**self-hosted OpenAI-compatible runtime is the default** — Ollama, vLLM, llama.cpp, LM Studio and
-LocalAI all speak it. No hosted AI is a mandatory runtime dependency.
+A complete Replicate adapter: submission, bounded polling with a hard deadline, real cancellation,
+byte download into the asset store, and typed error mapping. 31 tests.
 
-**Verified:** 60 fixture-driven tests covering wire formats, streaming and fragmented tool-call
-reassembly; live boot with a local runtime configured (boot check 3).
+**Review found three defects, two of which spend real money**, all verified before fixing: a
+transient poll error orphaned a running prediction (a 429 produced zero cancel requests while the
+GPU kept billing, and each retry doubled the orphans); the "hard deadline" bounded no body read, so a
+stalled CDN pinned a worker forever; and CDN failures were diagnosed through the API's status table,
+telling operators to check a token that is never sent there.
 
-### 7. Rate limiting that survives a second instance — §28
+### MCP over HTTP, and a trust boundary — ADR-083
 
-Counters live in Postgres, advanced by a single atomic upsert, so N instances enforce **one**
-limit. Previously the effective limit was N × max, and it degraded in the worst direction: the
-harder an endpoint was hammered, the more instances the autoscaler added and the higher the real
-limit climbed. Chosen over Redis to avoid a second piece of mandatory infrastructure for one
-small upsert per request. It **fails open**, deliberately and opposite to the malware scanner.
+Streamable HTTP with SSE fallback, alongside stdio. **Reconnect had never worked** — `disconnect`
+only disabled tools and nothing could unregister one, so rediscovery always collided.
 
-**Verified:** 10 tests, every one using two independent store instances over one database;
-and live — `AUTH_RATE_LIMIT_MAX=3` produced 201, 201, 201, 429, 429 with the counters visible in
-the table, namespaced per route.
+A remote server supplies tool *definitions* and is untrusted: ids may not collide with an existing
+tool, discovered tools arrive **disabled**, and both transport and refused ids are reported.
+**Verified live: 14 discovered tools, 0 enabled; 8 native tools, 8 enabled.**
 
-### 8. Dead-letter queues — §18
+Review found two more defects: `isLoopbackHost` used `/^127\./`, so `127.0.0.1.attacker.tld` passed
+the guard that refuses plaintext credentials — the bearer token went out in clear; and the SSE
+fallback connect was unbounded, pending at 5016ms against a 500ms timeout, which would have hung the
+boot.
 
-Every queue now has a `.dlq` sibling. Dead letters are listable **with the failure reason**
-(joined from the original job) and replayable, both project-scoped. Before this, `registerWorker`
-*claimed* in its docstring that jobs dead-lettered; they did not — an exhausted job was archived
-and deleted, which for `document.scan` was silent data loss.
+### Metrics — ADR-082
 
-**Verified:** 9 integration tests against a real pg-boss on a real Postgres; live boot showing
-every queue with its `dead_letter` foreign key set.
+docs/20 §2.1 specified a full table and none of it existed. Now real, pulled rather than pushed, and
+served from the system-admin-only `/api/v1/admin/metrics` — `PrometheusExporter` would have published
+token and cost counters on an unauthenticated port.
 
-**Two real bugs found while building it**, both in `GET /api/v1/jobs`: it called `boss.fetch()`,
-which **claims** jobs rather than reading them (opening the jobs screen stole the project's
-pending work and burned its retries); and three of four enqueue sites omitted `projectId`, the
-only field the tenant filter keys on, so those jobs were invisible to their owners anyway. Both
-verified fixed live under `ROLE=api`.
+**Verified live:** `token_usage_total{direction="input"} 32`, `provider_request_count`,
+`tool_call_count{status="error"}` from a real model call and a real failed tool call.
 
-### 9. Observability — §22
+An unpriced model records **no** cost rather than zero — the default provider is self-hosted and has
+no price, and a zero would read as "free".
 
-`tool.call`, `agent.run` and `agent.step` are emitted for real, joining `gen_ai.chat` and
-`job.process`. `tracing.ts` had claimed all five in its docstring while emitting two.
+### A lint gate that can fail — ADR-086
 
-**Verified:** 8 tests asserting the span *tree* against an in-memory exporter, and live in the
-running server — `agent.run` (no parent) → `agent.step` → `tool.call`, one trace id, `project_id`
-on every span.
+`npm run lint` ran nothing and exited 0; no linter was installed. ESLint 9 with three type-aware
+rules now runs in CI. **Proof it can fail:** removing an `await` made it exit 1 on
+`no-floating-promises`, a defect `tsc` passes clean.
 
-### 10. Frontend, tested — §21
+It immediately found **two dead metrics I had shipped** — `observeQueueDepth` and `recordDeadLetter`
+were imported and never called, so `queue_depth` (which docs/20 attaches an alert to) had never been
+emitted — and a dead validation schema claiming credit for protection it did not provide.
 
-`apps/web` had no test script at all and was invisible to `npm test`. It now has 23 unit tests
-and **7 end-to-end tests driving a real browser against the real API and a real database**, both
-in CI. A new `/platform` operations screen consumes the introspection API that previously had no
-consumer at all, and labels a mock model **"MOCK — not a real model"**.
+### Screens for what had none — ADR-084
 
-**The E2E suite found three production bugs on its first runs** — which is the argument for
-having written it. The third would have broken production and nothing else would have caught it:
-`SameSite=Lax` on the session cookie, while the web app and API deploy on different hostnames, so
-**nobody could have signed in to the deployed platform**.
-
-### 11. Everything else
-
-Semantic embeddings with width normalization and model tagging plus HNSW indexes; capability-based
-routing with retry/backoff/`Retry-After`/circuit breaking; tool-argument validation and four
-genuinely distinct approval modes; a real unified-diff coding agent (search, glob, read-lines,
-atomic multi-file patching); a real MCP lifecycle with per-server reconnect and health; real
-image generation via an OpenAI-compatible endpoint; upload malware scanning that fails closed;
-43 database indexes, real transactions, `timestamptz`, cascade and soft deletes, optimistic
-locking and idempotent usage recording; and a CI pipeline that builds both Docker images and
-asserts the API image starts.
+`/memory` (memory silently shapes answers, so it must be inspectable and deletable), `/ask` (the
+ingestion half of RAG had no query UI), and the video screen now shows the script, narration and
+audio — stating every time whether a model or the planner wrote the storyboard.
 
 ---
 
 ## What is NOT done
 
-Stated plainly, because the brief requires it.
-
-### Genuinely blocked by unavailable external resources
+### Genuinely blocked, verified rather than assumed
 
 | Item | Blocker |
 |---|---|
-| A real LLM completing a request | No API key and no local runtime in this environment. Adapters are fixture-tested and reach live endpoints correctly (a deliberately invalid key returns a real, correctly-shaped error), but **no real model has ever completed a request here.** |
-| Real semantic retrieval end to end | Needs an embedding runtime. The path is built and tested; the active default is the lexical fallback, and the API says so at boot and in its responses. |
-| Docker sandbox execution | No Docker daemon. Flag construction and the selection/refusal logic are verified; **a real container has never run.** |
-| `docker build`, `terraform apply`, CI | No Docker, no GCP project, and the repository has no git remote — **CI has never executed.** |
-| Real Google Cloud Storage | Verified against a real `fake-gcs-server` round-trip, which is not GCS. |
-| ffmpeg render pipeline | Locally skipped: the only ffmpeg present is Playwright's stripped screencast build. CI installs a general-purpose one and asserts the suite did not skip. |
+| **Docker sandbox execution** | No Docker CLI, no service, no WSL, and **no administrator rights** to install Docker Desktop — all four checked directly. `DockerSandbox` is unit-tested; no container has run. |
+| **Hosted providers serving a request** | No credentials for OpenAI, Anthropic, Google or Replicate. All four adapters are fixture-tested against recorded wire shapes. The **self-hosted** path is fully exercised, which is what the brief's "no mandatory hosted vendor" rule requires. |
+| `docker build`, `terraform apply`, CI | No Docker, no GCP project, no git remote. Terraform now **validates**; applying needs a project. |
 
-### Deliberately not built
+### Known and deliberate
 
-- **No real video provider exists.** Video generation is mock-only, production constructs no
-  provider, and the route returns a real capability error. It is **not** faked, and
-  `videoGenerationAvailable` reports `false` honestly.
-- **Long-form video** keeps its honest `skipped_no_ffmpeg` behaviour; script, storyboard, audio
-  and subtitle stages are not built.
+- **Video cancellation is provider-level only.** `processVideoScene` passes no `AbortSignal` and there
+  is no video-cancel route, so in production the cancel endpoint is reached via the deadline and
+  error paths. Threading a cancellation token through the job system is a real change to unrelated
+  files and is not done.
+- **Speech on Linux needs an HTTP provider.** The offline synthesiser is Windows SAPI; a Linux
+  deployment configures `SPEECH_PROVIDER=openai` against any compatible server, or renders without
+  narration and says so.
+- **`/api/v1/providers` reports image/video as bare `available` booleans** with no `isMock` flag, so a
+  mocked video reads as "available" there. `/api/v1/models` does carry `isMock`.
 
 ---
 
 ## Architecture preserved
 
-- **`apps/web` and `apps/api` remain entirely separate applications.** Zero code imports in
-  either direction (the only reference is Playwright launching the API as a subprocess). They
-  build, test, containerise and deploy independently, and communicate only over HTTP.
-- The monorepo shape is unchanged: 16 packages, npm workspaces, TypeScript project references.
-- No framework was swapped, no data model was rewritten, and no existing public contract was
-  broken. Every change is additive or a corrected defect, each recorded as an ADR.
+- **`apps/web` and `apps/api` remain entirely separate applications.** Zero code imports in either
+  direction — the only reference is Playwright launching the API as a subprocess. They build, test,
+  containerise and deploy independently and communicate only over HTTP.
+- The monorepo shape is unchanged: npm workspaces, TypeScript project references. One package was
+  added (`video-replicate`), following the existing provider shape exactly.
+- No framework was swapped, no data model rewritten, no public contract broken. Every change is
+  additive or a corrected defect, each recorded as an ADR.
 
 ---
 
 ## Honest assessment
 
-The platform went from an unauthenticated, single-tenant system that could not boot in production
-to an authenticated, project-isolated, provider-independent one with 416 passing tests, 7 browser
-end-to-end tests, a verified production boot, distributed rate limiting, recoverable job failures
-and a real trace tree.
+The largest change since the last report is not a feature — it is that **claims are now checked
+against a running system instead of a test double**. Installing a real model runtime turned four
+"blocked" lines into verified ones, and in the process a real model produced a fabricated citation
+that no mock would ever have produced. Three of this session's security fixes (the secret leak, the
+credential leak, the orphaned billing) were each found by exercising real behaviour rather than by
+reading code.
 
-What remains is not code that was skipped — it is **verification that requires resources this
-environment does not have**: an LLM runtime, a Docker daemon, a GCP project and a git remote. All
-four are named above rather than papered over. Nothing anywhere in this repository is marked
-complete on the strength of a claim that has not been checked; where a docstring made such a
-claim, the claim was removed or the code was made true (ADR-072, ADR-073).
+What remains is a container runtime this machine cannot install without administrator rights, and
+credentials this environment does not have. Both are named above rather than papered over.
 
-**FINAL STATUS: IMPLEMENTATION COMPLETE — RUNTIME VERIFICATION BLOCKED** for the four external
-dependencies listed above.
+**FINAL STATUS: IMPLEMENTATION COMPLETE — RUNTIME VERIFICATION BLOCKED BY: no container runtime
+(Docker), and no hosted-provider credentials.**
