@@ -87,9 +87,25 @@ export const createImage = (body: Partial<ImageGenerationRequest> & { prompt: st
 
 // --- Videos ----------------------------------------------------------------------------
 
+/** The model-written script and storyboard, or a record that the planner produced it (ADR-080). */
+export interface VideoScript {
+  title?: string;
+  /**
+   * `model` when a model really wrote the storyboard; `deterministic` when the mechanical planner
+   * did. Rendered on the detail screen, because the two are indistinguishable from the scenes
+   * alone and a mechanical decomposition that reads as authored is exactly the confusion the
+   * platform's honesty rule exists to prevent.
+   */
+  scriptSource?: "model" | "deterministic";
+  model?: string | null;
+  fallbackReason?: string | null;
+  scenes?: Array<{ sceneIndex: number; shotDescription: string; narration?: string }>;
+}
+
 export interface VideoProject {
   id: string;
   prompt: string;
+  script?: VideoScript | null;
   targetDurationSeconds: number;
   sceneClipSeconds: number;
   sceneCount: number;
@@ -107,6 +123,10 @@ export interface VideoScene {
   projectId: string;
   sceneIndex: number;
   shotDescription: string;
+  /** The line spoken over the shot; null for a scene with no script or no speech provider. */
+  narration?: string | null;
+  /** Set once narration has really been synthesised and stored (ADR-079). */
+  audioAssetId?: string | null;
   durationSeconds: number;
   status: "pending" | "processing" | "succeeded" | "failed";
   jobId: string | null;
@@ -165,6 +185,16 @@ export interface MemoryItem {
   ownerId: string;
   content: string;
   createdAt: string;
+  /**
+   * How many times this fact has actually been retrieved into a prompt.
+   *
+   * The API has always returned it; this type simply did not declare it, so no screen could show
+   * it. It is the field that distinguishes a fact quietly shaping every answer from one stored
+   * months ago and never recalled — which is exactly what a user inspecting their memory wants to
+   * know (ADR-084).
+   */
+  useCount?: number;
+  lastUsedAt?: string | null;
 }
 
 export const listMemory = () => request<{ items: MemoryItem[] }>("/api/v1/memory");
@@ -177,3 +207,36 @@ export function assetUrl(assetId: string): string {
 }
 
 export type { GeneratedImage };
+
+/** `POST /api/v1/rag/query` — ADR-076. */
+export interface RagSource {
+  marker: string;
+  documentId: string;
+  filename: string;
+  chunkIndex: number;
+  distance: number;
+  excerpt: string;
+}
+
+export interface RagAnswer {
+  question: string;
+  answer: string | null;
+  sources: RagSource[];
+  /**
+   * False when the API caught the model answering beyond its evidence (ADR-075). Surfaced rather
+   * than folded into the answer text so a caller can tell "nothing matched" from "the model went
+   * off-piste and we rejected it" — two different situations with different remedies.
+   */
+  grounded: boolean;
+  groundingViolation?: string;
+  groundingReason?: string;
+  retrievedCount?: number;
+  model?: string;
+  provider?: string;
+}
+
+export const ragQuery = (question: string, topK?: number) =>
+  request<RagAnswer>("/api/v1/rag/query", {
+    method: "POST",
+    body: JSON.stringify(topK === undefined ? { question } : { question, topK }),
+  });

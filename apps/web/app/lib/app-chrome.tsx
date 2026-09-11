@@ -10,6 +10,10 @@ const NAV_LINKS = [
   { href: "/images", label: "Images" },
   { href: "/videos", label: "Videos" },
   { href: "/files", label: "Files" },
+  // ADR-084: the ingestion half of RAG had no way to be queried from the UI at all.
+  { href: "/ask", label: "Ask" },
+  // ADR-084: memory silently shapes model answers, so it must be inspectable and deletable.
+  { href: "/memory", label: "Memory" },
   { href: "/usage", label: "Usage" },
   // ADR-074: models, tools, MCP, jobs and dead letters — the ADR-066 API had no consumer.
   { href: "/platform", label: "Platform" },

@@ -58,6 +58,27 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
         </div>
       </div>
 
+      {project.script ? (
+        <div className="card">
+          <strong>Script</strong>
+          <p style={{ marginTop: 8 }}>{project.script.title ?? "Untitled"}</p>
+          {/*
+            The most important line on this screen. A storyboard produced by the mechanical
+            planner looks exactly like an authored one from the scene list alone, and presenting
+            the former as a script would be the kind of fake completion the platform refuses
+            (ADR-080). So it says which, every time.
+          */}
+          {project.script.scriptSource === "model" ? (
+            <p className="page-subtitle">Written by {project.script.model ?? "a model"}.</p>
+          ) : (
+            <p className="page-subtitle">
+              No script was written — the scenes come from the deterministic planner.
+              {project.script.fallbackReason ? ` ${project.script.fallbackReason}` : ""}
+            </p>
+          )}
+        </div>
+      ) : null}
+
       <div className="card">
         <strong>Final render</strong>
         {project.renderStatus === "succeeded" && project.renderAssetId ? (
@@ -85,6 +106,19 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
               <p className="page-subtitle" style={{ marginTop: 6 }}>
                 Scene {scene.sceneIndex + 1} · {scene.durationSeconds}s
               </p>
+              {scene.narration ? (
+                <>
+                  <p style={{ marginTop: 6, fontStyle: "italic" }}>&ldquo;{scene.narration}&rdquo;</p>
+                  {scene.audioAssetId ? (
+                    // The real synthesised narration, playable. Its presence is also the only
+                    // way to tell a scene that WAS narrated from one whose synthesis failed and
+                    // was degraded to silent (ADR-079) — the line is written either way.
+                    <audio src={assetUrl(scene.audioAssetId)} controls style={{ width: "100%", marginTop: 4 }} />
+                  ) : (
+                    <p className="page-subtitle">No audio — narration was not synthesised for this scene.</p>
+                  )}
+                </>
+              ) : null}
               <StatusBadge status={scene.status} />
               {scene.lastError && <p className="error-text">{scene.lastError}</p>}
             </div>
