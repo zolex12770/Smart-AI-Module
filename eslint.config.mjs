@@ -91,8 +91,12 @@ export default tseslint.config(
       "**/*.test.ts",
       "**/*.test.tsx",
       "**/*.config.ts",
+      // Test-fixture builders are excluded from their package's tsconfig for the same reason
+      // tests are, so they need the same treatment. By shape, not by path: a third one
+      // (video-replicate's mp4-fixtures.ts) appeared within a day of the first two being listed
+      // individually, and the next package to add one should not have to find this file.
+      "**/*-fixtures.ts",
       "apps/api/src/test-app.ts",
-      "packages/rag/src/parsers/zip-fixtures.ts",
     ],
     languageOptions: {
       // `projectService` instead of an explicit `project` list: it follows each file to its
