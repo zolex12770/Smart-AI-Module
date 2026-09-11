@@ -1130,3 +1130,156 @@ The most important cell on the page reads **"MOCK — not a real model"**, and t
 
 **Date:** 2026-09-06
 **Impact:** `apps/web/app/platform/page.tsx`, `apps/web/app/lib/app-chrome.tsx`, `apps/web/e2e/auth-and-isolation.spec.ts`, `apps/web/package.json`.
+
+---
+
+## ADR-075: Grounding is verified, not requested
+
+**Decision:** A model's RAG answer is checked against the passages retrieval actually returned. Citing a marker that was never offered, or answering substantively when nothing was retrieved, fails the node.
+
+**What was wrong, in the model's own words.** `buildRagContext` already returned a sentence when nothing matched, with a comment explaining that an empty string "would leave the model to fill the silence, which is how 'no relevant documents' turns into an invented answer". That reasoning was right and the mitigation was not enough. Run against a REAL model (qwen2.5 on a local runtime) with zero retrieved passages, the pipeline produced:
+
+> "The rollback procedure ... is mentioned in Document 12, which is titled 'Payments Service Maintenance Procedures.' According to Document 12, ..."
+
+There was no Document 12. There were no documents at all. The prompt had already instructed the model to use only the given context.
+
+**A prompt is a request, not a constraint.** Only the harness can refuse, so the harness checks the answer instead of trusting the instruction. Two mechanical, certain checks: answering with no evidence, and citing a marker that was never offered. Deliberately NOT a faithfulness judgement — that needs a second model and is a weaker kind of evidence.
+
+An honest refusal must pass, or the plan is trained away from the only truthful answer available.
+
+**Date:** 2026-09-11
+**Impact:** `packages/rag/src/grounding.ts`, `packages/agent-core/src/{verify,planner}.ts`, `packages/shared/src/task-graph.ts`.
+
+---
+
+## ADR-076: A RAG query endpoint
+
+**Decision:** `POST /api/v1/rag/query` answers a question over the project's documents, with sources, and enforces grounding.
+
+**What was missing.** Documents could be uploaded, scanned, parsed, chunked, embedded and indexed — and there was no way to ASK anything of them. Retrieval existed only inside the agent's `answer_from_documents` task type, so a caller wanting an answer had to create a task, poll a task graph and dig the content out of a node's output, for what is a single request/response question. The entire ingestion half of RAG had no consumer.
+
+**`retrieveOnly`** exists because a UI that renders its own source list should not have to pay for a model call to get one.
+
+**Zero passages means no model call at all** — deterministic, and it cannot fabricate.
+
+**Date:** 2026-09-11
+**Impact:** `apps/api/src/routes/v1/rag.ts`.
+
+---
+
+## ADR-077: One execution path, because the other one leaked every secret
+
+**Decision:** `createTerminalTools` takes an `ExecutionSandbox` as a required parameter and delegates to it. The bare `spawn` is gone.
+
+**What was wrong.** It called `spawn(command, args, { cwd, shell: false })`. Node passes the parent's entire `process.env` to a child when no `env` is given, so a command authored by a MODEL — the only kind this tool ever runs — could read every provider key and the database URL by printing them. Demonstrated against this exact code path:
+
+> `stdout: "sk-ant-CANARY-12345 | postgres://u:p@host/db"`
+
+**The real defect was two execution paths.** `ExecutionSandbox` already built a child environment from scratch and never inherited the parent's (ADR-055). The terminal tool simply did not use it, and the tool registry was wired to the unhardened one. `SECURITY.md` had claimed "environment scrubbing" throughout — true of the path nothing called.
+
+**No default parameter.** A caller that supplies no sandbox gets a compile error, not a quiet fallback — that fallback is the bug.
+
+Delegating also picks up output caps, a real timeout, process-tree termination and container isolation for free. A timeout or cancellation is now a tool FAILURE, not an exit code: a model told "exit code 1" concludes the tests failed and starts fixing code that never ran.
+
+**Date:** 2026-09-11
+**Impact:** `packages/tools/src/native/terminal.ts`, `apps/api/src/index.ts`.
+
+---
+
+## ADR-078: A local verification toolchain, gitignored
+
+**Decision:** ffmpeg, Ollama (with a real model), Terraform, fake-gcs-server and ClamAV are installed under `.local-tools/`, which is gitignored.
+
+**Why it matters more than it sounds.** Every one of these was previously recorded as an environment blocker, and each blocked a real verification rather than a feature. With them present: the ffmpeg render tests execute for the first time, the Cloud Storage tests run against a real server, the malware tests detect a real EICAR sample through a real `clamd`, Terraform validates the IaC for the first time (and immediately found a `fmt -check` failure that would have broken CI), and — the largest one — a real LLM and a real embedding model serve the platform end to end.
+
+Gitignored because they are binaries, not source. The commands that install them are recorded in the report so the setup is reproducible.
+
+**Date:** 2026-09-11
+**Impact:** `.gitignore`, `infrastructure/terraform/main.tf` (the formatting fix).
+
+---
+
+## ADR-079: Narration, with no silent fallback
+
+**Decision:** A `SpeechProvider` abstraction with two real implementations — any server speaking OpenAI's `/v1/audio/speech`, and the operating system's own offline synthesiser via Windows SAPI. No speech provider means no audio track, reported as `skipped_no_narration`.
+
+**Why an abstraction.** The two realistic sources are not alike: an HTTP service (OpenAI, or self-hosted Kokoro-FastAPI / openedai-speech / LocalAI) and the OS synthesiser, which needs no server, no model download and no network. A platform whose promise is "no mandatory hosted AI" cannot make the hosted one the only option.
+
+**What is deliberately absent** is a third implementation that emits silence. Substituting silence for a voice-over is a fake success an operator cannot detect — the same reasoning as `skipped_no_ffmpeg`.
+
+A failed synthesis degrades the scene to silent rather than failing it: the clip is real and already paid for.
+
+**SAPI takes its text as a base64 environment variable**, never interpolated into the PowerShell command. That text is narration a model wrote from a user's prompt; interpolating it is command injection with extra steps, and a quote plus a semicolon would be enough.
+
+**Date:** 2026-09-11
+**Impact:** `packages/media/src/speech.ts`, `apps/api/src/{config,context,index}.ts`, `packages/media/src/video-orchestration.ts`.
+
+---
+
+## ADR-080: A script stage that actually writes a script
+
+**Decision:** A model writes the storyboard — one distinct shot description per scene plus the line spoken over it. The deterministic planner remains as a fallback, and the project records which produced it.
+
+**What was there.** `planScenes` produced, as the ENTIRE shot description for every scene, the string `"Scene 3 of 7: <the user's prompt>"`. Its docstring said so honestly and called itself a stand-in. The consequence was that every scene asked the video provider for the same picture and nothing was ever narrated — while `video_scenes.narration` and `video_scenes.audio_asset_id` had existed as columns since ADR-030 with nothing ever writing to them.
+
+**Durations come from the REQUEST, never the model.** Letting a model choose them would let it silently change the length and cost of the render it was asked for.
+
+**`scriptSource` is the point of the whole ADR.** From the scene rows alone, a mechanical decomposition and an authored storyboard are indistinguishable, and one that reads as authored is exactly the kind of fake completion this platform refuses. The field is persisted, returned by the API and rendered on the screen.
+
+Validation is strict and total: a malformed script becomes a failed render several minutes and several provider calls later, so rejecting it costs one retry.
+
+**Date:** 2026-09-11
+**Impact:** `packages/media/src/video-script.ts`, `packages/media/src/video-orchestration.ts`, `packages/database/src/repositories/video-project-repository.ts`, `apps/api/src/routes/v1/videos.ts`.
+
+---
+
+## ADR-081: Subtitles timed from measured audio
+
+**Decision:** Cue timings are measured from the synthesised narration with `ffprobe`. SRT muxes into the MP4 as a real `mov_text` track; WebVTT ships as a sidecar.
+
+**Why not estimate.** The obvious implementation guesses each cue's length from a words-per-minute constant. That drifts — voice, requested rate and sentence length all vary — and the error accumulates across scenes until the captions describe a different part of the video. The narration is a real file the pipeline just produced, so its duration can simply be read.
+
+**A cue ends when the SPEECH ends**, not when the shot does: a caption left on screen through seconds of silence reads as a stuck player.
+
+**A failed probe degrades to the planned duration** rather than failing the render — a worse subtitle track is not a reason to throw away a finished video.
+
+**Verified by `ffprobe` on the real output**, not by asserting which ffmpeg arguments were used: an argument assertion passes against a build that writes an unplayable file, which is the failure that matters. One test specifically proves the timings are measured, using two narrations of very different lengths.
+
+**Date:** 2026-09-11
+**Impact:** `packages/media/src/subtitles.ts`, `packages/media/src/video-render.ts`.
+
+---
+
+## ADR-082: Metrics, pulled rather than pushed
+
+**Decision:** OpenTelemetry metrics with an on-demand reader, serialised to Prometheus text and served from the system-admin-only `/api/v1/admin/metrics`.
+
+**What was missing.** docs/20 §2.1 has specified a full metrics table since the project began — request rate and duration, provider latency and error rate segmented by type, token and cost counters, queue depth and dead letters, agent iterations, tool failures, media job duration — and not one of them existed. The platform had structured logs and, since ADR-073, a real trace tree. Neither answers the operational question: a trace says what happened in THIS request, and only a metric says whether the error rate is climbing.
+
+**Pull, not push.** A `PeriodicExportingMetricReader` aimed at a Collector that does not exist drops every point silently — the same constraint ADR-036 recorded for tracing. A pull reader can be verified by looking at it.
+
+**Not on its own port.** `PrometheusExporter` starts an unauthenticated server on :9464. These metrics carry token and cost counters, so that would publish spend to anyone who can reach the port.
+
+**Cardinality is a design constraint.** The recorders are named functions rather than exported instruments, so a call site cannot invent a label set. The HTTP metric labels by route PATTERN, never resolved URL; an unmatched request is bucketed as `unmatched`. `project_id` is absent everywhere — per-tenant spend is answerable exactly from the `usage_records` ledger, which is the right tool for a number that must be correct rather than approximate.
+
+**An unpriced model records NO cost**, not zero — ADR-046's rule carried into metrics. The default provider is the self-hosted runtime, which has no researched price, and a zero would read as "free".
+
+**Two bugs in this module, found by a test that restarts the provider** — which is what a worker restart does: the instrument cache outlived the provider, and `setGlobalMeterProvider` is a no-op once a global is set. Both produce a scrape saying "no registered metrics" while the code reads as working.
+
+**Date:** 2026-09-11
+**Impact:** `packages/observability/src/metrics.ts`, `apps/api/src/{index,server}.ts`, `apps/api/src/routes/v1/platform.ts`, `packages/tools/src/registry.ts`, `apps/api/src/routes/v1/chat.ts`, `packages/jobs/src/queue.ts`.
+
+---
+
+## ADR-084: Screens for memory, document Q&A, and the script
+
+**Decision:** `/memory` and `/ask` exist, and the video detail screen shows the script, the narration and the synthesised audio.
+
+**Memory needed a screen more than most endpoints do.** `listMemory`/`addMemory`/`deleteMemory` had existed in the API client with nothing rendering them. Memory silently changes what the model answers (ADR-063 injects it into the prompt), so a user who cannot see what is stored cannot explain a surprising answer or remove the fact that caused it. `useCount` — always returned, never declared in the frontend type — distinguishes a fact shaping every answer from one stored and never recalled.
+
+**A not-grounded answer is shown as such.** ADR-075 detects the model answering beyond its evidence; silently substituting the refusal text would reproduce the original bug with better manners, since the user could not tell "nothing matched" from "we caught a fabrication".
+
+**The video screen states who wrote the storyboard, every time** — see ADR-080 on why that distinction is the whole point.
+
+**Date:** 2026-09-11
+**Impact:** `apps/web/app/{memory,ask}/page.tsx`, `apps/web/app/videos/[id]/page.tsx`, `apps/web/app/lib/{api.ts,app-chrome.tsx}`.
