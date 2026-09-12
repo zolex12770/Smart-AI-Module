@@ -1,6 +1,8 @@
 # Project Status
 
-> **This file is a chronological phase log, not a description of the repository today.** Entries
+> **This file is a chronological phase log, not a description of the repository today.**
+> For current status, read [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) — that is the single
+> source of truth and supersedes every status claim here. Entries
 > below were accurate when written and are kept unedited as the record of how the project got
 > here — several of them state, correctly for their date, that no authentication existed. That
 > has not been true since ADR-049. For current state read
