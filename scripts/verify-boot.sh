@@ -27,6 +27,13 @@ free_port() {
 # $1 = label, $2 = port, $3 = expect ("up" | "worker" | "exit"), rest = VAR=VALUE pairs
 boot_case() {
   local label=$1 port=$2 expect=$3; shift 3
+  # A refusal case must name the reason it expects. Without this the ONLY assertion was that
+  # /api/health never returned 200 -- which a port clash, a missing module, a bad migration or a
+  # syntax error all satisfy just as well as the deliberate refusal being tested. The two cases
+  # that exist to prove the platform refuses UNSAFE configurations were the two that could not
+  # tell a correct refusal from a broken build.
+  local reason=""
+  if [ "$expect" = "exit" ]; then reason=$1; shift; fi
   local log; log=$(mktemp)
   free_port "$port"
   rm -rf "backend/data/pgdata-verify-$port"
@@ -68,9 +75,17 @@ boot_case() {
     if [ "$code" = "200" ]; then ok "$label — booted and healthy"; else
       bad "$label — never became healthy"; tail -15 "$log"; fi
   else
-    if [ "$code" = "200" ]; then bad "$label — booted but should have refused"; else
-      ok "$label — refused to boot, as designed"
-      grep -oE "(No (real )?LLM provider|process isolation|SANDBOX)[^\"]*" "$log" | head -1 | sed 's/^/        /'
+    if [ "$code" = "200" ]; then
+      bad "$label — booted but should have refused"
+    elif kill -0 "$runner" 2>/dev/null; then
+      bad "$label — never served health, but the process is still alive: it hung rather than refusing"
+      tail -15 "$log"
+    elif ! grep -qE "$reason" "$log"; then
+      bad "$label — refused, but NOT for the expected reason (/$reason/ absent from the log)"
+      tail -15 "$log"
+    else
+      ok "$label — refused to boot, for the expected reason"
+      grep -oE "$reason" "$log" | head -1 | sed 's/^/        /'
     fi
   fi
 
@@ -101,11 +116,11 @@ boot_case "prod/api, local runtime" 8793 up \
 
 echo
 echo "== 4. PRODUCTION api role with NO provider at all — must refuse, clearly =="
-boot_case "prod/api, no provider" 8794 exit NODE_ENV=production ROLE=api
+boot_case "prod/api, no provider" 8794 exit "no LLM provider is configured, and the mock provider may not run in production" NODE_ENV=production ROLE=api
 
 echo
 echo "== 5. PRODUCTION with process-level sandbox — must refuse without explicit opt-in =="
-boot_case "prod/api, process sandbox" 8795 exit \
+boot_case "prod/api, process sandbox" 8795 exit "process isolation|SANDBOX_ALLOW_PROCESS_IN_PRODUCTION" \
   NODE_ENV=production ROLE=api LLM_BASE_URL=http://127.0.0.1:9/v1 LLM_MODEL=local-test \
   SANDBOX_RUNTIME=process SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=false
 

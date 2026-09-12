@@ -103,16 +103,33 @@ jobs:
           echo "FFMPEG_TEST_PATH=$(command -v ffmpeg)" >> "$GITHUB_ENV"
 
       - name: Test (all workspaces)
-        run: npm test
+        run: |
+          set -euo pipefail
+          # Tee'd once, and asserted below. This used to run `npm test` a second time inside the
+          # assertion step: double the CI minutes, and the two runs could disagree.
+          npm test 2>&1 | tee test-output.txt
 
-      # A skipped test is not a passing test (product brief §29). This fails the build if the
-      # environment-gated suites silently skipped instead of running.
+      # A skipped test is not a passing test (product brief §29). Every binary these suites
+      # need is installed above, so in CI a skip means the gate is broken, not the environment.
+      #
+      # This checks the SKIP COUNT vitest itself reports, not the wording of a message. The
+      # previous version grepped for `SKIPPING the real (clamd|ffmpeg)|skipping (clamd|fake-gcs)`
+      # and matched exactly ONE of the five real messages — the clamd, fake-gcs, long-form and
+      # timeline suites could all skip silently while this step reported success, which is the
+      # precise outcome it was written to prevent. A count cannot drift out of sync with the
+      # wording of a console.warn.
       - name: Assert the gated suites actually ran
         run: |
           set -euo pipefail
-          npm test 2>&1 | tee /tmp/test-output.txt
-          if grep -qiE "SKIPPING the real (clamd|ffmpeg)|skipping (clamd|fake-gcs)" /tmp/test-output.txt; then
-            echo "::error::An environment-gated suite skipped in CI. Those binaries are installed above, so a skip means the gate is broken."
+          if grep -qE "Tests[[:space:]]+.*[0-9]+ skipped" test-output.txt; then
+            echo "::error::A test was SKIPPED in CI. Every gated binary is installed above, so a skip means a gate is broken."
+            grep -nE "Tests[[:space:]]+.*skipped" test-output.txt
+            grep -niE "SKIPPING|is SKIPPED" test-output.txt || true
+            exit 1
+          fi
+          if grep -qiE "SKIPPING|suite is SKIPPED" test-output.txt; then
+            echo "::error::A suite printed a skip notice in CI."
+            grep -niE "SKIPPING|suite is SKIPPED" test-output.txt
             exit 1
           fi
 
@@ -195,16 +212,21 @@ jobs:
       - name: Dependency audit
         run: npm audit --audit-level=high
 
+      # Product brief §32: a mock provider must never be reachable in production.
+      #
+      # This was `grep -rn "new Mock" backend/src | grep -v NODE_ENV | grep -v test`, and it was
+      # wrong in both directions. The LLM guard is an `if` on the line ABOVE the construction, so
+      # the construction line contained neither word and survived both filters: the step exited 1
+      # on correct code and this job could never pass. And a trailing `// NODE_ENV` comment would
+      # have defeated it, so it did not reliably catch the real thing either.
+      #
+      # Replaced by a behavioural assertion that cannot be fooled by where a line break falls:
+      # it builds the real provider set from a production config and checks that nothing in it
+      # is a mock — and, in the other direction, that the mock IS there outside production, so
+      # the test cannot pass by returning nothing at all.
       - name: Assert no production code path returns a fake implementation
-        run: |
-          set -euo pipefail
-          # Product brief §32: mock providers must never be reachable in production. The
-          # composition root refuses to construct them when NODE_ENV=production; this checks
-          # nobody has since added an unconditional construction.
-          if grep -rn "new Mock" backend/src --include=*.ts | grep -v "NODE_ENV" | grep -v test; then
-            echo "::error::A mock provider is constructed outside a NODE_ENV guard."
-            exit 1
-          fi
+        run: npx vitest run src/no-fake-in-production.test.ts
+        working-directory: backend
 
   infrastructure:
     name: Docker build and Terraform validation

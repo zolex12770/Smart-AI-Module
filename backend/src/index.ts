@@ -66,7 +66,12 @@ import { QuotaManager } from "@ai-platform/quota";
 import { createRagTools, processDocumentIngestion, processDocumentScan } from "@ai-platform/rag";
 import { ClamAvScanner, type MalwareScanner } from "@ai-platform/scanning";
 import { AuthService, createSandbox, type ExecutionSandbox } from "@ai-platform/security";
-import { signupRequestSchema, type EmbeddingProvider } from "@ai-platform/shared";
+import {
+  signupRequestSchema,
+  type EmbeddingProvider,
+  type ImageProvider,
+  type VideoProvider,
+} from "@ai-platform/shared";
 import {
   createCodingTools,
   createFilesystemTools,
@@ -176,7 +181,43 @@ const videoRenderJobSchema = jobScopeSchema.extend({ videoProjectId: z.string().
  * one that actually runs (product brief §7). A hosted key present alongside it is an escape
  * hatch for capabilities the local model lacks, not a silent upgrade.
  */
-function registerLlmProviders(config: AppConfig, registry: ModelRegistry, logger: Logger): void {
+/**
+ * The image provider for this deployment, or null when there is none — ADR-101.
+ *
+ * Extracted from `main()` so the "no fake implementation in production" rule is something a
+ * TEST asserts rather than something a grep guesses at. The CI gate for it used to be
+ * `grep -rn "new Mock" backend/src | grep -v NODE_ENV`, which was wrong in both directions: the
+ * LLM guard sits on the line ABOVE its construction, so the gate fired on correct code and the
+ * security job could never pass; and a trailing `// NODE_ENV` comment would have defeated it.
+ * A behavioural check cannot be fooled by where a line break falls.
+ */
+export function selectImageProvider(config: AppConfig): ImageProvider | null {
+  const realImageProvider =
+    config.IMAGE_BASE_URL && config.IMAGE_MODEL
+      ? new OpenAICompatibleImageProvider({
+          baseUrl: config.IMAGE_BASE_URL,
+          model: config.IMAGE_MODEL,
+          apiKey: config.IMAGE_API_KEY,
+          supportsNegativePrompt: config.IMAGE_SUPPORTS_NEGATIVE_PROMPT,
+          supportsSeed: config.IMAGE_SUPPORTS_SEED,
+        })
+      : null;
+  return realImageProvider ?? (config.NODE_ENV !== "production" ? new MockImageProvider() : null);
+}
+
+/** The video provider for this deployment, or null when there is none — ADR-101, as above. */
+export function selectVideoProvider(config: AppConfig): VideoProvider | null {
+  const realVideoProvider =
+    config.VIDEO_PROVIDER === "replicate" && config.VIDEO_API_TOKEN && config.VIDEO_MODEL_VERSION
+      ? new ReplicateVideoProvider({
+          apiToken: config.VIDEO_API_TOKEN,
+          modelVersion: config.VIDEO_MODEL_VERSION,
+        })
+      : null;
+  return realVideoProvider ?? (config.NODE_ENV !== "production" ? new MockVideoProvider() : null);
+}
+
+export function registerLlmProviders(config: AppConfig, registry: ModelRegistry, logger: Logger): void {
   // 1. Self-hosted runtime — Ollama, vLLM, llama.cpp's server, LM Studio, or any
   //    OpenAI-compatible gateway. No third-party account involved.
   if (config.LLM_BASE_URL && config.LLM_MODEL) {
@@ -524,17 +565,7 @@ async function main() {
    * labelled, development only", or "no capability, reported honestly" — never a fake picture
    * presented as a generation.
    */
-  const realImageProvider =
-    config.IMAGE_BASE_URL && config.IMAGE_MODEL
-      ? new OpenAICompatibleImageProvider({
-          baseUrl: config.IMAGE_BASE_URL,
-          model: config.IMAGE_MODEL,
-          apiKey: config.IMAGE_API_KEY,
-          supportsNegativePrompt: config.IMAGE_SUPPORTS_NEGATIVE_PROMPT,
-          supportsSeed: config.IMAGE_SUPPORTS_SEED,
-        })
-      : null;
-  const imageProvider = realImageProvider ?? (config.NODE_ENV !== "production" ? new MockImageProvider() : null);
+  const imageProvider = selectImageProvider(config);
   const imageGenerationAvailable = imageProvider !== null;
 
   /**
@@ -555,14 +586,7 @@ async function main() {
    * refuses to boot without the token and the model version — so there is no state in which
    * this constructs a provider that cannot actually generate anything.
    */
-  const realVideoProvider =
-    config.VIDEO_PROVIDER === "replicate" && config.VIDEO_API_TOKEN && config.VIDEO_MODEL_VERSION
-      ? new ReplicateVideoProvider({
-          apiToken: config.VIDEO_API_TOKEN,
-          modelVersion: config.VIDEO_MODEL_VERSION,
-        })
-      : null;
-  const videoProvider = realVideoProvider ?? (config.NODE_ENV !== "production" ? new MockVideoProvider() : null);
+  const videoProvider = selectVideoProvider(config);
   const videoGenerationAvailable = videoProvider !== null;
 
   logger.info(
