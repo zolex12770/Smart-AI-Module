@@ -23,7 +23,7 @@ import { processDocumentScan } from "./scan.js";
  * PGlite Postgres and the real LocalAssetStore on a real temp directory. The scanner is the
  * one dependency stood in for here, by a hand-written double that returns a scripted verdict
  * — because THIS test is about what the job does with a verdict, and the scanner itself is
- * tested for real (against a real clamd process) in packages/scanning. The live check in
+ * tested for real (against a real clamd process) in backend/packages/scanning. The live check in
  * ADR-042 runs the whole chain with the real scanner.
  */
 function scriptedScanner(verdict: ScanVerdict): MalwareScanner & { calls: number } {

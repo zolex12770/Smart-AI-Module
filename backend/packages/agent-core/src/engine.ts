@@ -127,7 +127,7 @@ export interface AgentEngineDeps {
   toolRegistry: ToolRegistry;
   modelRouter: ModelRouter;
   /** Optional so existing tests and any embedder without a ledger keep working unchanged;
-   * `apps/api` always supplies one (ADR-046). */
+   * `backend` always supplies one (ADR-046). */
   meter?: ModelCallMeter;
   /**
    * Passed to every tool invocation as `ToolInvocationContext.workspaceRoot`. The engine
@@ -172,7 +172,7 @@ export interface TaskOwner {
  * vs. deferred (conditional/loop/sub_agent node types, LLM-driven planning/replanning,
  * test_suite/model_judge/human verification).
  *
- * One engine instance is shared by the whole apps/api process — tasks run in-process
+ * One engine instance is shared by the whole backend process — tasks run in-process
  * (no separate worker/queue yet, consistent with docs/26_DECISIONS.md ADR-006/ADR-007
  * deferring that infrastructure until Phase 7).
  *

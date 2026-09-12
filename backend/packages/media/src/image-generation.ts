@@ -28,7 +28,7 @@ export async function createPendingImageGeneration(
 /**
  * Runs the actual generation — designed to execute inside a job worker (docs/07 §1.6
  * "mock-provider parity": even the mock goes through the real async job system, not an
- * inline call), mirroring packages/rag's `processDocumentIngestion` split.
+ * inline call), mirroring backend/packages/rag's `processDocumentIngestion` split.
  *
  * `projectId` is the tenant scope (ADR-049), carried in the job payload alongside the
  * generation id: every repository call below applies it in the SQL `WHERE`, so a job payload

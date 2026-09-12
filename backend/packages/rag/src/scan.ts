@@ -1,8 +1,8 @@
 import type { Asset, AssetRepository, DocumentRepository } from "@ai-platform/database";
 import type { MalwareScanner } from "@ai-platform/scanning";
 
-/** Structural slices of packages/media's AssetStore and packages/jobs' JobQueue — declared
- * here so packages/rag depends on neither package for two methods. */
+/** Structural slices of backend/packages/media's AssetStore and backend/packages/jobs' JobQueue — declared
+ * here so backend/packages/rag depends on neither package for two methods. */
 export interface ScanAssetStore {
   read(asset: Asset): Promise<Buffer>;
   delete(asset: Asset): Promise<void>;

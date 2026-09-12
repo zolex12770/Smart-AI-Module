@@ -28,7 +28,7 @@ export interface JobQueueOptions {
 
 /** docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md §1.2 "Queue technology comparison" recommended
  * pg-boss on Postgres (docs/26_DECISIONS.md ADR-012). `db`/`backend` are supplied by the
- * caller so this package stays storage-agnostic — apps/api passes pg-boss's own
+ * caller so this package stays storage-agnostic — backend passes pg-boss's own
  * `fromPglite` adapter today (ADR-027), and a real standalone Postgres later needs only a
  * different `db`/`backend` at the composition root, not a change here. */
 export interface EnqueueOptions {
@@ -174,7 +174,7 @@ export class JobQueue {
     this.onDeadLetter = options.onDeadLetter;
     // pg-boss's own constructor validation rejects an explicit `undefined` for these
     // (asserts a numeric minimum unconditionally, rather than treating undefined as "use
-    // the default") — found by actually booting apps/api, not by inspection. Omit the
+    // the default") — found by actually booting backend, not by inspection. Omit the
     // keys entirely when unset instead of passing `undefined` through.
     this.boss = new PgBoss({
       db: options.db,

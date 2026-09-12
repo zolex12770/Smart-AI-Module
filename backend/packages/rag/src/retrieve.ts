@@ -150,7 +150,7 @@ export function buildCitations(results: readonly RetrievedChunk[]): RagCitation[
 
 /**
  * The retrieved passages as one prompt-ready block, each prefixed with its citation marker
- * and the source it stands for. Pre-joined because packages/agent-core's template renderer
+ * and the source it stands for. Pre-joined because backend/packages/agent-core's template renderer
  * interpolates field paths only (see template.ts) and cannot format a list itself.
  *
  * When nothing cleared the distance threshold this says so in words. An empty string would

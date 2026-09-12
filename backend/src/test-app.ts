@@ -43,7 +43,7 @@ import { buildServer } from "./server.js";
  * `listen()` (Fastify's own `app.inject()` drives requests directly against the app
  * instance), no MCP subprocess, no job *workers* registered (route tests assert on
  * enqueue-time behavior — validation, status codes, rate limits — not job completion, which
- * `packages/media`/`packages/rag`'s own integration tests already cover for real).
+ * `backend/packages/media`/`backend/packages/rag`'s own integration tests already cover for real).
  * `NODE_ENV=test` keeps `loadConfig()` happy without a real `.env`.
  *
  * Since ADR-049 the harness also has to produce a *caller*. Every route that touches user

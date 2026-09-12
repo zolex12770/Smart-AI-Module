@@ -1,7 +1,7 @@
 import { readZipEntry } from "./zip.js";
 
 /**
- * The document types this platform can actually ingest (packages/rag/src/ingest.ts's
+ * The document types this platform can actually ingest (backend/packages/rag/src/ingest.ts's
  * extension dispatch), as an allow-list keyed by extension → the declared MIME types a
  * browser may legitimately send for it. docs/13_SECURITY_ARCHITECTURE.md §12: "allow-list
  * accepted types, never a deny-list; validate both the declared MIME type and the actual

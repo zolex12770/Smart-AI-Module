@@ -1,6 +1,6 @@
 /**
  * The slice of the usage ledger the quota manager reads. `UsageRecordRepository`
- * (packages/database) satisfies it structurally, so nothing needs to adapt anything — but
+ * (backend/packages/database) satisfies it structurally, so nothing needs to adapt anything — but
  * declaring it here keeps the dependency to "four aggregates", not the whole repository.
  *
  * `sumEmbeddingTokensSince` is optional because that aggregate does not exist on the
@@ -97,7 +97,7 @@ export class QuotaManager {
   }
 
   /**
-   * Embedding tokens — ingestion and retrieval both spend them (packages/rag), and before
+   * Embedding tokens — ingestion and retrieval both spend them (backend/packages/rag), and before
    * ADR-049 that spend was invisible to every budget.
    *
    * If a limit is configured but the ledger cannot aggregate `kind = 'embedding'`, this

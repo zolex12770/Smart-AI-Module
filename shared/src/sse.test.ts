@@ -4,7 +4,7 @@ import { parseSseStream, stringToStream } from "./sse.js";
 /**
  * docs/26_DECISIONS.md ADR-045. This parser framed only on "\n\n", which is one of the three
  * blank-line forms the SSE specification allows and one of the three Google's own JS client
- * matches for the endpoint packages/providers/llm-google calls. A CRLF-framed stream hit no
+ * matches for the endpoint backend/packages/providers/llm-google calls. A CRLF-framed stream hit no
  * separator at all: the whole body accumulated into a single trailing "frame", the JSON parse
  * of that blob failed, and the caller saw a perfectly successful, completely empty answer.
  * These lock in every separator form, including the mixed case, and the trailing-\r case that

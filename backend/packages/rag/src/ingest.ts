@@ -17,7 +17,7 @@ import { extractDocxText } from "./parsers/docx.js";
 import { extractPdfText } from "./parsers/pdf.js";
 
 /**
- * Extension-based dispatch — real parsing for .pdf (packages/rag/src/parsers/pdf.ts, via
+ * Extension-based dispatch — real parsing for .pdf (backend/packages/rag/src/parsers/pdf.ts, via
  * pdfjs-dist) and .docx (parsers/docx.ts, a hand-rolled ZIP+XML reader, no new dependency
  * — the same "real implementation over a new dependency" call as ADR-030's GIF encoder),
  * plain UTF-8 text for everything else (.txt/.md and unrecognized extensions alike, so a
@@ -31,8 +31,8 @@ async function extractText(bytes: Buffer, extension: string): Promise<string> {
   return bytes.toString("utf8");
 }
 
-/** The read side of packages/media's AssetStore — declared structurally here so
- * packages/rag does not take a dependency on packages/media just for one method. */
+/** The read side of backend/packages/media's AssetStore — declared structurally here so
+ * backend/packages/rag does not take a dependency on backend/packages/media just for one method. */
 export interface AssetBytesReader {
   read(asset: Asset): Promise<Buffer>;
 }

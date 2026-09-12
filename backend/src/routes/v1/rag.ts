@@ -105,7 +105,7 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
   // Real async job (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md, docs/25_IMPLEMENTATION_ROADMAP.md
   // Phase 7) — returns immediately with the document in "ingesting" status; poll
   // GET /api/v1/files/:id to see it flip to "ready"/"failed" once the job worker
-  // (registered in apps/api/src/index.ts) actually processes it.
+  // (registered in backend/src/index.ts) actually processes it.
   app.post("/api/v1/files", async (request, reply) => {
     const authCtx = await requireProject(request, ctx.auth, "files:write");
     const parsed = ingestRequestSchema.safeParse(request.body);
@@ -122,7 +122,7 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
     await ctx.jobQueue.enqueue("document.ingest", {
       documentId: document.id,
       projectId: scopeOf(authCtx),
-      // Who asked for the work, carried with it. `jobScopeSchema` (apps/api/src/index.ts) has
+      // Who asked for the work, carried with it. `jobScopeSchema` (backend/src/index.ts) has
       // always declared this field and no enqueue site ever set it, so every worker that
       // wanted to name the asker got `undefined` instead. A background job has no session to
       // recover it from afterwards: either the request that created the job records it here,
@@ -136,7 +136,7 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
   // Real file upload (docs/15's "POST (upload)", docs/26_DECISIONS.md ADR-041) — the flow that
   // works on a stateless Cloud Run instance, where there is no sandbox directory for the
   // path-based route above to point at. Every docs/13 §12 control is applied here, in order:
-  // allow-list by extension (only what packages/rag can actually parse), declared MIME
+  // allow-list by extension (only what backend/packages/rag can actually parse), declared MIME
   // checked against that extension, a hard size cap (the multipart plugin's own limit, a
   // real 413), a real CONTENT sniff (not just the header), and "rename on upload" — the
   // bytes are stored under a generated key by the AssetStore, the original filename is

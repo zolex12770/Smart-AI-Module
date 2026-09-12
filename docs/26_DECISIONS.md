@@ -1507,3 +1507,24 @@ during drafting, not decisions that went unrecorded. ADR-050 to ADR-054 WERE cit
 unrecorded; they are written above, retrospectively, from the code that cites them and marked as
 such. Where such an ADR describes something only partly built (ADR-051's conversation summary),
 it says so rather than reading as a completed feature.
+
+---
+
+## ADR-092: Physically separate frontend and backend, with an enforced boundary
+
+**Decision:** The repository is `frontend/`, `backend/` (containing `backend/packages/*`), and `shared/` — three independent packages — and `scripts/verify-boundary.sh` enforces the separation in CI.
+
+**What the old layout did not express.** `apps/web` + `apps/api` + a flat `packages/` looked separated and was not legible as such: nothing in the layout said which of the sixteen packages belonged to the backend, and "the two applications are independent" was a convention nobody could check.
+
+**Why `shared/` stays top-level** rather than moving inside the backend: the frontend genuinely imports it, and imports nothing else. Every one of those imports is `import type` — verified, and now enforced — so at build time the frontend has **zero runtime dependency** on it. That is a contract, not a coupling. The other fifteen packages are imported only by the backend, which is why they live inside it: the boundary is visible in the directory listing.
+
+**Paths were recomputed, not hand-edited.** Twenty-six tsconfigs changed depth, some by one level and some by two (a provider reaching `shared` went from `../../shared` to `../../../../shared`). Hand-counting `../` across that many files is how a migration like this quietly breaks, so the new paths were derived from a package-name → directory map. Package-name imports needed no change at all: there is no `paths` block in `tsconfig.base.json`, so resolution goes through the workspace symlinks.
+
+**The boundary check is the point of this ADR.** A layout cannot enforce anything; one `import` re-couples the applications and would typecheck, build and pass every test. Seven properties are checked — no backend package in the frontend, `shared` imported type-only, no database/queue/filesystem/subprocess reach, no frontend import in the backend, no relative path across the boundary, no server secret readable from frontend code, and each application declaring its own dependencies.
+
+**Both failing checks were proven to fail** by injecting the violations they exist to catch. The type-only check initially did *not* fire: `^` inside an ERE alternation group does not anchor reliably, so it matched nothing and reported a pass. A boundary check that cannot fail is worse than no check, which is why each one is exercised against a real violation rather than trusted.
+
+**Verified after the move:** 0 type errors, 0 lint errors, 556/556 tests with zero skips, each application building alone, boot 7/7, migrations 3/3, E2E 7/7.
+
+**Date:** 2026-09-12
+**Impact:** the whole tree; `scripts/verify-boundary.sh`, `.github/workflows/ci.yml`, root `package.json`, `eslint.config.mjs`, 26 tsconfigs, both Dockerfiles.

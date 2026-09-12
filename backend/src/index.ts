@@ -752,7 +752,7 @@ async function main() {
                *
                * Unlike the image job, `userId` is not on this payload and cannot be put there
                * from here: scene jobs are enqueued by `orchestrateVideoProject` in
-               * packages/media, which also fans out from the render/completion path where no
+               * backend/packages/media, which also fans out from the render/completion path where no
                * request and no caller exist. The video project row is the authority instead —
                * `created_by_user_id` is stamped from the credential by POST /api/v1/videos —
                * and it is the same person the payload would have named. Without it every video
@@ -932,7 +932,7 @@ async function main() {
           // is correct for a `model_call` node and silently wrong for a `reasoning` node: every
           // turn after the first collided on the unique index below and was dropped, so a
           // multi-turn agent run billed for one turn. See `ModelCallMeter.record` in
-          // packages/agent-core/src/engine.ts.
+          // backend/packages/agent-core/src/engine.ts.
           idempotencyKey,
         });
         logger.info(
@@ -1241,7 +1241,7 @@ main().catch((err) => {
 });
 
 /** The task states an agent run ends in, and the `recordAgentRun` outcome each one is.
- *  Task states are upper-case and node statuses are lower-case (packages/shared task-graph.ts),
+ *  Task states are upper-case and node statuses are lower-case (shared task-graph.ts),
  *  which is what lets this lookup tell a finished RUN from a finished NODE: both are appended
  *  to the same transition log, and only the run is a run. */
 const AGENT_RUN_OUTCOMES = {
@@ -1260,8 +1260,8 @@ const AGENT_RUN_OUTCOMES = {
  * row per state change), which made the gap easy to miss and impossible to work around: a
  * histogram cannot be reconstructed after the fact from logs.
  *
- * WHY HERE, of all places. The engine has no run-completion hook, and packages/agent-core is
- * off-limits to this change, so the call has to go somewhere apps/api already owns. Every
+ * WHY HERE, of all places. The engine has no run-completion hook, and backend/packages/agent-core is
+ * off-limits to this change, so the call has to go somewhere backend already owns. Every
  * terminal state passes through `transitionRepo.append` exactly once — `transitionTask` is the
  * only writer and it appends after it has updated the task row — so wrapping the repository
  * counts every run, whatever ended it: one that finished on its own, one a user cancelled

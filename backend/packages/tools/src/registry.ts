@@ -47,7 +47,7 @@ const RISK_ORDER: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2, crit
  *    enabled check and the timeout, and says so honestly.
  *
  * A timeout here still only bounds the *promise*; killing the underlying work is the
- * sandbox's job (packages/security), which the terminal tool uses.
+ * sandbox's job (backend/packages/security), which the terminal tool uses.
  */
 export class ToolRegistry {
   private readonly entries = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();

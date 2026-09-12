@@ -90,7 +90,7 @@ const POLL_BACKOFF_FACTOR = 1.5;
  * docs/05 §2.5: a cold start alone can be 10–60s, and generation is several multiples of the
  * clip's own length (docs/06 §2.2). Ten minutes is generous for one short clip and still a hard
  * stop on what a stuck prediction can bill. It is also deliberately *below* the
- * `video.generate_scene` queue's `expireInSeconds` in apps/api: a provider that gave up after
+ * `video.generate_scene` queue's `expireInSeconds` in backend: a provider that gave up after
  * the queue had already re-claimed the job would leave two workers polling one prediction.
  */
 const DEFAULT_DEADLINE_MS = 10 * 60_000;
@@ -167,7 +167,7 @@ export class ReplicateVideoProvider implements VideoProvider {
    * "unconfigured" `ReplicateVideoProvider`: a provider that constructs and then reports every
    * generation as failed is a capability the platform would advertise as present
    * (`videoGenerationAvailable === true`) and never deliver, which is the exact failure
-   * ADR-045 forbids. Unconfigured is expressed by not constructing one — apps/api then reports
+   * ADR-045 forbids. Unconfigured is expressed by not constructing one — backend then reports
    * the real `CapabilityUnavailableError`. These throw at construction, so a half-configured
    * deployment fails on boot with the variable named, not on a user's first request.
    */

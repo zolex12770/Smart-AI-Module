@@ -30,7 +30,7 @@ import {
 
 /**
  * Vector width. Any embedding provider's output is zero-padded to this width by
- * packages/embeddings before storage; the model and its true width are recorded alongside.
+ * backend/packages/embeddings before storage; the model and its true width are recorded alongside.
  * Zero-padding is exact for cosine similarity — appending zeros changes neither the dot
  * product nor either norm — so a 384-dim local model and a 1536-dim hosted model can share
  * one column without distorting distances *within* a model. `embedding_model` exists so a

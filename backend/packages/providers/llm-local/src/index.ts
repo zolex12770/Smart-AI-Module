@@ -21,7 +21,7 @@ import {
  * gateway would use, so there is no "local mode" that behaves differently from production.
  *
  * `/v1/chat/completions` rather than the newer Responses API precisely because it is what
- * self-hosted runtimes implement; the hosted OpenAI adapter (packages/providers/llm-openai)
+ * self-hosted runtimes implement; the hosted OpenAI adapter (backend/packages/providers/llm-openai)
  * targets Responses separately.
  *
  * Tool calling is real here: tools are sent as JSON Schema function definitions, streamed

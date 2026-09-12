@@ -1,7 +1,7 @@
 /**
  * Generic SSE frame parser for outbound provider calls (server-side `fetch` responses),
- * distinct from apps/web's browser-side one (which parses our own API's SSE output).
- * Used by packages/providers/llm-{anthropic,openai,google} to consume each provider's
+ * distinct from frontend's browser-side one (which parses our own API's SSE output).
+ * Used by backend/packages/providers/llm-{anthropic,openai,google} to consume each provider's
  * streaming response, and by their unit tests to feed a fixture stream through the same
  * parser real traffic would use — see docs/21_TESTING_STRATEGY.md's fixture-based
  * provider-adapter testing approach.
@@ -39,7 +39,7 @@ export async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGe
  * All three blank-line forms the SSE specification allows, longest first so "\r\n\r\n" is
  * never mis-matched as a bare "\r\r" — docs/26_DECISIONS.md ADR-045. This parser accepted
  * only "\n\n"; Google's own JS client matches `(?:\r\n\r\n|\r\r|\n\n)` for the very endpoint
- * packages/providers/llm-google calls, and a CRLF-framed stream would have hit none of the
+ * backend/packages/providers/llm-google calls, and a CRLF-framed stream would have hit none of the
  * old separator's matches, accumulated the entire response into one unparseable blob, and
  * produced a perfectly successful-looking empty answer.
  */

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Provider-agnostic chat types. Concrete provider adapters (packages/providers/*)
+ * Provider-agnostic chat types. Concrete provider adapters (backend/packages/providers/*)
  * translate to/from these — see docs/04_MODEL_PROVIDER_RESEARCH.md and
  * docs/12_MODEL_ROUTING.md for why the normalization lives here, not per-provider.
  *

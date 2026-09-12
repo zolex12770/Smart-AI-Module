@@ -6,9 +6,9 @@ import { z } from "zod";
  * Loads `.env` files into process.env using Node's own loader (`process.loadEnvFile`, no
  * dependency) — docs/26_DECISIONS.md ADR-043. Two locations, resolved relative to THIS
  * module rather than the working directory (which differs between `tsx watch` under
- * `npm run dev -w`, `node apps/api/dist/index.js` in the container, and the test runner):
+ * `npm run dev -w`, `node backend/dist/index.js` in the container, and the test runner):
  *
- *   apps/api/.env   — app-specific
+ *   backend/.env   — app-specific
  *   <repo root>/.env — the location `.env.example` documents
  *
  * Both paths resolve identically from `src/` and from `dist/`. Real environment variables

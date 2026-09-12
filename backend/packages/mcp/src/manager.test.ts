@@ -8,7 +8,7 @@ import { McpManager, parseMcpServerConfigs } from "./manager.js";
  * *unmanaged*: one hardcoded server, a connection that was never closed, no reconnection, no
  * health signal, and a planner that failed a whole task when the optional server was absent.
  *
- * `packages/mcp` also had no test script at all, so `npm test` skipped it silently — which is
+ * `backend/packages/mcp` also had no test script at all, so `npm test` skipped it silently — which is
  * how an untested security-relevant default (tools registered disabled) went unnoticed.
  *
  * These tests drive the manager against a stubbed connector rather than spawning real

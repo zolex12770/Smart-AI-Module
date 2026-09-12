@@ -20,7 +20,7 @@ const DEFAULT_MODEL = "gpt-5.6-terra";
  * 2026-08-31; that document explicitly warns these figures rotate — GPT-5.2 → 5.4 → 5.5 →
  * 5.6 inside a single year — and to pin exact IDs from `/v1/models`). A model absent from
  * this table reports `null` rather than a guess, because the router filters on this number
- * (packages/model-router/src/registry.ts) and a wrong one silently misroutes.
+ * (backend/packages/model-router/src/registry.ts) and a wrong one silently misroutes.
  */
 const CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.6-sol": 1_050_000,
@@ -284,7 +284,7 @@ export class OpenAIProvider implements LLMProvider {
     if (!sawTerminalEvent || unparseableFrames > 0) {
       // Partial answers are still served — but the caller must not be told the token counts
       // are authoritative when they are not. Zero usage flows through to a null cost estimate
-      // rather than a fabricated $0 (packages/model-router/src/cost-estimator.ts).
+      // rather than a fabricated $0 (backend/packages/model-router/src/cost-estimator.ts).
       // eslint-disable-next-line no-console
       console.warn(
         `[llm-openai] response served with incomplete telemetry (terminal_event_seen=${sawTerminalEvent}, unparseable_frames=${unparseableFrames}) — token counts may be understated.`

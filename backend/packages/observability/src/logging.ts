@@ -1,6 +1,6 @@
 /**
  * Structured-logging conventions per docs/20_OBSERVABILITY.md §1 — field names, redaction,
- * and cross-process correlation helpers shared by apps/api's routes, job workers, and the
+ * and cross-process correlation helpers shared by backend's routes, job workers, and the
  * agent-core/model-router call sites that log provider calls.
  */
 

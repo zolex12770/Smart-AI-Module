@@ -3,7 +3,7 @@
  * `mvhd`/`tkhd` field layouts per ISO/IEC 14496-12 — so mp4-probe.test.ts and index.test.ts
  * can exercise the probe against genuine container bytes rather than a hand-written buffer
  * that happens to satisfy it. Test-only, not part of the package's public API; the same
- * arrangement `packages/rag/src/parsers/zip-fixtures.ts` uses, and excluded from the build in
+ * arrangement `backend/packages/rag/src/parsers/zip-fixtures.ts` uses, and excluded from the build in
  * tsconfig.json for the same reason.
  *
  * What it is NOT: a playable video. There is no sample table and no encoded frame here, only

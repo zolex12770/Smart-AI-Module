@@ -81,7 +81,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   // Cookies must be parsed before the auth plugin's preHandler can read the session cookie,
   // and `reply.setCookie`/`clearCookie` (routes/v1/auth.ts) only exist once this is
   // registered. No `secret`: the session cookie carries an opaque random token that is looked
-  // up by hash server-side (packages/security/tokens.ts), so there is nothing for cookie
+  // up by hash server-side (backend/packages/security/tokens.ts), so there is nothing for cookie
   // signing to add — it would only move trust into a key we would then have to manage.
   await app.register(cookie);
 

@@ -19,7 +19,7 @@ import { dirname, resolve, sep } from "node:path";
  * The previous implementation compared `path.resolve()` output as a string, and its own docstring
  * acknowledged it handled only "a symlink-free lexical escape" — while docs/13 §11 requires
  * "reject ... symlink escapes (resolve symlinks before the containment check)" and
- * `packages/security/src/sandbox.ts`'s `assertContained` had been doing exactly that all along.
+ * `backend/packages/security/src/sandbox.ts`'s `assertContained` had been doing exactly that all along.
  * Two containment implementations, and the one the filesystem tools used was the weak one — the
  * same shape of defect as ADR-077's two execution paths.
  *

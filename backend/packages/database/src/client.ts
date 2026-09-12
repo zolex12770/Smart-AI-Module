@@ -16,8 +16,8 @@ import * as schema from "./schema/index.js";
 export type DrizzleDb = PgDatabase<PgQueryResultHKT, typeof schema>;
 
 // The two driver-specific return types below preserve `$client` (the raw underlying
-// connection) via intersection — packages/jobs needs the PGlite one to hand pg-boss's
-// `fromPglite` adapter the same connection apps/api already has (ADR-027), and the
+// connection) via intersection — backend/packages/jobs needs the PGlite one to hand pg-boss's
+// `fromPglite` adapter the same connection backend already has (ADR-027), and the
 // composition root needs either one to shut the connection down gracefully on exit.
 export type PgliteDb = PgliteDatabase<typeof schema> & { $client: PGlite };
 export type PostgresDb = NodePgDatabase<typeof schema> & { $client: Pool };

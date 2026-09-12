@@ -7,7 +7,7 @@ import { requireProject } from "../../plugins/auth.js";
  * Day and month boundaries in the server's local timezone. Both `usage_records.created_at`
  * and these are real instants (the column is `timestamptz` — ADR-049 made that schema-wide),
  * so the comparison is unambiguous; what is left is the choice of *where* the day starts,
- * and this deliberately matches `packages/quota`'s identical boundaries. Reporting a UTC
+ * and this deliberately matches `backend/packages/quota`'s identical boundaries. Reporting a UTC
  * window next to a limit enforced over a local-time window would let this endpoint say
  * "800 tokens used" while the quota manager refused the next call on a different total.
  */
@@ -34,7 +34,7 @@ function scopeOf(authCtx: AuthContext): string {
  * what a project has spent is not a privileged action, spending it is.
  *
  * `estimatedCostUsdThisMonth` remains an honest lower bound, not a precise total — it only
- * sums calls with researched pricing (packages/model-router/src/cost-estimator.ts), which
+ * sums calls with researched pricing (backend/packages/model-router/src/cost-estimator.ts), which
  * today is every real LLM provider's default model but not the mock provider.
  * `pricedCallsOnly` keeps that limitation visible in the response itself rather than
  * silently undercounting.

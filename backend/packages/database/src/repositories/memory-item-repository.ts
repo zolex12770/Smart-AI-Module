@@ -65,7 +65,7 @@ export interface CreateMemoryItemInput {
   scope: MemoryScope;
   subjectId?: string | null;
   content: string;
-  /** Zero-padded to EMBEDDING_DIMENSIONS by packages/embeddings; omit for a non-retrievable item. */
+  /** Zero-padded to EMBEDDING_DIMENSIONS by backend/packages/embeddings; omit for a non-retrievable item. */
   embedding?: number[] | null;
   /** Required whenever `embedding` is given — an unlabelled vector is unusable (ADR-048). */
   embeddingModel?: string | null;
@@ -323,7 +323,7 @@ export class PgMemoryItemRepository implements MemoryItemRepository {
     if (embedding.length !== EMBEDDING_DIMENSIONS) {
       throw new Error(
         `Embedding has ${embedding.length} dimensions but memory_items.embedding is vector(${EMBEDDING_DIMENSIONS}). ` +
-          "packages/embeddings is responsible for zero-padding a narrower model's output to this width."
+          "backend/packages/embeddings is responsible for zero-padding a narrower model's output to this width."
       );
     }
     if (!embedding.every((v) => Number.isFinite(v))) {

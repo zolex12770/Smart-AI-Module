@@ -160,7 +160,7 @@ export async function orchestrateVideoProject(
     if (scene.status === "processing") continue; // in a provider call right now
     if (scene.status === "pending" && scene.jobId !== null) continue; // queued already; see the note above
     // docs/20_OBSERVABILITY.md §3.2 — propagated into the scene job so its worker-side logs
-    // (apps/api/src/index.ts's `runJob`) correlate back to the request that created (or
+    // (backend/src/index.ts's `runJob`) correlate back to the request that created (or
     // retried) this project. `processVideoScene` forwards the same id into
     // `checkProjectCompletion` below, so the eventual `video.render` job carries it too.
     const jobId = await deps.jobQueue.enqueue<VideoSceneJobPayload>("video.generate_scene", {

@@ -32,7 +32,7 @@ export interface NewDocumentChunk {
   id: string;
   chunkIndex: number;
   content: string;
-  /** Zero-padded to EMBEDDING_DIMENSIONS by packages/embeddings before it gets here. */
+  /** Zero-padded to EMBEDDING_DIMENSIONS by backend/packages/embeddings before it gets here. */
   embedding: number[];
   embeddingModel: string;
   embeddingDims: number;
@@ -233,7 +233,7 @@ export class PgDocumentChunkRepository implements DocumentChunkRepository {
     if (embedding.length !== EMBEDDING_DIMENSIONS) {
       throw new Error(
         `Embedding has ${embedding.length} dimensions but document_chunks.embedding is vector(${EMBEDDING_DIMENSIONS}). ` +
-          "packages/embeddings is responsible for zero-padding a narrower model's output to this width."
+          "backend/packages/embeddings is responsible for zero-padding a narrower model's output to this width."
       );
     }
     if (!embedding.every((v) => Number.isFinite(v))) {

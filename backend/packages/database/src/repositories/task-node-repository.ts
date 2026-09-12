@@ -11,7 +11,7 @@ import type { DrizzleDb } from "../client.js";
 import { taskNodes, tasks } from "../schema/index.js";
 
 /**
- * The stored node. `TaskNode` (packages/shared) stays the shape the dispatcher and the
+ * The stored node. `TaskNode` (shared) stays the shape the dispatcher and the
  * frontend speak; the three columns ADR-049's schema added are scheduling bookkeeping that
  * only the repository and the engine need, so they extend it here. Anything typed `TaskNode`
  * keeps compiling against a `TaskNodeRecord`.

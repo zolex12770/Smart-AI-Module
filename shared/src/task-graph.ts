@@ -8,7 +8,7 @@ import { z } from "zod";
  * sufficient to express sequential AND parallel execution without a special
  * container type. `sequential_group` / `parallel_group` / `conditional` / `loop` /
  * `sub_agent` are reserved in the enum for schema stability but NOT yet executed by
- * the dispatcher (packages/agent-core/src/dispatcher.ts) — see PROJECT_STATUS.md.
+ * the dispatcher (backend/packages/agent-core/src/dispatcher.ts) — see PROJECT_STATUS.md.
  */
 
 export const taskStateSchema = z.enum([

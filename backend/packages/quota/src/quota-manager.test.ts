@@ -12,7 +12,7 @@ import { QuotaManager, type QuotaUsageLedger } from "./quota-manager.js";
 
 /**
  * Real in-memory PGlite Postgres, real migrations, real PgUsageRecordRepository — no mocks,
- * matching this project's established testing pattern (e.g. packages/rag's integration
+ * matching this project's established testing pattern (e.g. backend/packages/rag's integration
  * test). Quotas are exactly the kind of logic ("did we already cross this line today?")
  * that's easy to get subtly wrong against a fake in-memory counter but must be verified
  * against real SQL aggregation (SUM/COUNT with a real WHERE created_at >= X clause) — and,

@@ -4,7 +4,7 @@ import type { DrizzleDb } from "../client.js";
 import { tasks } from "../schema/index.js";
 
 /**
- * The stored task. `Task` (packages/shared) is the wire/domain shape the agent loop and the
+ * The stored task. `Task` (shared) is the wire/domain shape the agent loop and the
  * frontend already speak; the columns ADR-049 and ADR-052 added are tenancy and execution
  * bookkeeping, so they extend it here rather than leaking into the shared contract. Anything
  * typed `Task` keeps compiling against a `TaskRecord`.

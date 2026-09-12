@@ -11,7 +11,7 @@ import { resolveSandboxedPath } from "./sandbox-path.js";
  * `resolveSandboxedPath` compared `path.resolve()` output as a string. Its own docstring
  * acknowledged it handled only "a symlink-free lexical escape", while docs/13 §11 requires
  * "reject ... symlink escapes (resolve symlinks before the containment check)" — and
- * `packages/security/src/sandbox.ts` had been doing exactly that all along. Two containment
+ * `backend/packages/security/src/sandbox.ts` had been doing exactly that all along. Two containment
  * implementations; the filesystem tools used the weak one.
  *
  * It was demonstrated, not theorised. Before the fix, this exact setup returned:

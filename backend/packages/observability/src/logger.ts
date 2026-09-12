@@ -2,7 +2,7 @@ import pino, { type Logger } from "pino";
 import { LOG_REDACT_PATHS } from "./logging.js";
 
 /**
- * One shared, structured Pino logger for the whole `apps/api` process (docs/20 §1.1) — used
+ * One shared, structured Pino logger for the whole `backend` process (docs/20 §1.1) — used
  * both as Fastify's own `loggerInstance` (so every HTTP request/response log is structured
  * JSON with Fastify's built-in `reqId`) and directly by job workers (which run outside any
  * HTTP request and have no Fastify request object to log through). Sharing one instance

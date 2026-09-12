@@ -49,7 +49,7 @@ const LLM_PRICING: Record<string, Record<string, TokenPricing>> = {
  * "computed via the provider's tokenizer or a close approximation") — used only to decide
  * "would this request likely push us over quota," never to record actual usage. The
  * ~4-characters-per-token heuristic is the same rough approximation OpenAI's own docs cite
- * for English text, and matches `packages/providers/llm-mock`'s own usage estimate.
+ * for English text, and matches `backend/packages/providers/llm-mock`'s own usage estimate.
  */
 export function estimatePromptTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));

@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 /**
  * Frontend test configuration — docs/26_DECISIONS.md ADR-068.
  *
- * The ADR-047 audit's largest single coverage gap was that `apps/web` had no test script at
+ * The ADR-047 audit's largest single coverage gap was that `frontend` had no test script at
  * all: no component tests, no hook tests, nothing. Every claim about the UI rested on a
  * one-off manual browser session recorded in prose.
  *

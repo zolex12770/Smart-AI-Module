@@ -253,13 +253,13 @@ export const deleteMemory = (id: string) => request<{ ok: true }>(`/api/v1/memor
  * cookie session that helper *requires* a named project: with none it throws "A projectId is
  * required". A `<img src>` cannot send `x-project-id`, the header every other call in this
  * module uses — a browser offers no way to attach a header to a subresource load. So the scope
- * travels in the query string, which is the same path `apps/api/src/plugins/auth.ts`'s
+ * travels in the query string, which is the same path `backend/src/plugins/auth.ts`'s
  * `extractProjectId` already reads for the SSE endpoint (see the comment on
  * `/api/v1/agent/tasks/:id/events`: "An EventSource cannot set headers, so a browser
  * subscribes with `?projectId=...`"). This is that precedent, not a second mechanism.
  *
  * The session cookie still authenticates the load: it rides along on the subresource request
- * because it is `SameSite=none; Secure` wherever the API is a different site (apps/api's
+ * because it is `SameSite=none; Secure` wherever the API is a different site (backend's
  * `cookieSameSite`), and same-site in local development.
  *
  * `projectId` overrides the stored selection for a caller that already holds one — most

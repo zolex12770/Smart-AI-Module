@@ -15,7 +15,7 @@ import {
  * and so tests never hit paid APIs (docs/21_TESTING_STRATEGY.md).
  *
  * It speaks the real tool-calling protocol (ADR-047) so the agent loop
- * (packages/agent-core/src/reasoning-loop.ts) can be exercised in development and in tests
+ * (backend/packages/agent-core/src/reasoning-loop.ts) can be exercised in development and in tests
  * WITHOUT a real model — otherwise the one code path that most needs coverage would only
  * ever run against a paid API. Because a mock must never pretend to reason, the trigger is
  * an explicit, clearly-labelled directive rather than anything resembling a decision:
@@ -48,7 +48,7 @@ export class MockLLMProvider implements LLMProvider {
    * scripted protocol above really does emit `tool_call` events the agent loop executes;
    * `structuredOutput` and `vision` are false because nothing here can constrain output to a
    * schema or read an image, and the router must not select the mock for work that needs
-   * either (packages/model-router/src/registry.ts). `contextWindow` is null — "the adapter
+   * either (backend/packages/model-router/src/registry.ts). `contextWindow` is null — "the adapter
    * cannot know" — since no context is ever sent anywhere.
    */
   capabilities(): ProviderCapabilities {
@@ -157,7 +157,7 @@ export class MockLLMProvider implements LLMProvider {
  * `[[call:<toolName> {json}]]` — the JSON object is optional and defaults to no arguments.
  * The tool name is NOT checked against the offered tools on purpose: passing an unknown name
  * straight through is how a test exercises the harness's own rejection path
- * (packages/tools' registry validates the name and the arguments before anything runs).
+ * (backend/packages/tools' registry validates the name and the arguments before anything runs).
  */
 const CALL_DIRECTIVE = /\[\[call:([A-Za-z0-9_.:-]+)\s*(\{[\s\S]*?\})?\]\]/g;
 

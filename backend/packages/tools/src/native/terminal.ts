@@ -7,7 +7,7 @@ import type { NativeToolEntry } from "./filesystem.js";
  * The execution surface this tool needs, named structurally.
  *
  * Structural rather than an import of `@ai-platform/security`'s `ExecutionSandbox` so that
- * `packages/tools` keeps no dependency on the security package — the composition root passes
+ * `backend/packages/tools` keeps no dependency on the security package — the composition root passes
  * the real sandbox in. There is deliberately NO default: a caller that supplies no sandbox gets
  * a compile error, not a quiet fallback to an unisolated `spawn`. That fallback is precisely the
  * bug this parameter exists to make impossible (ADR-077).

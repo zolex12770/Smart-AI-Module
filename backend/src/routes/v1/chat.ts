@@ -311,7 +311,7 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 // FR-061/FR-063 — the real post-call usage, not the pre-flight estimate above
                 // (docs/22: "only actuals count against quota"). estimatedCostUsd is null, not
                 // a fabricated figure, for any provider/model without researched pricing
-                // (packages/model-router/src/cost-estimator.ts) — today that's only the mock
+                // (backend/packages/model-router/src/cost-estimator.ts) — today that's only the mock
                 // provider; the three real providers' current default models are priced.
                 await ctx.usage.create({
                   id: uuid(),

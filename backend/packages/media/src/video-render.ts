@@ -93,7 +93,7 @@ export interface VideoRenderOutcome {
  * Stage 8 of docs/07 §2.2 ("Rendering"), scoped by the ffmpeg decision recorded in
  * docs/26_DECISIONS.md ADR-030: this shells out to a real system `ffmpeg` binary (safe
  * `spawn` — argument arrays, `shell: false`, same pattern as
- * packages/tools/src/native/terminal.ts) rather than bundling one via npm, because both
+ * backend/packages/tools/src/native/terminal.ts) rather than bundling one via npm, because both
  * npm options carried real trade-offs (ffmpeg-static's install-time network fetch of a
  * compiled binary; @ffmpeg-installer/ffmpeg's five-year-stale, likely-CVE-bearing bundled
  * build). If ffmpeg isn't on PATH, the project is still marked `succeeded` — every scene

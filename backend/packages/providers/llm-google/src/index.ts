@@ -18,7 +18,7 @@ const DEFAULT_MODEL = "gemini-3.5-flash";
  * Documented context windows from docs/04_MODEL_PROVIDER_RESEARCH.md §3.1 (access date
  * 2026-08-31; the same "re-verify before relying on it" warning applies). A model absent
  * from this table reports `null` rather than a guess, because the router filters on this
- * number (packages/model-router/src/registry.ts) and a wrong one silently misroutes.
+ * number (backend/packages/model-router/src/registry.ts) and a wrong one silently misroutes.
  */
 const CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-3.1-pro-preview": 1_000_000,
@@ -235,7 +235,7 @@ export class GoogleProvider implements LLMProvider {
     if (unparseableFrames > 0 || !sawUsage) {
       // Partial answers are still served — but the caller must not be told the token counts
       // are authoritative when they are not. Zero usage flows through to a null cost estimate
-      // rather than a fabricated $0 (packages/model-router/src/cost-estimator.ts).
+      // rather than a fabricated $0 (backend/packages/model-router/src/cost-estimator.ts).
       // eslint-disable-next-line no-console
       console.warn(
         `[llm-google] response served with incomplete telemetry (unparseable_frames=${unparseableFrames}, usage_metadata_seen=${sawUsage}) — token counts may be understated.`

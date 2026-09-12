@@ -32,7 +32,7 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
 
   useEffect(() => {
     // The endpoint states its own contract: "An EventSource cannot set headers, so a browser
-    // subscribes with `?projectId=...`" (apps/api/src/routes/v1/agent.ts). This hook opened a
+    // subscribes with `?projectId=...`" (backend/src/routes/v1/agent.ts). This hook opened a
     // bare URL, so `requireProject` had no scope to authorize against and answered "A
     // projectId is required" — the stream never opened and the task screen showed whatever it
     // was seeded with, frozen, with no error anywhere the user could see.

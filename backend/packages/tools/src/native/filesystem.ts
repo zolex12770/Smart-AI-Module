@@ -15,7 +15,7 @@ const now = () => new Date().toISOString();
  * Native filesystem tools, sandboxed to `root` (docs/10_TOOL_AND_MCP_ARCHITECTURE.md §3.1,
  * docs/13_SECURITY_ARCHITECTURE.md). `fs.delete_file` is deliberately `destructive` /
  * `requiresApproval: "always"` — it exists specifically to exercise and prove the
- * approval-gate mechanism in packages/agent-core, not because agents should casually
+ * approval-gate mechanism in backend/packages/agent-core, not because agents should casually
  * delete things. All four tools only ever touch paths inside `root`.
  */
 export function createFilesystemTools(root: string): NativeToolEntry[] {

@@ -44,7 +44,7 @@ export interface VideoScript {
   fallbackReason: string | null;
 }
 
-/** The chat surface this stage needs, named structurally so packages/media stays router-free. */
+/** The chat surface this stage needs, named structurally so backend/packages/media stays router-free. */
 export interface ScriptModel {
   streamChat(request: {
     messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;

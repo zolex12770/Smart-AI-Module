@@ -78,7 +78,7 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
         request: parsed.data,
       });
       // docs/20_OBSERVABILITY.md §3.2 — propagate the originating request's id into the job
-      // payload so the worker's logs (apps/api/src/index.ts's `runJob`) can be correlated
+      // payload so the worker's logs (backend/src/index.ts's `runJob`) can be correlated
       // back to this request, the "API → worker → provider-call" trail the Phase 12 exit
       // criterion asks for.
       // `projectId` is not for the worker — it re-reads the generation and gets the scope from
@@ -86,7 +86,7 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
       // tenant, so `GET /api/v1/jobs` scopes on this payload field, and a job without it was
       // simply invisible to everyone (ADR-072).
       // `userId` is what attributes the spend. The worker writes `usage_records.user_id` from
-      // this field (apps/api/src/index.ts's image.generate worker) and has no other way to
+      // this field (backend/src/index.ts's image.generate worker) and has no other way to
       // learn it: a job runs without a session, and by the time it runs the request that knew
       // who asked is long gone. It was never set, so every image usage row ever written had a
       // null user — the ledger could say which project spent but never which person, which is

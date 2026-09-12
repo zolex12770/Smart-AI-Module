@@ -22,7 +22,7 @@ const DEFAULT_MAX_OUTPUT_TOKENS = 4096;
  * Documented context windows from docs/04_MODEL_PROVIDER_RESEARCH.md §1.1 (access date
  * 2026-08-31 — that document's own warning that these figures rotate every few weeks
  * applies). A model absent from this table reports `null`, not a guess: the router treats
- * null as "assume sufficient" (packages/model-router/src/registry.ts), whereas an invented
+ * null as "assume sufficient" (backend/packages/model-router/src/registry.ts), whereas an invented
  * number would silently exclude a model that fits or select one that does not.
  */
 const CONTEXT_WINDOWS: Record<string, number> = {
@@ -50,7 +50,7 @@ export interface AnthropicProviderOptions {
  * input_schema}` definitions, streamed `tool_use` blocks are reassembled from
  * `content_block_start` plus chunked `input_json_delta` fragments, and our `tool` role
  * messages are mapped back to the `tool_result` blocks Anthropic expects. That is what lets
- * the agent loop (packages/agent-core/src/reasoning-loop.ts) run against a real model rather
+ * the agent loop (backend/packages/agent-core/src/reasoning-loop.ts) run against a real model rather
  * than only against the mock.
  *
  * Verification status (honest, per docs/00_PROJECT_VISION.md's principles): request

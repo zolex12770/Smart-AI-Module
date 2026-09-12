@@ -86,7 +86,7 @@ export function createRagTools(deps: RetrieveDeps): RagToolEntry[] {
           // Previously `[1]` was a bare positional label with nothing behind it.
           citations: buildCitations(results),
           // Pre-joined for direct template interpolation into a model prompt — see
-          // packages/agent-core/src/template.ts's field-path-only limitation and
+          // backend/packages/agent-core/src/template.ts's field-path-only limitation and
           // planner.ts's answer_from_documents task type.
           context: buildRagContext(results),
         },

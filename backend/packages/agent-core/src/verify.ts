@@ -20,7 +20,7 @@ export interface VerificationContext {
   /**
    * Runs the node's test command in the sandbox and reports the exit code. Supplied by the
    * composition root, which is the only place that knows where code is allowed to execute —
-   * `apps/api` wires it to the same hardened `ExecutionSandbox` the agent's terminal tool uses.
+   * `backend` wires it to the same hardened `ExecutionSandbox` the agent's terminal tool uses.
    * Absent in a context with no sandbox, in which case `test_suite` FAILS rather than passes.
    */
   runTestCommand?(spec: TestSuiteSpec): Promise<{ exitCode: number; stdout: string; stderr: string }>;
@@ -29,7 +29,7 @@ export interface VerificationContext {
    * a model judging a model is the weakest evidence this platform accepts, which is why it is
    * never a default and always names its rubric explicitly.
    *
-   * NOT WIRED, and this says so rather than implying otherwise: `apps/api`'s composition root
+   * NOT WIRED, and this says so rather than implying otherwise: `backend`'s composition root
    * deliberately passes no judge, on the grounds that enabling the weakest form of verification
    * by default makes it the easiest one to reach for. `model_judge` therefore always fails
    * there with "refusing to treat an unrunnable check as passed", and nothing in this
@@ -56,8 +56,8 @@ export interface ModelJudgeSpec {
  *
  * Every method is implemented here (ADR-075), but "implemented" is not the same as "available":
  * two of them need something this function cannot supply itself, and both are honest about it.
- * `test_suite` needs a sandboxed command runner, which `apps/api` wires to its real
- * `ExecutionSandbox`; `model_judge` needs a judging model, which `apps/api` deliberately does
+ * `test_suite` needs a sandboxed command runner, which `backend` wires to its real
+ * `ExecutionSandbox`; `model_judge` needs a judging model, which `backend` deliberately does
  * NOT wire (see `VerificationContext.judge`), so that method always fails there. The rule the
  * three once-throwing methods were written around still holds and is what makes that safe: a
  * method whose context is unavailable FAILS the node rather than passing it, so an unrunnable

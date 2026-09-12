@@ -7,7 +7,7 @@ import type { AppContext } from "../../context.js";
 /**
  * Real HTTP-layer tests for the agent task routes — `app.inject()` against a fully real
  * `buildServer()` app (real PGlite Postgres, real dispatcher, real filesystem tools), not
- * a mocked Fastify instance. Complements `packages/agent-core/src/engine.test.ts` (which
+ * a mocked Fastify instance. Complements `backend/packages/agent-core/src/engine.test.ts` (which
  * covers the state machine itself) by covering the actual request/response contract:
  * status codes, validation, and the approve/reject HTTP surface.
  */

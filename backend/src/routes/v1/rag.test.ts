@@ -98,7 +98,7 @@ describe("files (RAG ingestion) + memory routes", () => {
     });
 
     it("accepts a real PDF upload (content-sniffed) and ingests it through the real PDF parser", async () => {
-      // Minimal valid PDF, same construction as packages/rag's pdf.test.ts.
+      // Minimal valid PDF, same construction as backend/packages/rag's pdf.test.ts.
       const stream = "BT /F1 18 Tf 10 150 Td (Expense receipts within thirty days) Tj ET";
       const objs = [
         "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n",
@@ -236,7 +236,7 @@ describe("files (RAG ingestion) + memory routes", () => {
       ).json();
 
       // A bare DELETE, no Content-Type header and no body — exactly what the frontend's
-      // fixed request() helper now sends (apps/web/app/lib/api.ts), and exactly what the
+      // fixed request() helper now sends (frontend/app/lib/api.ts), and exactly what the
       // pre-fix version got wrong by always declaring application/json.
       const deleteRes = await app.inject({ headers: auth.headers, method: "DELETE", url: `/api/v1/memory/${item.id}` });
       expect(deleteRes.statusCode).toBe(200);

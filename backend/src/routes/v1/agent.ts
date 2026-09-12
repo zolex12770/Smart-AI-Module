@@ -12,7 +12,7 @@ import { requireProject } from "../../plugins/auth.js";
 
 /**
  * Agent task endpoints — docs/15_API_ARCHITECTURE.md. Backs the state machine and task
- * graph implemented in packages/agent-core (docs/11_AGENT_LOOP.md).
+ * graph implemented in backend/packages/agent-core (docs/11_AGENT_LOOP.md).
  *
  * Two things every route here obeys (docs/26_DECISIONS.md ADR-049):
  *
@@ -59,7 +59,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
     "/api/v1/agent/tasks",
     // docs/13_SECURITY_ARCHITECTURE.md §4 Layer 2 — each task spins up a full task graph
     // (potentially several tool/model-call nodes); the dispatcher's own hard cascade-
-    // iteration ceiling (packages/agent-core/src/engine.ts) bounds a single runaway task,
+    // iteration ceiling (backend/packages/agent-core/src/engine.ts) bounds a single runaway task,
     // this bounds the rate of *new* tasks.
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
@@ -126,7 +126,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
-      // See apps/api/src/routes/v1/chat.ts for why this is written by hand: reply.hijack()
+      // See backend/src/routes/v1/chat.ts for why this is written by hand: reply.hijack()
       // bypasses @fastify/cors's response hook entirely.
       "Access-Control-Allow-Origin": ctx.corsOrigin,
     });
@@ -193,7 +193,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
     const task = await ctx.tasks.get(projectId, request.params.id);
     if (!task) throw new NotFoundError(`Task "${request.params.id}" not found.`);
 
-    // `user:<id>` is the transition log's actor convention (packages/shared task-graph.ts):
+    // `user:<id>` is the transition log's actor convention (shared task-graph.ts):
     // "engine", "user:<id>", "system:crash-recovery". `cancel` writes the actor verbatim,
     // unlike approve/reject which add the prefix themselves.
     await ctx.engine.cancel(task.id, `user:${authCtx.user.id}`);

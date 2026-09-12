@@ -44,7 +44,7 @@ function parentageOf(): Record<string, string | null> {
 
 describe("span nesting", () => {
   it("nests a tool call inside an agent step inside an agent run", async () => {
-    // The exact shape apps/api produces for an agent task: engine.createAndStart opens
+    // The exact shape backend produces for an agent task: engine.createAndStart opens
     // `agent.run`, executeNode opens `agent.step`, and ToolRegistry.call opens `tool.call`.
     await withSpan("agent.run", { task_id: "t1" }, async () =>
       withSpan("agent.step", { node_id: "n1" }, async () =>

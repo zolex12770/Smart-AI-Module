@@ -3,7 +3,7 @@ import { streamChat, type ChatStreamEvent } from "./chat-stream";
 
 /**
  * ADR-068. This is the client-side half of the SSE contract, and the ADR-047 audit found three
- * real defects in it that no test could catch because `apps/web` had no tests at all:
+ * real defects in it that no test could catch because `frontend` had no tests at all:
  *
  *   1. It framed on `"\n\n"` only — the exact bug ADR-045 fixed on the server and never
  *      applied here, which against a CRLF response renders a permanently empty answer.
