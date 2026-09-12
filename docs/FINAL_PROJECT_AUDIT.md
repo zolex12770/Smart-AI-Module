@@ -178,6 +178,11 @@ pass. P2 = a real defect with a bounded blast radius.
 
 **Disposition: 30 confirmed, 30 fixed, 0 deferred, 0 disputed.**
 
+The arithmetic, stated so the numbers cannot be read two ways: **29 of the 30 were present in
+the audited tree** — 27 found by the audit, and two (the lockfile, the E2E server reuse) found
+while fixing those. The thirtieth was **introduced by the fix for number 25** and did not exist
+before this phase.
+
 Number 30 is the one to read twice. It was introduced by the fix for number 25 — closing a gap
 created a P0 in the code that closed it — and it was found only because a test written to prove
 the DECIMAL address encodings were refused happened to include a hex one. It had also been masked
