@@ -57,7 +57,9 @@ import { buildServer } from "./server.js";
 /** Password used for the harness account. Length only matters to `signupRequestSchema`;
  * this goes straight through `AuthService`, but keeping it valid means a test may re-login
  * through `POST /api/v1/auth/login` with the same credentials. */
-const TEST_PASSWORD = "test-password-1234";
+/** The seeded operator's password. Exported because re-authentication is a real requirement of
+ *  at least one route (account deletion, NFR-008) and a test must supply the true one. */
+export const TEST_PASSWORD = "test-password-1234";
 
 export interface TestAuth {
   userId: string;

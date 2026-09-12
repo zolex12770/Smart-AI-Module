@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
+  UnauthorizedError,
   ValidationError,
   addProjectMemberRequestSchema,
   createApiKeyRequestSchema,
+  deleteAccountRequestSchema,
   createProjectRequestSchema,
   loginRequestSchema,
   signupRequestSchema,
@@ -127,6 +129,72 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     const result = await ctx.auth.addProjectMember(authCtx, parsed.data.email, parsed.data.role);
     reply.status(201).send(result);
   });
+
+  /**
+   * Account and data deletion — NFR-008, docs/26_DECISIONS.md ADR-102.
+   *
+   * There was previously no way to delete an account or its data by any route, CLI or repository
+   * call, and no way even to suspend one. It is self-service rather than an operator ticket
+   * because a privacy requirement satisfied only by asking someone else is not satisfied.
+   *
+   * Three things guard it, and each guards something different:
+   *  - the session (who), the current password (that it is really them, not a stolen cookie),
+   *    and a typed confirmation (that they meant this request and not a neighbouring one).
+   *  - a tight rate limit, because the password check here is a password check like any other.
+   *  - a wrong password is 401 and a wrong confirmation is 400, so the two are distinguishable
+   *    to the person typing and neither reveals anything to anyone else.
+   *
+   * The response reports what was destroyed, including any storage object that could NOT be
+   * removed. Reporting success while leaving a tenant's files on disk would be the one failure
+   * mode of a deletion endpoint that matters.
+   */
+  app.delete(
+    "/api/v1/auth/account",
+    { config: { rateLimit: { max: 5, timeWindow: "15 minutes" } } },
+    async (request, reply) => {
+      const user = requireUser(request);
+      const parsed = deleteAccountRequestSchema.safeParse(request.body);
+      if (!parsed.success) throw new ValidationError(parsed.error.message);
+
+      if (!(await ctx.auth.verifyUserPassword(user.id, parsed.data.password))) {
+        throw new UnauthorizedError("Password is incorrect.");
+      }
+
+      const result = await ctx.auth.deleteOwnAccount(user.id, {
+        ipAddress: request.ip,
+        requestId: request.id,
+      });
+
+      // The rows are gone; now the bytes. Each failure is reported rather than swallowed: an
+      // orphaned object is a privacy problem, and the operator needs the paths to finish by hand.
+      const failures: string[] = [];
+      for (const asset of result.assets) {
+        try {
+          await ctx.assetStore.deleteByPath(asset.storagePath);
+        } catch (err) {
+          failures.push(asset.storagePath);
+          request.log.error(
+            { err, storage_path: asset.storagePath, user_id: result.userId },
+            "account deleted, but a storage object could not be removed"
+          );
+        }
+      }
+
+      reply.clearCookie(SESSION_COOKIE, { path: "/" });
+      reply.clearCookie(CSRF_COOKIE, { path: "/" });
+      return {
+        deleted: {
+          organizations: result.deletedOrganizationIds.length,
+          projects: result.deletedProjectIds.length,
+          storageObjects: result.assets.length - failures.length,
+        },
+        // Organizations with other members keep their content; only this user's access ended.
+        retainedOrganizations: result.retainedOrganizationIds.length,
+        storageObjectsNotRemoved: failures,
+      };
+    }
+  );
+
 
   // --- api keys -------------------------------------------------------------------------
 

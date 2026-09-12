@@ -5,7 +5,7 @@ Regenerate with `npm run docs:api`. A hand-written API document is wrong the mom
 route changes, and this repository has twice shipped documentation describing a shape the
 code did not have.
 
-**53 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
+**54 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
 
 ## Conventions
 
@@ -87,6 +87,7 @@ and nothing is ever substituted with a fake result (ADR-050).
 
 | Method | Path | Auth / permission | Rate limit |
 |---|---|---|---|
+| `DELETE` | `/api/v1/auth/account` | session or API key | 5 / 15 minutes |
 | `POST` | `/api/v1/auth/login` | session or API key | ctx.authRateLimitMax * 2 / 10 minutes |
 | `POST` | `/api/v1/auth/logout` | session or API key | global (300/min) |
 | `GET` | `/api/v1/auth/me` | session or API key · `project:admin` | global (300/min) |
@@ -137,7 +138,7 @@ and nothing is ever substituted with a fake result (ADR-050).
 | Method | Path | Auth / permission | Rate limit |
 |---|---|---|---|
 | `GET` | `/api/v1/mcp` | session or API key · `project:read` | global (300/min) |
-| `POST` | `/api/v1/mcp/:id/reconnect` | session or API key · `mcp:manage` | global (300/min) |
+| `POST` | `/api/v1/mcp/:id/reconnect` | system administrator | global (300/min) |
 
 ## `/api/v1/memory`
 

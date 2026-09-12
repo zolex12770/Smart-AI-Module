@@ -84,14 +84,18 @@ export class CloudStorageAssetStore implements AssetStore {
   }
 
   async delete(asset: Asset): Promise<void> {
-    const { bucket, objectName } = parseGsUri(asset.storagePath);
     try {
-      // ignoreNotFound: an object already gone (a retried job) is success, not a failure.
-      await this.storage.bucket(bucket).file(objectName).delete({ ignoreNotFound: true });
+      await this.deleteByPath(asset.storagePath);
     } finally {
       // Same scope-from-the-row reasoning as LocalAssetStore.delete (ADR-049).
       await this.assetRepo.delete(asset.projectId, asset.id);
     }
+  }
+
+  async deleteByPath(storagePath: string): Promise<void> {
+    const { bucket, objectName } = parseGsUri(storagePath);
+    // ignoreNotFound: an object already gone (a retried job) is success, not a failure.
+    await this.storage.bucket(bucket).file(objectName).delete({ ignoreNotFound: true });
   }
 }
 

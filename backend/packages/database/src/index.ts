@@ -14,3 +14,4 @@ export * from "./repositories/image-generation-repository.js";
 export * from "./repositories/video-project-repository.js";
 export * from "./repositories/video-scene-repository.js";
 export * from "./repositories/usage-record-repository.js";
+export * from "./repositories/account-deletion.js";

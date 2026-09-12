@@ -31,6 +31,15 @@ export interface AssetStore {
    * infected (docs/26_DECISIONS.md ADR-042). Idempotent: bytes already gone is success,
    * so a retried job can't get stuck on a half-completed earlier attempt. */
   delete(asset: Asset): Promise<void>;
+  /**
+   * Removes only the BYTES, named by their storage path — NFR-008, ADR-102.
+   *
+   * Account deletion cascades the `assets` rows away inside one database transaction, so by
+   * the time the files are removed there is no row left to pass to `delete`. Deleting the rows
+   * first is deliberate (see `deleteUserAccount`), which makes a path-addressed disposal the
+   * only shape that can finish the job. Idempotent, like `delete`.
+   */
+  deleteByPath(storagePath: string): Promise<void>;
 }
 
 /**
@@ -76,7 +85,7 @@ export class LocalAssetStore implements AssetStore {
 
   async delete(asset: Asset): Promise<void> {
     try {
-      await rm(asset.storagePath, { force: true }); // force: a missing file is not an error
+      await this.deleteByPath(asset.storagePath);
     } finally {
       // Scoped by the row's own `projectId` (ADR-049) — the caller already resolved this
       // asset under its tenant scope, so re-deriving the scope here cannot widen it, and a
@@ -84,5 +93,9 @@ export class LocalAssetStore implements AssetStore {
       // rather than silently matching nothing.
       await this.assetRepo.delete(asset.projectId, asset.id);
     }
+  }
+
+  async deleteByPath(storagePath: string): Promise<void> {
+    await rm(storagePath, { force: true }); // force: a missing file is not an error
   }
 }

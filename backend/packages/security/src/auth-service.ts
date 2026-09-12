@@ -9,6 +9,8 @@ import {
   sessions,
   users,
   type DrizzleDb,
+  deleteUserAccount,
+  type AccountDeletionResult,
 } from "@ai-platform/database";
 import {
   ConflictError,
@@ -211,6 +213,53 @@ export class AuthService {
       projectId,
     };
   }
+
+  /**
+   * Confirms a caller really knows their own password — NFR-008, ADR-102.
+   *
+   * Separate from `login` on purpose: this must NOT mint a session, and it must not touch the
+   * lockout counter either way. A re-authentication prompt that can lock you out of the account
+   * you are about to delete is a worse experience than the risk it mitigates, and the rate limit
+   * on the route already bounds guessing.
+   */
+  async verifyUserPassword(userId: string, password: string): Promise<boolean> {
+    const rows = await this.db
+      .select({ passwordHash: users.passwordHash, status: users.status })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    const row = rows[0];
+    if (!row || row.status !== "active") return false;
+    return verifyPassword(password, row.passwordHash);
+  }
+
+  /**
+   * Deletes the caller's account and the data they solely own — NFR-008, ADR-102.
+   *
+   * The audit record is written BEFORE the deletion, because `audit_log.user_id` is
+   * `onDelete: "set null"`: writing it afterwards would mean writing a row about a user that no
+   * longer exists, and the foreign key would reject it. Written first, it survives the deletion
+   * with a null user id and the email preserved in its metadata — which is what an operator
+   * needs to answer "was this account deleted, and when", without retaining an account.
+   *
+   * Returns the storage objects the caller must now remove; see `deleteUserAccount`.
+   */
+  async deleteOwnAccount(userId: string, meta: RequestMeta = {}): Promise<AccountDeletionResult> {
+    const rows = await this.db.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
+    if (!rows[0]) throw new NotFoundError("Account not found.");
+
+    await this.recordAudit({
+      userId,
+      action: "auth.account_deleted",
+      outcome: "success",
+      method: "session",
+      detail: { email: rows[0].email },
+      ...meta,
+    });
+
+    return deleteUserAccount(this.db, userId);
+  }
+
 
   // --- login / sessions -----------------------------------------------------------------
 

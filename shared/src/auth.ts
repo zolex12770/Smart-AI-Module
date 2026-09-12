@@ -137,6 +137,22 @@ export const signupRequestSchema = z.object({
 });
 export type SignupRequest = z.infer<typeof signupRequestSchema>;
 
+/**
+ * Deleting one's own account — NFR-008, ADR-102.
+ *
+ * The current password is required even though the caller already holds a valid session: this
+ * is irreversible and destroys other people's work too (every project in an organization the
+ * caller solely owns), so a stolen or borrowed session must not be enough. The typed
+ * confirmation is the second, independent signal — an accidental DELETE from a script cannot
+ * produce that string by chance.
+ */
+export const DELETE_ACCOUNT_CONFIRMATION = "DELETE MY ACCOUNT";
+export const deleteAccountRequestSchema = z.object({
+  password: z.string().min(1),
+  confirm: z.literal(DELETE_ACCOUNT_CONFIRMATION),
+});
+export type DeleteAccountRequest = z.infer<typeof deleteAccountRequestSchema>;
+
 export const loginRequestSchema = z.object({
   email: emailSchema,
   password: z.string().min(1).max(256),
