@@ -14,7 +14,7 @@ authentication, authorization, persistence, queues and AI orchestration.
 ```
   frontend/                                    backend/
   ─────────                                    ────────
-  Next.js, 17 screens                          Fastify, 47 routes
+  Next.js, 17 screens                          Fastify, 54 routes
   builds and runs alone                        builds and runs alone
         |                                            |
         |   HTTP + SSE, cookie or bearer API key     |
@@ -50,7 +50,7 @@ inside one. The other fourteen packages are imported only by the backend, so the
 the boundary is legible from the directory listing.
 
 None of this is enforced by the layout, so it is enforced by a check.
-`scripts/verify-boundary.sh` runs in CI and asserts seven properties — no backend package in the
+`scripts/verify-boundary.sh` runs in CI and asserts nine properties — no backend package in the
 frontend, `shared` imported type-only, no database/queue/filesystem/subprocess reach from the
 frontend, no frontend import in the backend, no relative path across the boundary, no server
 secret readable from frontend code, and each application declaring its own dependencies. Both of

@@ -25,6 +25,18 @@ password, salting produces different hashes for the same input, a malformed hash
 rather than throwing, wrong-password and unknown-email errors are byte-identical, lockout engages,
 a revoked session and a revoked/expired API key both stop authenticating.
 
+**Nothing is reachable without a credential, and that is now enforced rather than assumed**
+(ADR-097). The auth plugin refuses any request to a matched route outside the four public paths
+that presented no valid credential. Before this, `publicPaths` was passed to the plugin and never
+read: the property rested entirely on all 53 routes remembering their own guard. They all did —
+which is why nothing noticed — but a route that forgets is now closed anyway.
+
+**An account can be deleted, with its data** (ADR-102, NFR-008). `DELETE /api/v1/auth/account`
+requires the session, the current password and a typed confirmation. Organizations the caller
+solely owns cascade away entirely; ones with other members keep their content and only the
+caller's access ends. Storage objects are removed after the database commits, and any that could
+not be removed are reported in the response rather than swallowed.
+
 ## 2. Authorization and multi-tenancy
 
 The hierarchy is **User → Organization → Project → Resource**.
@@ -101,6 +113,11 @@ key, `DATABASE_URL`), and the "timeout" only rejected a promise while the child 
   ordinary DNS name pointing anywhere — and sent the bearer token in clear. Caught in review; the
   host is now parsed as a real IPv4 literal, pinned by a regression test.
 
+**Network egress is its own permission level.** `web.fetch` is registered as `network`, not
+`read_only` — a tool that can reach the network can reach the network the deployment is on, and
+describing that as read-only would understate it where an operator looks. See the SSRF note
+below for what the guard does and does not cover.
+
 ## 6. Input handling
 
 - Zod validation on every request body.
@@ -166,12 +183,30 @@ behind a proxy.
   correctly, but a real container run is unverified.
 - **No SSO/OIDC, no MFA, no password reset flow, no email verification.** Sessions and API keys
   only.
-- **No SSRF protections**, because no tool fetches a URL. Adding one requires adding them.
+- **SSRF is guarded, not eliminated.** `web.fetch` (ADR-104) exists now, so the protections it
+  used to be exempt from are implemented: http(s) only, every resolved address checked against the
+  private/loopback/link-local/carrier-NAT/multicast/reserved ranges in both IP families (including
+  the `::ffff:` mapped and NAT64/6to4 forms), the socket pinned to the validated address so DNS
+  rebinding cannot redirect it, redirects followed by hand with every hop revalidated, and a byte
+  cap. Verified by refusing `169.254.169.254`, `localhost` (via `::1`), `10.0.0.1` and `file://`
+  against a live process. What remains: a host on a public address that PROXIES to a private one
+  is indistinguishable from any other public host, and `WEB_FETCH_ALLOWLIST` is the answer for a
+  deployment that needs certainty rather than a heuristic.
 - **Prompt injection is mitigated, not solved.** Untrusted content is structurally delimited and
   carries a trust-boundary system message; provenance tracking is not implemented, so a tool call
   that *results from* untrusted content is not automatically escalated for approval.
 - **The malware scanner has only been run against a one-signature EICAR database**, never the
   official signature set, and never as a Cloud Run sidecar.
+- **Six moderate dependency advisories are accepted, with reasons.** `npm audit` reports six and
+  `npm audit --audit-level=high` exits 0. Four are one chain — `esbuild` <=0.24.2 via
+  `@esbuild-kit/*` via `drizzle-kit` — and `npm ls esbuild --omit=dev` is EMPTY, so that chain is
+  not in any production dependency path; the advisory itself concerns a running esbuild dev
+  server, which nothing here starts. The other two are `gaxios` and its transitive `uuid` <11.1.1,
+  reached only through `@google-cloud/storage`; the advisory is a missing buffer bounds check in
+  uuid v3/v5/v6 when a buffer is supplied, which that path does not do. This repository's own
+  `uuid` is 11.1.1. `npm audit fix` resolves none of them without `--force`, which would move
+  `drizzle-kit` across a major version — a migration tool is the wrong place to take an unforced
+  breaking change, so they are accepted and recorded here instead of silently carried.
 - **Terraform grants `allUsers` invoker on the API service.** That is now an authenticated API, so
   it is no longer an open door — but it is still a public endpoint and should be reviewed against
   your own exposure requirements before `terraform apply`.
