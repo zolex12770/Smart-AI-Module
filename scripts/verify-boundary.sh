@@ -94,8 +94,23 @@ fi
 # --- 6. no server secret is reachable from the frontend --------------------------------
 # Next.js only exposes NEXT_PUBLIC_* to the browser, so any OTHER env var read in frontend code
 # is either dead or a secret someone expects to be there — both worth failing on.
-SECRETS=$(sources frontend | xargs grep -nE "process\.env\.(?!NEXT_PUBLIC_)[A-Z_]+" -P 2>/dev/null \
-  | grep -vE "NODE_ENV|E2E_|CI\b" || true)
+#
+# This check spent its whole life incapable of failing. It passed BOTH -E and -P, which GNU
+# grep rejects outright ("conflicting matchers specified", exit 2); `2>/dev/null` hid the
+# message and `|| true` swallowed the status, so the variable was unconditionally empty and
+# the check unconditionally green. Two real secrets were planted in frontend source and it
+# still reported PASS. That is the second time in this one script -- see check 2 -- that a
+# gate was written in a form that could only ever pass.
+#
+# It is now matched per OCCURRENCE (-o) rather than per line, so a line holding both a public
+# and a private variable cannot hide the private one, and in plain ERE so it does not depend
+# on a PCRE-capable grep. Each allowlisted name is allowlisted for a stated reason:
+#   NODE_ENV, CI        -- not secrets, and read by framework code.
+#   E2E_*, PLAYWRIGHT_* -- test-runner inputs, read by playwright.config.ts and the specs,
+#                          which are never part of a browser bundle.
+SECRETS=$(sources frontend | xargs grep -Hno "process\.env\.[A-Z_][A-Z0-9_]*" 2>/dev/null \
+  | grep -v "process\.env\.NEXT_PUBLIC_" \
+  | grep -vE "process\.env\.(NODE_ENV|CI|E2E_[A-Z0-9_]*|PLAYWRIGHT_[A-Z0-9_]*)$" || true)
 if [ -z "$SECRETS" ]; then
   ok "frontend reads no server-side environment variable"
 else
