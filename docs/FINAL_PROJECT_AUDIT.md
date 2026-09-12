@@ -188,6 +188,32 @@ may be working for a reason that is about to change.
 
 ---
 
+## Technical debt sweep
+
+Measured, not asserted. Each command is reproducible from the repository root.
+
+| Marker | Count | Note |
+|---|---|---|
+| `TODO` / `FIXME` / `HACK` / `XXX` in source | **0** | Deferrals are recorded in ADRs and in the feature matrix's Remaining columns, where they are read, rather than in comments where they are not |
+| `@ts-ignore` / `@ts-expect-error` | **0** | The only matches are in Next.js's generated `.next/dev/types/` |
+| `: any` / `as any` in production code | **0** | The grep hits are the English word "any" in prose comments |
+| `eslint-disable` | 12 | All `no-console`, in boot and shutdown paths where the structured logger is not yet constructed or is already closed |
+| `it.skip` / `it.todo` / `it.only` | **0** | A skipped test is not a passing test (brief §29), and CI now fails on any skip |
+| Lint errors | **0** | 6 accepted `no-console` warnings, same paths as above |
+| Type errors | **0** | `tsc --noEmit` across all 26 workspaces |
+
+Two kinds of debt are real and are named rather than counted, because a grep cannot see them:
+
+- **Two permissions are granted and govern nothing.** `tools:manage` and `mcp:manage` are in
+  `PROJECT_ADMIN`, and both routes they were written for moved to `requireSystemAdmin` (ADR-089,
+  ADR-097) because they mutate process-global state. They are kept because the design that would
+  use them — per-project tool and MCP policy — is a real schema change that is deliberately not
+  done. `shared/src/auth.ts` says so at the definition.
+- **The mock providers are reachable outside production by design,** and that is load-bearing for
+  the zero-configuration local loop. What makes it safe is asserted rather than assumed: a test
+  builds the real provider set from a production config and checks nothing in it is a mock, and
+  checks the mock IS present outside production, so the assertion cannot pass vacuously.
+
 ## What this audit does NOT establish
 
 Stated because an audit that lists only what it proved is half a document.
