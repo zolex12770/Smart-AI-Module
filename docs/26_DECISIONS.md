@@ -1548,3 +1548,20 @@ Found by running the coding agent end to end, not by reading the code.
 
 **Date:** 2026-09-12
 **Impact:** `backend/packages/agent-core/src/{verify,engine}.ts`, `backend/src/index.ts`, `backend/packages/tools/src/index.ts`.
+
+---
+
+## ADR-094: An empty model turn is transient, not fatal
+
+**Decision:** `classifyProviderError` treats "returned no content" / "returned an empty stream" / "produced no events" as **retryable**, so the router retries the same provider instead of failing over.
+
+**What it caused.** A local runtime occasionally returns a turn with no content and no tool calls — sampling, not a broken request. The adapters correctly refuse to pass that off as an empty success (ADR-045), but the router classified the refusal as fatal and failed over immediately. On an **agent** request the next provider was the mock: its scripted reply entered the agent's transcript, burned an iteration, and the task failed with a reason that never mentioned the fallback.
+
+Observed rather than reasoned about: a `fix_failing_test` run fell back to the mock on its very first turn, and a replay of the byte-identical request returned `finish_reason: tool_calls` with a real tool call. The request was fine; asking again was all that was needed.
+
+**The mock was not at fault.** Its `toolCalling: true` is honest — it really does emit scripted `tool_call` events — and production never constructs it. The defect was sending a request there that only needed to be repeated.
+
+**Effect, measured on the same task:** iterations went from 1 to 7, and the agent made six real model-chosen tool calls (`terminal.run_command` ×3, `fs.read_file`, `fs.search`, `fs.glob`) against real files with no mock involved.
+
+**Date:** 2026-09-12
+**Impact:** `backend/packages/model-router/src/router.ts` + 2 tests.

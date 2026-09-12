@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatRequest, ChatStreamEvent, LLMProvider, ProviderCapabilities } from "@ai-platform/shared";
 import { ModelRegistry } from "./registry.js";
-import { ModelRouter, type ProviderFallback } from "./router.js";
+import { ModelRouter, classifyProviderError, type ProviderFallback } from "./router.js";
 
 /**
  * Real fake providers (not mocks of ModelRouter itself) exercising the actual fallback
@@ -200,5 +200,34 @@ describe("ModelRouter fallback reporting", () => {
     const cleanRouter = new ModelRouter(cleanRegistry, { onFallback: (f) => seen.push(f) });
     for await (const _ of cleanRouter.streamChat(request)) { /* drain */ }
     expect(seen).toEqual([]);
+  });
+});
+
+/**
+ * ADR-094 — an empty model turn is transient, not fatal.
+ *
+ * A local runtime occasionally returns a turn with no content and no tool calls. The adapters
+ * refuse to pass that off as an empty success (ADR-045), and the router used to treat the refusal
+ * as fatal and fail over — which on an agent request meant handing tool-requiring work to the
+ * mock, whose scripted reply entered the transcript and burned an iteration. The identical
+ * request, retried, produces a real tool call.
+ */
+describe("classifyProviderError — empty responses (ADR-094)", () => {
+  it("retries the same provider for an empty turn rather than failing over", () => {
+    for (const message of [
+      "Local model runtime returned no content (finish reason: stop).",
+      "Local model runtime returned an empty stream.",
+      "produced no events",
+    ]) {
+      expect(classifyProviderError(new Error(message))).toBe("retryable");
+    }
+  });
+
+  it("still fails over for errors that will not fix themselves", () => {
+    // The distinction that matters: a bad key or malformed tool arguments are not transient, and
+    // retrying them just burns the budget before failing anyway.
+    expect(classifyProviderError(new Error("Request failed (401): invalid api key"))).toBe("fatal");
+    expect(classifyProviderError(new Error('Model returned unparseable arguments for tool "x"'))).toBe("fatal");
+    expect(classifyProviderError(new Error("Request failed (404): no such model"))).toBe("fatal");
   });
 });

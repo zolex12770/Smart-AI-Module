@@ -63,6 +63,23 @@ export function classifyProviderError(error: unknown): "retryable" | "fatal" {
   if (/timeout|timed out|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|socket hang up|fetch failed/i.test(message)) {
     return "retryable";
   }
+  /**
+   * An empty response is TRANSIENT, and treating it as fatal sent tool-requiring work to a
+   * provider that could not do it (ADR-094).
+   *
+   * A local runtime occasionally returns a turn with no content and no tool calls — sampling,
+   * not a broken request. The adapters correctly refuse to pass that off as an empty success
+   * (ADR-045), but classifying the refusal as fatal made the router fail over immediately. On an
+   * AGENT request the next provider was the mock, whose scripted reply then entered the agent's
+   * transcript and burned an iteration: the identical request, asked again, produces a real tool
+   * call. Observed, not theorised — a `fix_failing_test` run fell back to the mock on its first
+   * turn, and a replay of the byte-identical request returned `finish_reason: tool_calls`.
+   *
+   * Retrying the SAME provider is what this classification is for: the request was fine.
+   */
+  if (/returned no content|returned an empty stream|produced no events|empty response/i.test(message)) {
+    return "retryable";
+  }
   // 400/401/403/404 and unparseable-argument errors will not fix themselves.
   return "fatal";
 }
