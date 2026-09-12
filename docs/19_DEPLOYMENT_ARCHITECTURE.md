@@ -4,7 +4,7 @@ Covers local dev through the (currently unauthorized/unprovisioned, per [[26_DEC
 
 ## Local development (Phase 1–5: zero external services)
 
-Per ADR-006/NFR-010: `git clone` → `npm install` → `npm run dev` starts `apps/web` + `apps/api` against SQLite, no Docker, no cloud account, no API keys required (mock LLM provider by default). This is a hard requirement checked at the end of Phase 1, not an aspiration.
+Per ADR-006/NFR-010: `git clone` → `npm install` → `npm run dev` starts `frontend` + `backend` against SQLite, no Docker, no cloud account, no API keys required (mock LLM provider by default). This is a hard requirement checked at the end of Phase 1, not an aspiration.
 
 ## Local development (Phase 6+: Postgres required)
 
@@ -17,7 +17,7 @@ No Redis is needed in either case ([[26_DECISIONS]] ADR-012 — pg-boss runs on 
 
 ## Containerization
 
-One `Dockerfile` per deployable app (`apps/web`, `apps/api`, `apps/worker`) in `infrastructure/docker/`, multi-stage (build stage with full devDependencies → slim runtime stage), each producing an image small enough for fast Cloud Run cold starts (a specific reason Drizzle over Prisma was chosen, ADR-005 — no separate query-engine binary to bundle).
+One `Dockerfile` per deployable app (`frontend`, `backend`, `apps/worker`) in `infrastructure/docker/`, multi-stage (build stage with full devDependencies → slim runtime stage), each producing an image small enough for fast Cloud Run cold starts (a specific reason Drizzle over Prisma was chosen, ADR-005 — no separate query-engine binary to bundle).
 
 ## CI pipeline (GitHub Actions, runs regardless of cloud provisioning status)
 
@@ -56,7 +56,7 @@ flowchart LR
 
 ## Environment variables (reference — `.env.example` at the repo root is the authoritative, complete list)
 
-As of [[26_DECISIONS]] ADR-043 that file is also *loaded*: `apps/api` reads `apps/api/.env` and then the repo-root
+As of [[26_DECISIONS]] ADR-043 that file is also *loaded*: `backend` reads `backend/.env` and then the repo-root
 `.env` at boot through Node's own loader, so a key can be supplied by dropping it in a gitignored file. Real
 environment variables (a container's injected secrets, a Cloud Run Secret Manager binding) always win over a file
 value, and nothing at all is loaded under `NODE_ENV=test`. This table was written in Phase 0 as a plan; the rows

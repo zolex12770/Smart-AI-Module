@@ -24,7 +24,8 @@
     "build:frontend": "npm run build --workspace=@ai-platform/web",
     "build:backend": "npm run build --workspace=@ai-platform/api",
     "test:frontend": "npm run test --workspace=@ai-platform/web",
-    "test:backend": "npm run test --workspace=@ai-platform/api"
+    "test:backend": "npm run test --workspace=@ai-platform/api",
+    "docs:api": "python scripts/generate-api-docs.py"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

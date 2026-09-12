@@ -1,6 +1,6 @@
 # Frontend Architecture
 
-Next.js (App Router) per [[26_DECISIONS]] ADR-004, calling `apps/api` over HTTP/SSE per [[15_API_ARCHITECTURE]]. No business logic in server actions/route handlers on the web app — it is a thin client of the real API, so the API stays independently usable (FR-051).
+Next.js (App Router) per [[26_DECISIONS]] ADR-004, calling `backend` over HTTP/SSE per [[15_API_ARCHITECTURE]]. No business logic in server actions/route handlers on the web app — it is a thin client of the real API, so the API stays independently usable (FR-051).
 
 ## Screens
 

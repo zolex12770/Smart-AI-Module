@@ -1,36 +1,60 @@
 # Architecture
 
-What the system is, as built. Design intent lives in `docs/`; this file describes the code that
-exists at commit `d8c7b46`, and marks anything aspirational as such.
+What the system is, as built. Design intent lives in `docs/`; current status lives in
+`docs/PROJECT_STATUS.md`. This file describes the code that exists at commit `bfdfdc8`, and marks
+anything aspirational as such.
 
 ## Shape
 
-Frontend and backend are **separate applications**, independently buildable and deployable. The
-frontend never touches the database; it talks to the API over HTTP and SSE, and the API owns
+Frontend and backend are **physically separate applications** (ADR-092) — separate directories,
+separate `package.json`, separate builds, separate Docker images, separate deployable processes.
+The frontend never touches the database; it talks to the API over HTTP and SSE, and the API owns
 authentication, authorization, persistence, queues and AI orchestration.
 
 ```
-apps/web  (Next.js)                    apps/api  (Fastify)
-    |                                      |
-    |  HTTP + SSE, cookie or bearer        |
-    +------------------------------------->+
-                                           |
-                    +----------------------+----------------------+
-                    |                      |                      |
-              packages/security      packages/agent-core    packages/model-router
-              authn, authz,          reasoning loop,        capability registry,
-              audit, sandbox         task graph, engine     retry, fallback
-                    |                      |                      |
-                    +----------------------+----------------------+
-                                           |
-        packages/database (Drizzle) · packages/jobs (pg-boss) · packages/media (AssetStore)
-        packages/rag · packages/embeddings · packages/tools · packages/mcp · packages/scanning
-                                           |
+  frontend/                                    backend/
+  ─────────                                    ────────
+  Next.js, 17 screens                          Fastify, 47 routes
+  builds and runs alone                        builds and runs alone
+        |                                            |
+        |   HTTP + SSE, cookie or bearer API key     |
+        +-------------------------------------------->+
+        |                                            |
+        |            shared/  (types ONLY)           |
+        +--- import type ────────────────────────────+
+             erased at compile time, so the
+             frontend has NO runtime dependency
+                                                     |
+                    +--------------------------------+--------------------------------+
+                    |                                |                                |
+        backend/packages/security        backend/packages/agent-core     backend/packages/model-router
+        authn, authz, audit, sandbox     reasoning loop, task graph      capability registry,
+                    |                                |                  retry, fallback, breaker
+                    +--------------------------------+--------------------------------+
+                                                     |
+        database (Drizzle) · jobs (pg-boss) · media (AssetStore) · rag · embeddings
+        memory · tools · mcp · scanning · quota · observability · 9 provider adapters
+                                                     |
                             PostgreSQL (PGlite locally, standalone in production)
                             + pgvector, and object storage (local disk or GCS)
 ```
 
-23 workspaces: 2 apps, 15 packages, 6 provider adapters.
+**26 workspaces:** `frontend`, `backend`, `shared`, 14 backend packages and 9 provider adapters.
+
+### Why `shared/` is top-level and the rest are not
+
+The frontend imports `shared` and **nothing else** — and every one of those imports is
+`import type`, so it is erased at compile time and the browser bundle carries none of it. That is
+a contract, not a coupling, which is why `shared` sits beside the two applications rather than
+inside one. The other fourteen packages are imported only by the backend, so they live inside it:
+the boundary is legible from the directory listing.
+
+None of this is enforced by the layout, so it is enforced by a check.
+`scripts/verify-boundary.sh` runs in CI and asserts seven properties — no backend package in the
+frontend, `shared` imported type-only, no database/queue/filesystem/subprocess reach from the
+frontend, no frontend import in the backend, no relative path across the boundary, no server
+secret readable from frontend code, and each application declaring its own dependencies. Both of
+its failing checks were proven to fail by injecting the violation they exist to catch.
 
 ## The request path
 

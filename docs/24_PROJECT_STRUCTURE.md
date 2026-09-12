@@ -45,10 +45,10 @@ Concrete layout implementing the decisions in [[26_DECISIONS]] (npm workspaces m
 ## Dependency direction (enforced by convention, checked by lint rule once ESLint boundaries are configured)
 
 ```
-apps/web       → apps/api (HTTP/SSE only, no direct package imports of business logic)
-apps/api       → agent-core, model-router, tools, mcp, memory, rag, jobs, media, database, security, observability, shared
+frontend       → backend (HTTP/SSE only, no direct package imports of business logic)
+backend       → agent-core, model-router, tools, mcp, memory, rag, jobs, media, database, security, observability, shared
 apps/worker    → jobs, media, providers, database, observability, shared
-               (as built: not a separate package — the same apps/api image run with ROLE=worker,
+               (as built: not a separate package — the same backend image run with ROLE=worker,
                 which takes on exactly this subset of responsibilities; see docs/26 ADR-039)
 agent-core     → model-router, tools, memory, shared          (no direct provider imports)
 model-router   → providers/*, shared                          (only place that knows provider SDK shapes)
@@ -57,7 +57,7 @@ memory, rag    → database, model-router (for embeddings), shared
 media          → providers/image-*, providers/video-*, jobs, database, shared
 ```
 
-Rule of thumb enforced from ADR-010/ADR-009: **no package outside `packages/providers/*` imports a provider SDK directly.** Everything else talks to `model-router` / `media`'s provider-agnostic interfaces. This is what NFR-011 in [[01_REQUIREMENTS]] checks for.
+Rule of thumb enforced from ADR-010/ADR-009: **no package outside `backend/packages/providers/*` imports a provider SDK directly.** Everything else talks to `model-router` / `media`'s provider-agnostic interfaces. This is what NFR-011 in [[01_REQUIREMENTS]] checks for.
 
 ## Why apps are separate from packages
 

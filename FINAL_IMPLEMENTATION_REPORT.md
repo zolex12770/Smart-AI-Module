@@ -142,7 +142,7 @@ adversarially re-verified before being accepted. The ones that mattered most:
 
 - **A symlink walked straight out of the sandbox** (ADR-088). Path containment was lexical only —
   its own docstring admitted "symlink-free" while docs/13 §11 required otherwise, and
-  `packages/security` had been resolving symlinks all along. Two containment implementations, and
+  `backend/packages/security` had been resolving symlinks all along. Two containment implementations, and
   the filesystem tools used the weak one. Proven by probe: `fs.read_file` returned
   `"TOP SECRET HOST FILE CONTENTS"` from outside the workspace.
 - **Every tenant's agent shared one workspace** (ADR-090). Project A's agent could read, overwrite,
@@ -210,7 +210,7 @@ audio — stating every time whether a model or the planner wrote the storyboard
 
 ## Architecture preserved
 
-- **`apps/web` and `apps/api` remain entirely separate applications.** Zero code imports in either
+- **`frontend` and `backend` remain entirely separate applications.** Zero code imports in either
   direction — the only reference is Playwright launching the API as a subprocess. They build, test,
   containerise and deploy independently and communicate only over HTTP.
 - The monorepo shape is unchanged: npm workspaces, TypeScript project references. One package was

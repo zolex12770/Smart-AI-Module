@@ -57,7 +57,7 @@ Image and video generation each have a real provider adapter — any OpenAI-comp
 
 ## Cost & quota
 
-Real, dated per-token pricing exists for each real provider's current default model (`packages/model-router/src/cost-estimator.ts`, see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-038) — `null`, never a fabricated number, for anything unpriced (the mock provider, image/video generation until a real provider is chosen). Optional, single-operator quota limits (unset by default) are enforced *before* any LLM call, image generation, or video project is created: `DAILY_TOKEN_LIMIT`, `MONTHLY_TOKEN_LIMIT`, `DAILY_IMAGE_LIMIT`, `MONTHLY_VIDEO_SECONDS_LIMIT`. Exceeding a configured limit returns a real `429 QUOTA_EXCEEDED` with the exact running total, never a silent overage. `GET /api/v1/usage` reports current token/image/video totals against whatever limits are configured.
+Real, dated per-token pricing exists for each real provider's current default model (`backend/packages/model-router/src/cost-estimator.ts`, see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-038) — `null`, never a fabricated number, for anything unpriced (the mock provider, image/video generation until a real provider is chosen). Optional, single-operator quota limits (unset by default) are enforced *before* any LLM call, image generation, or video project is created: `DAILY_TOKEN_LIMIT`, `MONTHLY_TOKEN_LIMIT`, `DAILY_IMAGE_LIMIT`, `MONTHLY_VIDEO_SECONDS_LIMIT`. Exceeding a configured limit returns a real `429 QUOTA_EXCEEDED` with the exact running total, never a silent overage. `GET /api/v1/usage` reports current token/image/video totals against whatever limits are configured.
 
 ## Security
 
@@ -65,7 +65,7 @@ The API rate-limits every route (300 req/min default; images 10/min, videos 5/mi
 
 ## Observability
 
-Every log line is structured JSON (a shared, redacting Pino logger — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-033) with a `request_id` that's propagated from the originating HTTP request into any job it enqueues, so you can grep one id across the API log, a job worker's log, and the provider-call log it produced. Real OpenTelemetry spans (`gen_ai.chat` for chat, `job.process` for jobs) print to the console — there's no Collector/Grafana running here (no Docker), so `ConsoleSpanExporter` is the honest local-dev substitute; swapping in a real OTLP exporter later is a one-line change in `packages/observability`, not an application-code change. Metrics and full agent-run trace coverage aren't built yet — see ADR-033 for why.
+Every log line is structured JSON (a shared, redacting Pino logger — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-033) with a `request_id` that's propagated from the originating HTTP request into any job it enqueues, so you can grep one id across the API log, a job worker's log, and the provider-call log it produced. Real OpenTelemetry spans (`gen_ai.chat` for chat, `job.process` for jobs) print to the console — there's no Collector/Grafana running here (no Docker), so `ConsoleSpanExporter` is the honest local-dev substitute; swapping in a real OTLP exporter later is a one-line change in `backend/packages/observability`, not an application-code change. Metrics and full agent-run trace coverage aren't built yet — see ADR-033 for why.
 
 ## Contributing to this repo (for the agent/engineer picking this up later)
 

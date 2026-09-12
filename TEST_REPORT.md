@@ -30,31 +30,31 @@ than skip. A skipped test is not a passing test (product brief §29) — and the
 
 | Package | Files | Tests |
 |---|---|---|
-| `apps/api` | 8 | 60 |
-| `apps/web` | 2 | 23 |
-| `packages/agent-core` | 4 | 49 |
-| `packages/database` | 1 | 3 |
-| `packages/embeddings` | 1 | 3 |
-| `packages/jobs` | 2 | 16 |
-| `packages/mcp` | 4 | 39 |
-| `packages/media` | 4 | 26 |
-| `packages/memory` | 1 | 17 |
-| `packages/model-router` | 2 | 16 |
-| `packages/observability` | 4 | 26 |
-| `packages/providers/image-mock` | 1 | 4 |
-| `packages/providers/image-openai` | 1 | 8 |
-| `packages/providers/llm-anthropic` | 1 | 11 |
-| `packages/providers/llm-google` | 1 | 12 |
-| `packages/providers/llm-local` | 1 | 12 |
-| `packages/providers/llm-openai` | 1 | 13 |
-| `packages/providers/video-mock` | 2 | 8 |
-| `packages/providers/video-replicate` | 3 | 31 |
-| `packages/quota` | 1 | 11 |
-| `packages/rag` | 8 | 44 |
-| `packages/scanning` | 1 | 7 |
-| `packages/security` | 3 | 32 |
-| `packages/shared` | 1 | 7 |
-| `packages/tools` | 5 | 46 |
+| `backend` | 8 | 60 |
+| `frontend` | 2 | 23 |
+| `backend/packages/agent-core` | 4 | 49 |
+| `backend/packages/database` | 1 | 3 |
+| `backend/packages/embeddings` | 1 | 3 |
+| `backend/packages/jobs` | 2 | 16 |
+| `backend/packages/mcp` | 4 | 39 |
+| `backend/packages/media` | 4 | 26 |
+| `backend/packages/memory` | 1 | 17 |
+| `backend/packages/model-router` | 2 | 16 |
+| `backend/packages/observability` | 4 | 26 |
+| `backend/packages/providers/image-mock` | 1 | 4 |
+| `backend/packages/providers/image-openai` | 1 | 8 |
+| `backend/packages/providers/llm-anthropic` | 1 | 11 |
+| `backend/packages/providers/llm-google` | 1 | 12 |
+| `backend/packages/providers/llm-local` | 1 | 12 |
+| `backend/packages/providers/llm-openai` | 1 | 13 |
+| `backend/packages/providers/video-mock` | 2 | 8 |
+| `backend/packages/providers/video-replicate` | 3 | 31 |
+| `backend/packages/quota` | 1 | 11 |
+| `backend/packages/rag` | 8 | 44 |
+| `backend/packages/scanning` | 1 | 7 |
+| `backend/packages/security` | 3 | 32 |
+| `shared` | 1 | 7 |
+| `backend/packages/tools` | 5 | 46 |
 
 ## Verified against real infrastructure, live
 
@@ -76,7 +76,7 @@ These were run against the running platform, not in a test harness:
 | Rate limiting across instances | `AUTH_RATE_LIMIT_MAX=3` → 201, 201, 201, **429**, **429**, counters visible in Postgres |
 | Terraform | `fmt -check` clean, `init`, `validate` **Success** — the first time the IaC has ever been validated |
 
-## End-to-end (`apps/web/e2e`, real browser)
+## End-to-end (`frontend/e2e`, real browser)
 
 Playwright starts both applications itself — the real API against a real embedded Postgres and the
 **production build** of the web app — so what is tested is what would deploy.
@@ -105,15 +105,15 @@ real `fake-gcs-server`, a real ffmpeg, a real speech synthesiser, and a real bro
 
 Several suites exist specifically because a mock could not have caught the defect they cover:
 
-- `packages/tools/terminal-isolation.test.ts` — runs a real child process and asserts no canary
+- `backend/packages/tools/terminal-isolation.test.ts` — runs a real child process and asserts no canary
   secret appears **anywhere** in its environment. An assertion about how `spawn` was configured
   would pass while the process still leaked (ADR-077).
-- `packages/providers/video-replicate/billing-safety.test.ts` — reproduces an orphaned prediction
+- `backend/packages/providers/video-replicate/billing-safety.test.ts` — reproduces an orphaned prediction
   that kept billing, and a body read that hung past its deadline (ADR-085).
-- `packages/mcp/loopback.test.ts` — pins `127.0.0.1.attacker.tld` as **not** loopback (ADR-083).
-- `packages/observability/metrics.test.ts` — asserts the real Prometheus exposition; a recorder
+- `backend/packages/mcp/loopback.test.ts` — pins `127.0.0.1.attacker.tld` as **not** loopback (ADR-083).
+- `backend/packages/observability/metrics.test.ts` — asserts the real Prometheus exposition; a recorder
   writing to a no-op meter satisfies a spy and produces an empty scrape (ADR-082).
-- `packages/jobs/dead-letter.test.ts` — `deadLetter` compiled fine while never being set, and
+- `backend/packages/jobs/dead-letter.test.ts` — `deadLetter` compiled fine while never being set, and
   `fetch()`'s types say nothing about it claiming jobs (ADR-072).
 
 ## What the tests still do NOT cover

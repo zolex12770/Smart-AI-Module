@@ -20,7 +20,7 @@ file describes the **implementation**, and says plainly where the two diverge.
 | Brute force | Failed-login counter with temporary lockout; signup and login carry tighter per-route rate limits than the global default. |
 | Revocation | Logout revokes the session immediately; `revokeAllSessions` exists for password change and administrative use; revoking an API key takes effect on the next request. |
 
-**Tested** — `packages/security/src/{password,auth-service}.test.ts`: the hash never contains the
+**Tested** — `backend/packages/security/src/{password,auth-service}.test.ts`: the hash never contains the
 password, salting produces different hashes for the same input, a malformed hash returns `false`
 rather than throwing, wrong-password and unknown-email errors are byte-identical, lockout engages,
 a revoked session and a revoked/expired API key both stop authenticating.
@@ -38,7 +38,7 @@ ownership check a route might forget cannot be forgotten.
   a disclosure.
 - API keys are bound to exactly one project and are refused if used against another.
 - Roles: organization `owner`/`admin`/`member`; project `admin`/`editor`/`viewer`. Permissions are
-  a static table in `packages/shared/src/auth.ts`, so the whole policy is readable in one place.
+  a static table in `shared/src/auth.ts`, so the whole policy is readable in one place.
   A `viewer` cannot spend money — no `chat:write`, `agent:run` or `media:generate`.
 - Approval actors come from the authenticated session, never from the request body. (Previously
   `approvedBy` was a client-supplied string, so the audit trail recorded who *claimed* to approve.)
