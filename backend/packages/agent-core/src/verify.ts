@@ -44,6 +44,17 @@ export interface TestSuiteSpec {
   args?: string[];
   workspaceRoot?: string;
   timeoutMs?: number;
+  /**
+   * The tenant whose workspace the command runs in — set by the ENGINE from the task, never by
+   * the plan (ADR-093).
+   *
+   * Without it the composition root resolved the command against the bare deployment sandbox
+   * root, which after ADR-090 is the PARENT of every project's workspace: the test file could not
+   * be found (the failure that exposed this), and worse, a command that did resolve would have
+   * run with every other tenant's files in reach. It is not part of the plan because a plan is
+   * data a model can influence, and the tenant is not negotiable.
+   */
+  projectId?: string;
 }
 
 export interface ModelJudgeSpec {

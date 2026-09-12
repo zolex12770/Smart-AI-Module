@@ -582,7 +582,7 @@ export class AgentEngine {
       await this.handleNodeFailure(task.id, node, result.error ?? "Tool call failed.");
       return;
     }
-    await this.verifyAndAdvance(task.id, node, byId, result.output ?? {});
+    await this.verifyAndAdvance(task.id, task.projectId, node, byId, result.output ?? {});
   }
 
   /**
@@ -824,7 +824,7 @@ export class AgentEngine {
         return;
       }
 
-      await this.verifyAndAdvance(task.id, node, byId, {
+      await this.verifyAndAdvance(task.id, task.projectId, node, byId, {
         content: result.answer,
         toolCallCount: result.toolCallCount,
         iterations: result.iterations,
@@ -896,7 +896,7 @@ export class AgentEngine {
           idempotencyKey: `agent.node:${node.id}`,
         });
       }
-      await this.verifyAndAdvance(task.id, node, byId, {
+      await this.verifyAndAdvance(task.id, task.projectId, node, byId, {
         content: result.content,
         provider: result.provider,
         model: result.model,
@@ -948,6 +948,12 @@ export class AgentEngine {
 
   private async verifyAndAdvance(
     taskId: string,
+    /**
+     * The tenant, passed explicitly rather than read off the node — task nodes carry no
+     * `project_id` of their own (the repository joins through `tasks`), and a verification that
+     * executes a command needs to know whose workspace it runs in (ADR-093).
+     */
+    projectId: string,
     node: TaskNodeRecord,
     byId: Map<string, TaskNodeRecord>,
     output: Record<string, unknown>
@@ -966,7 +972,11 @@ export class AgentEngine {
        */
       result = await verifyNodeOutput(nodeWithOutput, output, {
         dependencyOutput: (id) => (byId.get(id)?.output as Record<string, unknown> | undefined) ?? null,
-        runTestCommand: this.deps.runTestCommand,
+        // The tenant comes from the TASK, not the plan (ADR-093): a plan is data a model can
+        // influence, and which project's files a command may see is not negotiable.
+        runTestCommand: this.deps.runTestCommand
+          ? (spec) => this.deps.runTestCommand!({ ...spec, projectId })
+          : undefined,
         judge: this.deps.judgeOutput,
       });
     } catch (err) {
@@ -1180,7 +1190,11 @@ export class AgentEngine {
         // side-effect-free check, so it's always safe to just redo it.
         const siblings = await this.deps.nodeRepo.listByRootUnscoped(node.rootTaskId);
         const byId = new Map<string, TaskNodeRecord>(siblings.map((n) => [n.id, n]));
-        await this.verifyAndAdvance(node.rootTaskId, node, byId, node.output ?? {});
+        // Crash recovery reads the parent task for its tenant: a re-verification that runs a
+        // command must run in the same workspace the original attempt did.
+        const owner = await this.deps.taskRepo.getUnscoped(node.rootTaskId);
+        if (!owner) continue;
+        await this.verifyAndAdvance(node.rootTaskId, owner.projectId, node, byId, node.output ?? {});
       }
     }
 

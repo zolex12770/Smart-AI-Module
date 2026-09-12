@@ -72,6 +72,7 @@ import {
   createFilesystemTools,
   createSearchTools,
   createTerminalTools,
+  projectWorkspace,
   resolveSandboxedPath,
   ToolRegistry,
 } from "@ai-platform/tools";
@@ -972,7 +973,14 @@ async function main() {
       if (spec.command !== "node") {
         throw new Error(`Test command "${spec.command}" is not allow-listed; only "node" may be run in the sandbox.`);
       }
-      const workdir = resolveSandboxedPath(sandboxRoot, spec.workspaceRoot ?? ".");
+      // The CALLER'S project workspace (ADR-090/093), not the deployment root. Resolving against
+      // the root both failed to find the test file and would have exposed every other tenant's
+      // files to the command if it had.
+      if (!spec.projectId) {
+        throw new Error("A test_suite verification arrived with no project scope; refusing to run it.");
+      }
+      const workspace = projectWorkspace(sandboxRoot, { projectId: spec.projectId });
+      const workdir = resolveSandboxedPath(workspace, spec.workspaceRoot ?? ".");
       const args = (spec.args ?? []).map(String);
       for (const arg of args) {
         if (arg.startsWith("-")) {
@@ -981,7 +989,7 @@ async function main() {
           );
         }
         // Resolved against the already-sandboxed workdir, the same base node itself will use.
-        resolveSandboxedPath(sandboxRoot, arg, workdir);
+        resolveSandboxedPath(workspace, arg, workdir);
       }
       const run = await sandbox.run({
         command: spec.command,

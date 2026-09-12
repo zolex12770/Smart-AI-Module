@@ -1528,3 +1528,23 @@ it says so rather than reading as a completed feature.
 
 **Date:** 2026-09-12
 **Impact:** the whole tree; `scripts/verify-boundary.sh`, `.github/workflows/ci.yml`, root `package.json`, `eslint.config.mjs`, 26 tsconfigs, both Dockerfiles.
+
+---
+
+## ADR-093: A `test_suite` verification runs in the caller's project workspace
+
+**Decision:** `TestSuiteSpec` carries a `projectId`, set by the **engine** from the task, and the composition root resolves the command inside that project's workspace.
+
+**What was wrong.** The runner resolved against the bare `SANDBOX_ROOT`, which after ADR-090 is the *parent* of every project's workspace. Two consequences, one visible and one not:
+
+- The test file could not be found. That is the failure that exposed it — a real coding-agent run reported `Cannot find module '…/data/sandbox/math.test.js'`, missing the project segment.
+- A command that *did* resolve would have executed with every other tenant's files in reach. The visible bug was the lesser one.
+
+**The tenant comes from the task, never from the plan.** A plan is data a model can influence, and which project's files a command may see is not negotiable. The engine therefore injects it when it builds the verification context, and the runner **refuses** a spec that arrives without one rather than falling back to the root.
+
+`verifyAndAdvance` takes the project explicitly rather than reading it off the node, because task nodes carry no `project_id` of their own — the repository joins through `tasks`. The crash-recovery path reads the parent task for it, so a re-verification runs in the same workspace the original attempt did.
+
+Found by running the coding agent end to end, not by reading the code.
+
+**Date:** 2026-09-12
+**Impact:** `backend/packages/agent-core/src/{verify,engine}.ts`, `backend/src/index.ts`, `backend/packages/tools/src/index.ts`.
