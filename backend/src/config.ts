@@ -135,6 +135,17 @@ const envSchema = z.object({
   CHAT_SUMMARY_MAX_PROMPT_TOKENS: z.coerce.number().int().min(200).max(500_000).default(6_000),
   /** Most recent messages always kept verbatim, whatever the summary says. */
   CHAT_LIVE_WINDOW_MESSAGES: z.coerce.number().int().min(2).max(200).default(10),
+
+  /**
+   * Hosts `web.fetch` may reach — FR-011, ADR-104. Comma-separated; empty means any PUBLIC
+   * address (private, loopback, link-local and cloud-metadata ranges are refused either way,
+   * and that refusal is not configurable).
+   *
+   * A deployment that wants the capability only for its own documentation sites sets this; one
+   * that wants general web reading leaves it unset. It is an allowlist rather than a blocklist
+   * because the useful direction of a network restriction is naming what IS permitted.
+   */
+  WEB_FETCH_ALLOWLIST: optionalString,
   LLM_SUPPORTS_TOOLS: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
   // Embeddings from the same runtime — real semantic retrieval with no hosted provider.
   EMBEDDING_BASE_URL: optionalString,

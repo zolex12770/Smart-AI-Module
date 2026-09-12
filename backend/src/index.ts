@@ -76,6 +76,7 @@ import {
   createCodingTools,
   createFilesystemTools,
   createSearchTools,
+  createWebTools,
   createTerminalTools,
   projectWorkspace,
   resolveSandboxedPath,
@@ -469,6 +470,16 @@ async function main() {
     // in the registry the agent actually sees. A coding agent that can read and patch but
     // cannot search has to guess at filenames.
     ...createSearchTools(sandboxRoot),
+    // `web.fetch` — FR-011, ADR-104. The platform could not read a URL at all before this, and
+    // that absence was itself load-bearing: docs/13 deferred its SSRF analysis on the grounds
+    // that no URL-fetching tool existed. The guard is in the tool, not here, and it is not
+    // configurable: private, loopback, link-local and cloud-metadata addresses are refused
+    // whatever the allowlist says.
+    ...createWebTools({
+      allowlist: config.WEB_FETCH_ALLOWLIST
+        ? config.WEB_FETCH_ALLOWLIST.split(",").map((h) => h.trim()).filter(Boolean)
+        : undefined,
+    }),
     ...createRagTools({ chunkRepo: documentChunks, documentRepo: documents, embeddings }),
   ]) {
     toolRegistry.register(definition, handler);

@@ -7,6 +7,16 @@ export const toolOriginKindSchema = z.enum(["native", "mcp"]);
 
 export const permissionLevelSchema = z.enum([
   "read_only",
+  /**
+   * Reads something OUTSIDE the deployment — ADR-104.
+   *
+   * Distinct from `read_only`, which reads the sandbox. A tool that can reach the network can
+   * reach the network the deployment is on, and describing that as read-only would understate it
+   * in the one place an operator looks. It is not `write_external` either: a GET writes nothing,
+   * and forcing first-use approval on reading a documentation page would make the capability
+   * unusable for the thing it exists for.
+   */
+  "network",
   "write_local",
   "write_external",
   "destructive",
@@ -26,6 +36,9 @@ export const PERMISSION_LEVEL_DEFAULTS: Record<
   { timeoutMs: number; maxAttempts: number; requiresApproval: RequiresApproval; riskLevel: RiskLevel }
 > = {
   read_only: { timeoutMs: 30_000, maxAttempts: 3, requiresApproval: "never", riskLevel: "low" },
+  // A fetch is bounded by its own timeout; 3 attempts because a transient DNS or TLS failure is
+  // the common case and a GET is idempotent.
+  network: { timeoutMs: 20_000, maxAttempts: 3, requiresApproval: "never", riskLevel: "medium" },
   write_local: { timeoutMs: 30_000, maxAttempts: 2, requiresApproval: "never", riskLevel: "medium" },
   write_external: { timeoutMs: 60_000, maxAttempts: 1, requiresApproval: "first_use", riskLevel: "high" },
   destructive: { timeoutMs: 60_000, maxAttempts: 1, requiresApproval: "always", riskLevel: "critical" },

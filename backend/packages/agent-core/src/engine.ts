@@ -1217,7 +1217,10 @@ export class AgentEngine {
         }
       } else if (node.status === "waiting_tool") {
         const toolDef = node.toolId ? this.deps.toolRegistry.get(node.toolId) : undefined;
-        if (toolDef?.permissionLevel === "read_only") {
+        // `network` joins `read_only` here (ADR-104): a GET writes nothing, so re-running one
+        // after a crash cannot duplicate an effect. The distinction the level exists to draw is
+        // about egress, not about idempotence.
+        if (toolDef?.permissionLevel === "read_only" || toolDef?.permissionLevel === "network") {
           await this.updateNode(node, { status: "pending", startedAt: null }, "system:crash-recovery");
         } else {
           // Non-atomic mutating call was in flight at crash time — outcome unknown.
