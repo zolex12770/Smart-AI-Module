@@ -10,7 +10,7 @@ import type {
   DocumentScanStatus,
   NewDocumentChunk,
 } from "@ai-platform/database";
-import { resolveSandboxedPath } from "@ai-platform/tools";
+import { projectWorkspace, resolveSandboxedPath } from "@ai-platform/tools";
 import type { EmbeddingService } from "@ai-platform/embeddings";
 import { chunkText } from "./chunking.js";
 import { extractDocxText } from "./parsers/docx.js";
@@ -47,6 +47,11 @@ export interface IngestDeps {
    * that were produced by two different models.
    */
   embeddings: EmbeddingService;
+  /**
+   * The DEPLOYMENT sandbox root -- the directory that holds one workspace per project. A
+   * document's `sourcePath` is resolved inside its own project's workspace beneath this, never
+   * against this directly (ADR-095).
+   */
   sandboxRoot: string;
   /** Required to ingest an uploaded document (`document.assetId` set, ADR-041); the
    * sandbox-path flow never touches them, so existing callers/tests need not supply them. */
@@ -135,7 +140,15 @@ async function loadDocumentBytes(deps: IngestDeps, document: Document): Promise<
   if (!document.sourcePath) {
     throw new Error(`Document "${document.id}" has neither a sourcePath nor an assetId.`);
   }
-  return readFile(resolveSandboxedPath(deps.sandboxRoot, document.sourcePath));
+  // Resolved inside the DOCUMENT'S OWN PROJECT workspace (ADR-090, completed by ADR-095), not
+  // the deployment root. `sandboxRoot` is the root that holds every tenant's workspace, so
+  // resolving against it meant `POST /api/v1/files` with `{"path": "<other-tenant>/notes.txt"}`
+  // read another tenant's files and indexed them, chunk by chunk, under the caller's project.
+  // Containment was in place and did its job -- it was pointed one directory too high. The
+  // project comes from the row, which was itself fetched under the caller's scope, so this
+  // cannot widen it.
+  const workspace = projectWorkspace(deps.sandboxRoot, { projectId: document.projectId });
+  return readFile(resolveSandboxedPath(workspace, document.sourcePath));
 }
 
 /**

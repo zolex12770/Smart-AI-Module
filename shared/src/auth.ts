@@ -57,6 +57,14 @@ const EDITOR: Permission[] = [
   "memory:write",
   "media:generate",
 ];
+/**
+ * `tools:manage` and `mcp:manage` are granted here and currently govern NOTHING: both routes
+ * they were written for mutate process-global state, so ADR-089 and ADR-097 moved them to
+ * `requireSystemAdmin`. They are kept rather than deleted because the design that would use
+ * them -- per-project tool and MCP policy, so a project admin can enable a tool for their own
+ * tenant without touching anyone else's -- is a real schema change that is deliberately not
+ * done. Recorded here so the grant is not mistaken for a live capability.
+ */
 const PROJECT_ADMIN: Permission[] = [...EDITOR, "project:admin", "tools:manage", "mcp:manage", "apikey:manage"];
 
 /** Project role -> permissions. Deliberately a static table: RBAC that can be read in one place. */

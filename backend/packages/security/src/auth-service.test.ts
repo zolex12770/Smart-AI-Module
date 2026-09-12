@@ -56,6 +56,41 @@ describe("AuthService", () => {
     });
   });
 
+  describe("bootstrapSystemAdmin (ADR-096)", () => {
+    const bootstrap = (email: string) =>
+      auth.bootstrapSystemAdmin({ email, password: "a-sufficiently-long-password", displayName: "Administrator" });
+
+    it("actually sets is_system_admin, which nothing else could", async () => {
+      // Before ADR-096 the column was unreachable: signup hardcoded false, the default was
+      // false, and no migration seeded a row -- so every /admin route and the only MCP
+      // tool-enable control answered 404 to every user who could exist.
+      const { user } = await bootstrap("root@example.com");
+      expect(user.isSystemAdmin).toBe(true);
+    });
+
+    it("the flag survives a real round trip through login and session authentication", async () => {
+      // The returned object could be right while the stored row is wrong, which is the shape
+      // the original defect had: a truthful-looking return value over a false column.
+      await bootstrap("root@example.com");
+      const { token } = await auth.login("root@example.com", "a-sufficiently-long-password");
+      const authenticated = await auth.authenticate({ kind: "session", token });
+      expect(authenticated?.user.isSystemAdmin).toBe(true);
+    });
+
+    it("refuses once ANY user exists, so it cannot be used to escalate later", async () => {
+      await signup("alice@example.com");
+      await expect(bootstrap("root@example.com")).rejects.toBeInstanceOf(ConflictError);
+      expect(await auth.userCount()).toBe(1);
+    });
+
+    it("self-registration after a bootstrap is still an ordinary user", async () => {
+      await bootstrap("root@example.com");
+      const { user } = await signup("alice@example.com");
+      expect(user.isSystemAdmin).toBe(false);
+    });
+  });
+
+
   describe("login", () => {
     it("issues a session that authenticates, and never returns the password hash", async () => {
       const { user } = await signup("alice@example.com");

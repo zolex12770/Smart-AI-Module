@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { v4 as uuid } from "uuid";
@@ -71,8 +71,6 @@ describe("RAG ingest + retrieve (real PGlite Postgres)", () => {
     db = await createDb(":memory:");
     await runMigrations(db);
     sandboxRoot = mkdtempSync(join(tmpdir(), "rag-test-"));
-    writeFileSync(join(sandboxRoot, "handbook.txt"), HANDBOOK);
-    writeFileSync(join(sandboxRoot, "partner-handbook.txt"), HANDBOOK);
 
     const documentRepo = new PgDocumentRepository(db);
     const chunkRepo = new PgDocumentChunkRepository(db);
@@ -84,6 +82,20 @@ describe("RAG ingest + retrieve (real PGlite Postgres)", () => {
 
     projectA = await seedProject(db, "Project A");
     projectB = await seedProject(db, "Project B");
+
+    // Each fixture goes in the INGESTING PROJECT'S OWN workspace beneath the sandbox root,
+    // because that is where the native tools write and where ADR-095 resolves a `sourcePath`.
+    // These files used to sit directly in the root, which is what let the pre-ADR-095 code
+    // pass while resolving one directory too high — a test fixture in the wrong place was
+    // hiding a cross-tenant read.
+    for (const [project, name] of [
+      [projectA, "handbook.txt"],
+      [projectB, "partner-handbook.txt"],
+    ] as const) {
+      mkdirSync(join(sandboxRoot, project), { recursive: true });
+      writeFileSync(join(sandboxRoot, project, name), HANDBOOK);
+    }
+
     documentA = await ingestDocument(ingestDeps, { projectId: projectA, relativePath: "handbook.txt" });
     documentB = await ingestDocument(ingestDeps, { projectId: projectB, relativePath: "partner-handbook.txt" });
   });
@@ -190,7 +202,8 @@ describe("RAG ingest + retrieve (real PGlite Postgres)", () => {
   it("stops retrieving a document once it is soft-deleted, even though its chunks remain", async () => {
     // Its own project, so this deletion cannot perturb the tests above whichever order they run in.
     const projectC = await seedProject(db, "Project C");
-    writeFileSync(join(sandboxRoot, "temporary-handbook.txt"), HANDBOOK);
+    mkdirSync(join(sandboxRoot, projectC), { recursive: true });
+    writeFileSync(join(sandboxRoot, projectC, "temporary-handbook.txt"), HANDBOOK);
     const document = await ingestDocument(ingestDeps, { projectId: projectC, relativePath: "temporary-handbook.txt" });
     expect(await searchDocuments(retrieveDeps, { projectId: projectC, query: VACATION_QUERY, topK: 5 })).not.toEqual([]);
 

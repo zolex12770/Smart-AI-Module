@@ -87,8 +87,41 @@ export class AuthService {
    * Creates the user, their organization, and their first project in ONE transaction. A
    * half-created account (user with no organization) would be unusable and un-repairable
    * through the API, which is exactly the case a transaction exists to prevent.
+   *
+   * Self-registration NEVER produces a system administrator. That is what `bootstrapSystemAdmin`
+   * is for, and it is a separate method precisely so no HTTP-reachable path can ask for the flag.
    */
   async signup(input: SignupInput, meta: RequestMeta = {}): Promise<{ user: AuthenticatedUser; projectId: string }> {
+    return this.createAccount(input, meta, { isSystemAdmin: false, requireEmptyUserTable: false });
+  }
+
+  /**
+   * Creates the FIRST system administrator, and only on an empty user table — ADR-096.
+   *
+   * Nothing could set `is_system_admin`. `signup` hardcoded it to false, the column defaults to
+   * false, and no migration seeded a row — so the flag was unreachable, and with it the entire
+   * `/admin` surface and the ONLY control that can enable an MCP tool. Every one of those routes
+   * answered 404 to every user who could exist, which reads exactly like correct tenant
+   * isolation. `bootstrapFirstAdmin` logged "BOOTSTRAPPED THE FIRST ADMINISTRATOR" and had in
+   * fact created an ordinary account.
+   *
+   * Emptiness is re-checked INSIDE the transaction: the caller's check is an optimisation, this
+   * is the guarantee. So two processes racing cannot both win, and this can never promote anyone
+   * on a database that already has users — the one property that makes an unauthenticated
+   * bootstrap path safe to have at all.
+   */
+  async bootstrapSystemAdmin(
+    input: SignupInput,
+    meta: RequestMeta = {}
+  ): Promise<{ user: AuthenticatedUser; projectId: string }> {
+    return this.createAccount(input, meta, { isSystemAdmin: true, requireEmptyUserTable: true });
+  }
+
+  private async createAccount(
+    input: SignupInput,
+    meta: RequestMeta,
+    options: { isSystemAdmin: boolean; requireEmptyUserTable: boolean }
+  ): Promise<{ user: AuthenticatedUser; projectId: string }> {
     const email = input.email.trim().toLowerCase();
     const passwordHash = await hashPassword(input.password, this.scryptParams);
     const now = this.now();
@@ -98,6 +131,14 @@ export class AuthService {
 
     try {
       await this.db.transaction(async (tx) => {
+        if (options.requireEmptyUserTable) {
+          const anyUser = await tx.select({ id: users.id }).from(users).limit(1);
+          if (anyUser.length > 0) {
+            throw new ConflictError(
+              "Refusing to bootstrap an administrator: this database already has user accounts."
+            );
+          }
+        }
         const existing = await tx.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
         if (existing.length > 0) throw new ConflictError("An account with that email already exists.");
 
@@ -107,7 +148,7 @@ export class AuthService {
           passwordHash,
           displayName: input.displayName,
           status: "active",
-          isSystemAdmin: false,
+          isSystemAdmin: options.isSystemAdmin,
           failedLoginCount: 0,
           createdAt: now,
           updatedAt: now,
@@ -160,7 +201,13 @@ export class AuthService {
     });
 
     return {
-      user: { id: userId, email, displayName: input.displayName, status: "active", isSystemAdmin: false },
+      user: {
+        id: userId,
+        email,
+        displayName: input.displayName,
+        status: "active",
+        isSystemAdmin: options.isSystemAdmin,
+      },
       projectId,
     };
   }

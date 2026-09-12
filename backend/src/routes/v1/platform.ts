@@ -142,7 +142,14 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
   });
 
   app.post<{ Params: { id: string } }>("/api/v1/mcp/:id/reconnect", async (request) => {
-    await requireProject(request, ctx.auth, "mcp:manage");
+    // System-admin, not `mcp:manage` (ADR-097). `ctx.mcp` is a single process-wide manager and
+    // `reconnect` restarts a shared server connection and reassigns its tool ids for the whole
+    // deployment, but `mcp:manage` is in PROJECT_ADMIN and signup makes every self-registered
+    // user an admin of the project it creates for them -- so any account could restart another
+    // tenant's MCP connection. This is the identical mismatch ADR-089 fixed for `tools:manage`,
+    // in the route next door, missed because the fix was reasoned about per permission rather
+    // than per blast radius.
+    requireSystemAdmin(request);
     const reconnected = await ctx.mcp.reconnect(request.params.id);
     if (!reconnected) throw new NotFoundError(`MCP server "${request.params.id}" is not configured.`);
     return { ok: true, server: reconnected };
@@ -294,7 +301,10 @@ export const PLATFORM_ROUTE_PERMISSIONS: Record<string, Permission | "system-adm
   // project-scoped permission governed a deployment-wide mutation.
   "POST /api/v1/tools/:id/enable": "system-admin",
   "GET /api/v1/mcp": "project:read",
-  "POST /api/v1/mcp/:id/reconnect": "mcp:manage",
+  // ADR-097: the same mismatch as the line above, in the route next door -- `reconnect` mutates
+  // a process-wide manager, so `mcp:manage` (a PROJECT permission every self-registered user
+  // holds) governed a deployment-wide effect.
+  "POST /api/v1/mcp/:id/reconnect": "system-admin",
   "GET /api/v1/jobs": "project:read",
   "POST /api/v1/jobs/:queue/:id/cancel": "project:write",
 };

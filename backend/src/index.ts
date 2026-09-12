@@ -1207,10 +1207,13 @@ async function bootstrapFirstAdmin(
     );
   }
 
-  const { user, projectId } = await authService.signup(parsed.data);
+  // `bootstrapSystemAdmin`, not `signup` (ADR-096): signup hardcodes `isSystemAdmin: false`, so
+  // this function spent its whole life logging that it had created an administrator while in fact
+  // creating an ordinary account -- and every `/admin` route stayed unreachable to everyone.
+  const { user, projectId } = await authService.bootstrapSystemAdmin(parsed.data);
   // Email and ids only. The password is never written anywhere, including here.
   logger.warn(
-    { user_id: user.id, email: user.email, project_id: projectId },
+    { user_id: user.id, email: user.email, project_id: projectId, is_system_admin: user.isSystemAdmin },
     "BOOTSTRAPPED THE FIRST ADMINISTRATOR from BOOTSTRAP_ADMIN_EMAIL/PASSWORD on an empty database — log in, " +
       "then remove those variables from the environment"
   );

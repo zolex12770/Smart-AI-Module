@@ -17,9 +17,17 @@ import type { AuthService } from "@ai-platform/security";
  * decisions:
  *
  * - **Authentication is global; authorization is per-route.** A `preHandler` resolves the
- *   caller's identity for every request (cheap, indexed hash lookup), but *what* they may do
- *   is decided by each route naming the permission it needs. A route that names nothing gets
- *   nothing — there is no ambient authority.
+ *   caller's identity for every request (cheap, indexed hash lookup) and REFUSES any request
+ *   to a path outside `publicPaths` that presented no valid credential. What a caller may then
+ *   do is decided by each route naming the permission it needs; a route that names nothing gets
+ *   nothing.
+ *
+ *   The refusal is new (ADR-097). `publicPaths` was accepted by this plugin and never read, so
+ *   the claim that "a route absent from this list requires authentication; there is no ambient
+ *   authority anywhere else in the API" rested entirely on every route remembering its own
+ *   guard. Today all of them do -- audited, only `/api/health` and signup lack one, and both are
+ *   public -- but the property was asserted in two docstrings and enforced in none, which is the
+ *   kind of gap that is discovered by the first route that forgets.
  * - **Two credential types, one context.** A browser sends an httpOnly session cookie; a
  *   program sends `Authorization: Bearer aip_...`. Both resolve to the same `AuthContext`, so
  *   no route needs to care which was used.
@@ -63,6 +71,24 @@ export function registerAuth(app: FastifyInstance, options: AuthPluginOptions): 
       }
     } else {
       request.auth = null;
+    }
+
+    // Deny by default (ADR-097). Compared against the ROUTE PATTERN rather than the raw URL, so
+    // a query string cannot smuggle a path past it and a parameterised route is matched as it
+    // was declared. OPTIONS is exempt: a CORS preflight carries no credential by definition.
+    // Only for a MATCHED route. Fastify runs this hook for the not-found handler too, where
+    // `routeOptions.url` is undefined -- refusing there would answer 401 to every unknown path,
+    // turning a plain 404 into an authentication challenge for a route that does not exist.
+    // There is nothing behind an unmatched path to protect, so it stays a 404.
+    const routeUrl = request.routeOptions?.url;
+    if (
+      routeUrl &&
+      !request.auth &&
+      request.method.toUpperCase() !== "OPTIONS" &&
+      !options.publicPaths.includes(routeUrl)
+    ) {
+      if (cookie) reply.clearCookie(SESSION_COOKIE, { path: "/" });
+      throw new UnauthorizedError("Authentication required.");
     }
 
     // A stale or revoked cookie should not leave the browser retrying forever with it.
