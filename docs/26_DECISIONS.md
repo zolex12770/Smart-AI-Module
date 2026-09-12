@@ -1565,3 +1565,172 @@ Observed rather than reasoned about: a `fix_failing_test` run fell back to the m
 
 **Date:** 2026-09-12
 **Impact:** `backend/packages/model-router/src/router.ts` + 2 tests.
+
+## ADR-095: `fs.search` and `fs.glob` resolve inside the caller's project workspace
+
+**Decision:** Both search tools resolve through `projectWorkspace(root, context)`, honour a `workspaceRoot` only when RELATIVE, and re-check containment for every entry the directory walk yields.
+
+**What was open.** ADR-090 gave the filesystem and coding tools a per-project workspace and these two were missed. They kept `context.workspaceRoot ? resolveSandboxedPath(...) : root`, and the composition root never injects a `workspaceRoot` — so in production the FALLBACK was the live branch and both tools walked the deployment root: every tenant's workspace at once. Proven before fixing: tenant B searching for a string inside tenant A's file returned `matchCount: 1` with the secret in it, and `fs.glob` listed `tenant-a/notes.txt`.
+
+A read tool with no `WHERE project_id` is a cross-tenant disclosure even though it writes nothing — and this one answers "where is X defined?" across everything it can reach.
+
+**ADR-088 was incomplete in the same file.** Containment was applied once to the search ROOT and never to the entries the walk produced, and the walk used `statSync`, which resolves symlinks. One link inside its own workspace made the host searchable. Containment now runs per entry, reusing ADR-088's check rather than reimplementing it, and a link that stays inside still resolves: a check that rejects everything is not a containment check.
+
+**Why three audits missed it.** `search.ts` contained a raw NUL byte — an unescaped `\0` in its binary-file guard — so `file` reported it as `data` and every `grep -r` over the source tree printed "Binary file ... matches" and moved on. The file no grep could read was the file with the cross-tenant read. `hash-embedding.ts` had the same byte and was fixed with it.
+
+**Date:** 2026-09-12
+**Impact:** `backend/packages/tools/src/native/search.ts`, `embeddings/src/hash-embedding.ts` + 9 tests.
+
+## ADR-096: The first administrator is created by a method HTTP cannot reach
+
+**Decision:** `AuthService.bootstrapSystemAdmin` sets `is_system_admin`, and re-checks that the user table is empty INSIDE the transaction. `signup` still hardcodes `false`.
+
+**What was open.** Nothing could set the column. `signup` hardcoded it false, the column defaults false, and no migration seeded a row — so the flag was unreachable, and with it the entire `/admin` surface and the only control that can enable an MCP tool. Every one of those routes answered 404 to every user who could exist, which reads exactly like correct tenant isolation. `bootstrapFirstAdmin` logged "BOOTSTRAPPED THE FIRST ADMINISTRATOR" and had created an ordinary account.
+
+**Why a separate method rather than a flag on `signup`:** so no HTTP-reachable path can ask for the privilege. And why the emptiness check is inside the transaction: the caller's check is an optimisation, that is the guarantee — two processes racing cannot both win, and it can never promote anyone on a database that already has users, which is the one property that makes an unauthenticated bootstrap path safe to have at all.
+
+**Verified live,** not only by test: booting with `BOOTSTRAP_ADMIN_*` on an empty database logged `is_system_admin: true`, then `GET /api/v1/admin/health` and `/admin/stats` answered 200 for that account and 404 for a self-registered one.
+
+**Date:** 2026-09-12
+**Impact:** `backend/packages/security/src/auth-service.ts`, `backend/src/index.ts` + 4 tests.
+
+## ADR-097: Authentication is refused by default, not by each route remembering
+
+**Decision:** The auth plugin refuses any request to a MATCHED route outside `publicPaths` that presented no valid credential. `POST /api/v1/mcp/:id/reconnect` moves to `requireSystemAdmin`.
+
+**What was open.** `server.ts` stated that "a route absent from this list requires authentication; there is no ambient authority anywhere else in the API", the plugin's docstring said the same, and `publicPaths` was accepted by the plugin and **never read**. The property rested entirely on all 53 routes remembering their own guard. An audit of every one found that they all did — which is precisely why nothing had noticed.
+
+So the test is not "an existing route refuses an anonymous caller"; every route already did that itself. It is "a route that FORGETS its guard is still refused", with such a route registered to prove it.
+
+**Scoped to matched routes only.** Fastify runs the hook for the not-found handler too, where `routeOptions.url` is undefined — refusing there turned every unknown path into a 401 instead of a 404. The test caught that, which is the second time in this session a test written for one property caught a regression in another.
+
+**The MCP reconnect route** gated a process-global mutation on `mcp:manage`, a PROJECT permission that `signup` grants every self-registered user in the project it creates for them: any account could restart a shared MCP connection and reassign its tool ids deployment-wide. The identical mismatch ADR-089 fixed for `tools:manage`, in the route next door, missed because it was reasoned about per permission instead of per blast radius. Both permissions are now granted but govern nothing, and `shared/src/auth.ts` says so rather than leaving the grant looking like a capability.
+
+**Date:** 2026-09-12
+**Impact:** `backend/src/plugins/auth.ts`, `routes/v1/platform.ts`, `shared/src/auth.ts` + 4 tests.
+
+## ADR-098: `request.id` is a UUID, and other single-line correctness fixes
+
+**Decision:** `genReqId: () => randomUUID()`. The error handler uses `request.id` instead of minting its own. Shutdown steps are isolated and named. Subtitle timestamps derive every field from one rounded total. The reasoning-node try/finally covers the approved tool call.
+
+**The request id was not only a log tag.** It is written to audit records, propagated into job payloads, and used as the usage-ledger idempotency key for a RAG query — the one spending path with no persisted row to key off. Fastify's default generator restarts at `req-1` in every process, so two replicas, or one process after a restart, produced the SAME key for different requests. A collision on that unique index DROPS the charge rather than duplicating it: the direction that loses money quietly. The same change makes the id in an error response the id every log line carries; the handler had been minting a separate UUID, so the value handed to a caller matched nothing an operator could grep for.
+
+**Graceful shutdown skipped the step it exists for.** All steps were awaited in one try, so the first rejection jumped to the catch and abandoned the rest — and `closeDb` is last. PGlite is an embedded engine whose unclean close can corrupt on-disk state in a way that surfaces only on a later migration, which is exactly what happened in Phase 8. Each step is now isolated and named, and a shutdown that could not close everything exits non-zero.
+
+**Subtitles could emit a four-digit millisecond field.** The seconds field was floored while the milliseconds were rounded independently, so `9.9996` rendered `00:00:09,1000` — demonstrated by running both algorithms side by side, not inferred. `mov_text` and most players stop at a malformed cue and take the rest of the track with them, and a measured ffprobe duration lands in that band routinely. The renderer had no unit test at all; the integration fixtures all use whole seconds.
+
+**An approved tool call could strand its node.** `inFlight.set` happened, then 72 lines ran — including the approved call, the single riskiest statement in the method — before the try/catch/finally that releases it began. A throw there skipped both `handleNodeFailure` and `inFlight.delete`: the node sat in `waiting_model` forever with its AbortController leaked and the run no longer cancellable. Proven with a `PermissionError`, which the tool registry deliberately re-throws and is what a permission revoked between parking and approval looks like.
+
+**Date:** 2026-09-12
+**Impact:** `backend/src/server.ts`, `plugins/error-handler.ts`, `index.ts`, `packages/media/src/subtitles.ts`, `packages/agent-core/src/engine.ts` + 12 tests.
+
+## ADR-099: A multi-call turn parks every un-executed call
+
+**Decision:** `runReasoningLoop` reports `unexecutedCalls` when it stops for approval; the engine persists them and appends a `tool` message for each on resume — the real result for the approved one, an explicit "not executed" for the rest.
+
+**What was open.** The loop stopped at the first call needing approval and parked without appending a `tool` message for it, and the calls the model had requested after it were never executed and never got one either. The parked transcript therefore held an assistant turn with three tool calls and one result — a shape OpenAI, Anthropic and Google all reject outright. So the approval was recorded, the node resumed, and the resumed run's first provider call failed. A capable model asking for two or three tools in one turn is the normal case, not an edge.
+
+**The un-approved calls are reported, not silently run.** A human approved ONE specific action; the others may need approval of their own. Telling the model plainly lets it ask again if it still needs them.
+
+`readResumeState` falls back to the single `pendingCall` when `pendingCalls` is absent, so a node that was already waiting when this deployed still resumes correctly.
+
+**Date:** 2026-09-12
+**Impact:** `backend/packages/agent-core/src/reasoning-loop.ts`, `engine.ts` + 1 test (which fails against the old code).
+
+## ADR-100: Test timeouts are sized for real infrastructure, not for fakes
+
+**Decision:** One shared `vitest.config.base.ts` sets `testTimeout: 30s` and `hookTimeout: 60s`; all 25 packages extend it.
+
+**Why.** Vitest's defaults are 5s per test and 10s per hook, sized for unit tests against fakes — and almost nothing in this repository is that. A typical `beforeEach` here creates an embedded PGlite Postgres and runs every migration against it; several suites spawn real subprocesses (MCP servers over stdio, sandboxed commands, ffmpeg).
+
+On an idle machine that fits inside the defaults, which is why it looked fine. Under load it does not, and two independent audit runs — each with a dozen agents competing for the same cores — hit it: `npm test`, the literal CI gate, exited non-zero with between 1 and 8 failures and a **different count each run**, every one of them a hook or test timeout. A hook timeout then cascades into a second spurious failure in `afterEach`, because the fixture it was meant to close never finished being built. Re-running one of those files with a raised hook timeout passed 10/10 in 23.55s.
+
+So the product code was fine and the GATE was broken — the worse of the two, because a gate that goes red on a busy runner teaches everyone to ignore it, and CI runs on a shared runner by definition. These are ceilings for a machine under contention, not budgets to grow into: a genuinely hung test still fails, just later.
+
+**Date:** 2026-09-12
+**Impact:** `vitest.config.base.ts` + 25 package configs.
+
+## ADR-101: "No fake implementation in production" is asserted, not grepped
+
+**Decision:** The provider factories are extracted and exported, and a test builds the real provider set from a production config and asserts nothing in it is a mock. The CI step runs that file.
+
+**What was wrong.** The gate was `grep -rn "new Mock" backend/src --include=*.ts | grep -v "NODE_ENV" | grep -v test`, and it failed in BOTH directions. The LLM guard is `if (config.NODE_ENV !== "production") {` on the line ABOVE the construction, so the construction line contained neither word, survived both filters, and the step exited 1 on correct code — which means the `security` job could never pass, falsifying the workflow's own claim that "every step below was chosen to match a command that IS run locally". And a trailing `// NODE_ENV` comment would have defeated it, so it did not reliably catch the real thing either.
+
+Both directions are asserted, because a test that only proves "no mock in production" would also pass if the factories returned nothing at all.
+
+**Date:** 2026-09-12
+**Impact:** `backend/src/index.ts`, `.github/workflows/ci.yml` + 7 tests.
+
+## ADR-102: Account and data deletion (NFR-008)
+
+**Decision:** `DELETE /api/v1/auth/account` deletes the caller's account, destroys organizations they solely own, and returns the storage objects for the caller to remove.
+
+**What was open.** No route, no CLI, no repository call, and no way even to suspend an account — while the status document claimed "P1 remaining: 0". This needs no hosted credential, no container runtime and no GCP project, so it was never part of the declared externally-blocked work; it was missing.
+
+**And it is not achievable by deleting the user row.** Content hangs off the PROJECT, not the user: `conversations`, `tasks`, `documents`, `image_generations`, `video_projects` and `usage_records` all carry `createdByUserId` with `onDelete: "set null"` — deliberately, so an audit trail survives a departing colleague. Deleting the user would leave every message, document and generated asset in place with a null author. The honest unit of deletion is the organization, which cascades to projects and from there to everything.
+
+So the rule is ownership, not membership: an organization where this user is the only member is destroyed entirely; one with other members keeps its content, which is not this user's to destroy, and only their access ends.
+
+**The database commits before the files are removed.** An orphaned object is a privacy problem an operator can finish by hand from the returned list; rows pointing at files that are already gone would be a corrupt database nobody can repair. Each file that cannot be removed is reported in the response and logged — answering 200 while leaving a tenant's bytes on disk is the one failure mode of a deletion endpoint that matters.
+
+Three guards, each for something different: the session (who), the current password (that it is really them and not a stolen cookie — checked without touching the lockout counter, since being locked out of the account you are deleting is worse than the risk), and a typed confirmation. The audit record is written BEFORE the deletion, because `audit_log.user_id` is `set null` and afterwards the foreign key would reject it.
+
+**Date:** 2026-09-12
+**Impact:** `backend/packages/database/src/repositories/account-deletion.ts`, `security/src/auth-service.ts`, `media/src/asset-store.ts`, `gcs-asset-store.ts`, `backend/src/routes/v1/auth.ts`, `shared/src/auth.ts` + 12 tests.
+
+## ADR-103: A live window plus a rolling summary (FR-030)
+
+**Decision:** Before each provider call, turns beyond a token threshold are replaced by one system message holding an incrementally-maintained summary; the most recent N turns stay verbatim.
+
+**What was open.** The `summary` and `summarized_message_count` columns and `updateSummary` had existed since ADR-051, unused — ADR-051 said so honestly — and the chat route forwarded whatever array the client sent. So a long conversation was neither summarized NOR truncated: it grew until the provider rejected it at its context limit. FR-030's criterion is that a conversation past the threshold "still produces coherent answers referencing early context"; the actual behaviour was an error.
+
+Three details carry the weight:
+
+- **Leading system messages are never summarized.** Long-term memory injects its retrieved facts as a system message ahead of the turns (ADR-063). Folding that in would degrade those facts into a paraphrase of themselves once per request, compounding — memory would decay by the act of being used.
+- **Summarization is incremental.** Each pass covers the previous summary plus only the newly aged-out turns, which is what `summarized_message_count` was always for. The alternative costs tokens proportional to the conversation on every request.
+- **A failure degrades rather than failing the request.** The worst case is the model seeing less history — the situation that existed before this. It is quota-checked before it spends (ADR-046 applies to bookkeeping too) and recorded in the ledger with its own idempotency key, because it is a real model call.
+
+**Verified live against qwen2.5:7b.** "My access code is NIGHTHAWK-77" in turn 1, then five filler exchanges; the server's log shows `prompt_messages=5` on every later turn with the covered count advancing 1, 3, 5, 7, 9, the stored summary reads "user's access code is NIGHTHAWK-77", and the model answered "NIGHTHAWK-77" from a prompt that no longer contained the turn where it was said.
+
+**The first run of that scenario was a false pass** and is recorded because the shape recurs: the driver read the conversation id from the SSE `done` event, where it does not appear (it is the `X-Conversation-Id` header), so every turn silently created a NEW conversation and resent the full history. The model answered correctly because nothing had been summarized at all. The tell was `summarizedMessageCount: ROW NOT FOUND` printed next to a green result.
+
+Thresholds are configuration, not constants: the right window depends on the deployed model's context size, which this platform does not choose.
+
+**Date:** 2026-09-12
+**Impact:** `backend/packages/memory/src/conversation-window.ts`, `backend/src/routes/v1/chat.ts`, `config.ts` + 8 tests.
+
+## ADR-104: `web.fetch`, and the SSRF guard its absence had deferred
+
+**Decision:** A native `web.fetch` tool at a new `network` permission level, with address validation, a pinned socket, per-hop redirect revalidation and a byte cap.
+
+**What was open.** The platform could not read a URL. No fetch tool, no search tool, and no row for either in the status matrix — so the completion accounting silently omitted a brief-level capability of an AI platform. Worse, the absence was load-bearing for a security decision: docs/13 deferred its SSRF analysis on the grounds that "no URL-fetching tool exists yet". Implementing the feature meant implementing the guard the deferral had postponed.
+
+A model choosing the URL is an untrusted caller choosing a destination from inside the deployment's network. On a cloud host that is one request to 169.254.169.254 from instance credentials; on any host it is a port scanner and a reader of internal services that trust the network they are on.
+
+- **Addresses are validated, not hostnames.** Every resolved address is checked against the private, loopback, link-local, carrier-NAT, multicast and reserved ranges in IPv4 and IPv6 — including the `::ffff:` mapped forms and the NAT64/6to4 prefixes a v4-only check misses. A name blocklist never works: `localtest.me` resolves to 127.0.0.1 and an attacker runs their own DNS.
+- **ALL resolved addresses must pass,** or a record set with one public and one private address is fetchable on a retry.
+- **The socket is pinned to the validated address** through `http.request`'s `lookup` hook. Otherwise validating and connecting are two separate lookups, and a one-second TTL answers "public" to the first and "127.0.0.1" to the second. Validation done any other way loses to rebinding.
+- **Redirects are followed by hand and every hop revalidated** — a public URL that 302s to the metadata endpoint is the most common bypass there is.
+
+**`network` is a new permission level** rather than reusing `read_only`, which reads the sandbox: a tool that can reach the network can reach the network the deployment is on, and calling that read-only understates it in the one place an operator looks. It is not `write_external` either — a GET writes nothing, and demanding first-use approval to read a documentation page would make the capability useless. Crash recovery treats it as the read it is and auto-retries.
+
+The address policy is injectable for one stated reason: the HTTP mechanics can only be tested against a real server, and a server a test can start is on loopback. A test therefore supplies a policy permitting only its own port — stricter than an "allow private" switch, and it lets the redirect test reach the local server on hop one while still proving 169.254.169.254 is refused on hop two. Nothing reads it from configuration.
+
+**Web SEARCH is not built.** It needs a search provider's credentials, which this environment does not have, and the matrix says so rather than implying the row is complete.
+
+**Verified live:** `https://example.com/` returns HTML converted to text and `https://api.github.com/zen` returns plain text, while the metadata endpoint, `localhost` (refused via `::1`), `10.0.0.1` and `file://` are each refused with a specific reason.
+
+**Date:** 2026-09-12
+**Impact:** `backend/packages/tools/src/native/web.ts`, `shared/src/tools.ts`, `agent-core/src/engine.ts`, `backend/src/index.ts`, `config.ts` + 24 tests.
+
+## ADR-105: E2E always starts its own servers
+
+**Decision:** `reuseExistingServer: false` for both Playwright web servers.
+
+**Why.** It was `!process.env.CI`, a real local convenience, and it turned out to be a gate defect. A backend left listening on 8790 by an earlier session was silently reused, so a full E2E run exercised code from before the day's changes: six of seven tests failed against a contract that no longer existed, and diagnosing that cost more than every boot the reuse had ever saved.
+
+The direction that matters is the other one. A stale server can just as easily PASS — reporting green for code that is not the code under test — and an E2E suite exists precisely to be the thing that cannot be fooled that way. Twenty seconds of boot per run is the correct price.
+
+**Date:** 2026-09-12
+**Impact:** `frontend/playwright.config.ts`.
+

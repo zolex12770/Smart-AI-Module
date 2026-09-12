@@ -42,11 +42,24 @@ export default defineConfig({
    * hard way after an unrelated rebuild. Making the suite build what it runs is what stops the
    * result from depending on who last ran `npm run build` and with which environment.
    */
+  /**
+   * Both servers are ALWAYS started fresh — ADR-105.
+   *
+   * This was `reuseExistingServer: !process.env.CI`, a real local convenience that turned out
+   * to be a gate defect: a backend left listening on 8790 by an earlier session was silently
+   * reused, so a full E2E run exercised code from before the day's changes. Six of seven tests
+   * failed against a contract that no longer existed, and the diagnosis cost more than every
+   * boot the reuse had ever saved.
+   *
+   * The failure direction that matters is the other one. A stale server can just as easily
+   * PASS — reporting green for code that is not the code under test — and an E2E suite exists
+   * precisely to be the thing that cannot be fooled that way.
+   */
   webServer: [
     {
       command: "npm run start:e2e --workspace=@ai-platform/api",
       url: "http://127.0.0.1:8790/api/health",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 120_000,
       stdout: "pipe",
       stderr: "pipe",
@@ -54,7 +67,7 @@ export default defineConfig({
     {
       command: "npm run start:e2e --workspace=@ai-platform/web",
       url: "http://127.0.0.1:3100",
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 180_000,
       stdout: "pipe",
       stderr: "pipe",
