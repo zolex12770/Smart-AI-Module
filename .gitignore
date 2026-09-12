@@ -11,7 +11,12 @@ build/
 *.sqlite3
 *.sqlite-wal
 *.sqlite-shm
-apps/*/data/
+# Runtime state, never source. The pattern used to be `apps/*/data/` and did not survive the
+# frontend/backend split (ADR-092) — a live PGlite database and the agent's sandbox fixtures were
+# committed before this was noticed. Unanchored so it holds wherever a process is started from.
+data/
+backend/data/
+frontend/data/
 coverage/
 *.tsbuildinfo
 .terraform/
