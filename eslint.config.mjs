@@ -32,7 +32,7 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/dist/**",
       "**/.next/**",
-      "apps/web/.next/**",
+      "frontend/.next/**",
       "**/migrations/**",
       "**/*.d.ts",
       ".local-tools/**",
@@ -46,7 +46,7 @@ export default tseslint.config(
   {
     // Every TypeScript file in the repo. `files` is explicit rather than inherited so that
     // apps/web/next.config.mjs — the one JavaScript file in the tree — is left alone.
-    files: ["apps/**/*.{ts,tsx,mts,cts}", "packages/**/*.{ts,tsx,mts,cts}"],
+    files: ["frontend/**/*.{ts,tsx,mts,cts}", "backend/**/*.{ts,tsx,mts,cts}", "shared/**/*.{ts,tsx,mts,cts}"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     rules: {
       // The TypeScript-aware version understands type-only imports and enum members, which the
@@ -81,7 +81,7 @@ export default tseslint.config(
     //
     // COST: about 12 seconds on top of a 19-second syntax-only run, for ~150 files. Acceptable.
     // The broader `recommendedTypeChecked` set was measured and rejected (see the bottom).
-    files: ["apps/**/*.{ts,tsx}", "packages/**/*.{ts,tsx}"],
+    files: ["frontend/**/*.{ts,tsx}", "backend/**/*.{ts,tsx}", "shared/**/*.{ts,tsx}"],
     ignores: [
       // Every workspace tsconfig excludes its own tests (`"exclude": ["src/**/*.test.ts"]`), and
       // the vitest/drizzle config files sit outside `include` entirely, so the TypeScript project
@@ -96,7 +96,7 @@ export default tseslint.config(
       // (video-replicate's mp4-fixtures.ts) appeared within a day of the first two being listed
       // individually, and the next package to add one should not have to find this file.
       "**/*-fixtures.ts",
-      "apps/api/src/test-app.ts",
+      "backend/src/test-app.ts",
     ],
     languageOptions: {
       // `projectService` instead of an explicit `project` list: it follows each file to its

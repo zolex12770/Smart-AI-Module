@@ -4,7 +4,7 @@
 # The ADR-047 audit found the deployed configuration could not boot at all: the Dockerfile
 # sets NODE_ENV=production, ADR-013's guard threw whenever no LLM key was present, and the
 # Cloud Run worker pool deliberately has no LLM key. Every case that was broken is checked
-# here against the REAL built entrypoint (`node apps/api/dist/index.js`), which is exactly
+# here against the REAL built entrypoint (`node backend/dist/index.js`), which is exactly
 # what the container runs.
 #
 # Usage: bash scripts/verify-boot.sh
@@ -29,8 +29,8 @@ boot_case() {
   local label=$1 port=$2 expect=$3; shift 3
   local log; log=$(mktemp)
   free_port "$port"
-  rm -rf "apps/api/data/pgdata-verify-$port"
-  ( cd apps/api && env "$@" PORT="$port" DATABASE_DIR="./data/pgdata-verify-$port" \
+  rm -rf "backend/data/pgdata-verify-$port"
+  ( cd backend && env "$@" PORT="$port" DATABASE_DIR="./data/pgdata-verify-$port" \
       node dist/index.js >"$log" 2>&1 ) &
   local runner=$!
 
@@ -52,7 +52,7 @@ boot_case() {
     free_port "$port"
     kill "$runner" 2>/dev/null
     wait "$runner" 2>/dev/null
-    rm -rf "apps/api/data/pgdata-verify-$port"
+    rm -rf "backend/data/pgdata-verify-$port"
     LAST_LOG="$log"
     return 0
   fi
@@ -76,7 +76,7 @@ boot_case() {
 
   free_port "$port"
   wait "$runner" 2>/dev/null
-  rm -rf "apps/api/data/pgdata-verify-$port"
+  rm -rf "backend/data/pgdata-verify-$port"
   LAST_LOG="$log"
 }
 

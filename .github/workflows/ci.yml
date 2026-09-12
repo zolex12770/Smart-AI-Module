@@ -149,17 +149,17 @@ jobs:
           NEXT_PUBLIC_API_URL: http://127.0.0.1:8790
       - name: Install the browser
         run: npx playwright install --with-deps chromium
-        working-directory: apps/web
+        working-directory: frontend
       # Playwright starts both servers itself (see playwright.config.ts) so this exercises the
       # real API against a real database and the real production build of the web app.
       - name: Run E2E
         run: npx playwright test
-        working-directory: apps/web
+        working-directory: frontend
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
-          path: apps/web/test-results/
+          path: frontend/test-results/
           retention-days: 7
 
   security:
@@ -195,7 +195,7 @@ jobs:
           # Product brief §32: mock providers must never be reachable in production. The
           # composition root refuses to construct them when NODE_ENV=production; this checks
           # nobody has since added an unconditional construction.
-          if grep -rn "new Mock" apps/api/src --include=*.ts | grep -v "NODE_ENV" | grep -v test; then
+          if grep -rn "new Mock" backend/src --include=*.ts | grep -v "NODE_ENV" | grep -v test; then
             echo "::error::A mock provider is constructed outside a NODE_ENV guard."
             exit 1
           fi
@@ -211,10 +211,10 @@ jobs:
       # because no image had ever been built. Building both images in CI is what stops that
       # class of defect from recurring.
       - name: Build the API image
-        run: docker build -f apps/api/Dockerfile -t ai-platform-api:ci .
+        run: docker build -f backend/Dockerfile -t ai-platform-api:ci .
 
       - name: Build the web image
-        run: docker build -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_API_URL=http://localhost:8787 -t ai-platform-web:ci .
+        run: docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=http://localhost:8787 -t ai-platform-web:ci .
 
       # And that it actually STARTS — a build that produces an un-bootable image is the exact
       # failure this gate exists to catch (ADR-060).

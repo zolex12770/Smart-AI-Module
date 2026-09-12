@@ -91,9 +91,9 @@ fi
 # The one that catches a hand-edited schema with no regenerated migration — which passes every
 # test and then fails on the first real deployment.
 say "checking the schema against the checked-in migrations..."
-BEFORE=$(ls packages/database/migrations/*.sql | wc -l)
+BEFORE=$(ls backend/packages/database/migrations/*.sql | wc -l)
 GEN=$(npm run db:generate --workspace=@ai-platform/database 2>&1 || true)
-AFTER=$(ls packages/database/migrations/*.sql | wc -l)
+AFTER=$(ls backend/packages/database/migrations/*.sql | wc -l)
 
 if [ "$BEFORE" -eq "$AFTER" ]; then
   ok "no schema drift — the migrations describe the current schema"

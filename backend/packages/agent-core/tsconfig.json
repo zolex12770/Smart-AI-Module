@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts"],
+  "references": [
+    { "path": "../../../shared" }, { "path": "../observability" },
+    { "path": "../database" },
+    { "path": "../model-router" },
+    { "path": "../tools" },
+    { "path": "../rag" }
+  ]
+}

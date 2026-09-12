@@ -3,20 +3,28 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
-    "apps/*",
-    "packages/*",
-    "packages/providers/*"
+    "frontend",
+    "backend",
+    "backend/packages/*",
+    "backend/packages/providers/*",
+    "shared"
   ],
   "scripts": {
     "predev": "npm run build:packages",
-    "dev": "concurrently -n api,web -c blue,green \"npm run dev -w @ai-platform/api\" \"npm run dev -w @ai-platform/web\"",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev:backend\" \"npm run dev:frontend\"",
     "build:packages": "tsc -b tsconfig.json",
     "build": "npm run build:packages && npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "test": "npm run test --workspaces --if-present",
     "db:generate": "npm run db:generate -w @ai-platform/database",
-    "db:migrate": "npm run db:migrate -w @ai-platform/database"
+    "db:migrate": "npm run db:migrate -w @ai-platform/database",
+    "dev:frontend": "npm run dev --workspace=@ai-platform/web",
+    "dev:backend": "npm run dev --workspace=@ai-platform/api",
+    "build:frontend": "npm run build --workspace=@ai-platform/web",
+    "build:backend": "npm run build --workspace=@ai-platform/api",
+    "test:frontend": "npm run test --workspace=@ai-platform/web",
+    "test:backend": "npm run test --workspace=@ai-platform/api"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

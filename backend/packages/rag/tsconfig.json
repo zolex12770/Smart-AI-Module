@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/parsers/zip-fixtures.ts"],
+  "references": [
+    { "path": "../../../shared" },
+    { "path": "../database" },
+    { "path": "../embeddings" },
+    { "path": "../tools" },
+    { "path": "../scanning" }
+  ]
+}
