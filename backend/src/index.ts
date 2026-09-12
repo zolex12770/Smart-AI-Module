@@ -1118,6 +1118,10 @@ async function main() {
     jobQueue,
     assets,
     assetsRoot,
+    conversationWindow: {
+      maxPromptTokens: config.CHAT_SUMMARY_MAX_PROMPT_TOKENS,
+      liveWindowMessages: config.CHAT_LIVE_WINDOW_MESSAGES,
+    },
     assetStore,
     imageGenerations,
     videoProjects,

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
+import { CONVERSATION_SUMMARY_PROMPT, applyConversationWindow } from "@ai-platform/memory";
 import {
   SpanStatusCode,
   recordProviderCall,
@@ -141,11 +142,112 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
         );
       }
 
+      /**
+       * Rolling summarization of the turns that no longer fit — FR-030, ADR-103.
+       *
+       * Before this the route forwarded whatever array the client sent, so a long conversation
+       * was neither summarized nor truncated: it grew until the provider rejected it at its
+       * context limit. The `summary` column, the `summarized_message_count` column and
+       * `updateSummary` had all existed, unused, since ADR-051.
+       *
+       * It runs AFTER memory injection and BEFORE the quota estimate, which is the only correct
+       * position for both: the injected system block is part of the prompt being measured, and
+       * the estimate must see the prompt that will actually be sent, not the one that would
+       * have been.
+       */
+      const windowed = await applyConversationWindow(
+        {
+          conversationRepo: ctx.conversations,
+          summarize: async ({ previousSummary, transcript }) => {
+            const prompt = [
+              previousSummary ? "Earlier summary:\n" + previousSummary : null,
+              "New turns:\n" + transcript,
+            ]
+              .filter(Boolean)
+              .join("\n\n");
+
+            // ADR-046 applies to this call as much as to the answer it makes room for: a project
+            // out of quota must not be able to spend on bookkeeping either.
+            const summaryEstimate = estimatePromptTokens(CONVERSATION_SUMMARY_PROMPT + prompt);
+            const allowed = await ctx.quota.checkLlmTokens(projectId, summaryEstimate);
+            if (!allowed.allowed) {
+              throw new QuotaExceededError(allowed.reason ?? "Token quota exceeded.");
+            }
+
+            let text = "";
+            let usage: { inputTokens: number; outputTokens: number } | null = null;
+            let usedProvider = "";
+            let usedModel = "";
+            for await (const event of ctx.router.streamChat({
+              messages: [
+                { role: "system", content: CONVERSATION_SUMMARY_PROMPT },
+                { role: "user", content: prompt },
+              ],
+              // Zero temperature: a summary is a record, not a composition, and a different
+              // paraphrase on every request would make the conversation drift by itself.
+              temperature: 0,
+            })) {
+              if (event.type === "token") text += event.delta;
+              else if (event.type === "done") {
+                usage = event.usage;
+                usedProvider = event.provider;
+                usedModel = event.model;
+              } else if (event.type === "error") throw new Error(event.message);
+            }
+
+            if (usage) {
+              await ctx.usage.create({
+                id: uuid(),
+                projectId,
+                userId: authCtx.user.id,
+                kind: "llm",
+                provider: usedProvider,
+                model: usedModel,
+                inputTokens: usage.inputTokens,
+                outputTokens: usage.outputTokens,
+                units: null,
+                estimatedCostUsd: estimateLlmCostUsd(usedProvider, usedModel, usage),
+                requestId: request.id,
+                // One summarization pass per generation of the summary. The count BEFORE this
+                // pass is unique to it, so a retry conflicts rather than charging twice.
+                idempotencyKey:
+                  "llm:summary:" + conversation.id + ":" + String(conversation.summarizedMessageCount),
+              });
+            }
+            return text;
+          },
+        },
+        { projectId, conversation, messages: messagesWithMemory },
+        ctx.conversationWindow
+      );
+
+      if (windowed.error) {
+        // Degraded, not failed: the model sees less history, which is the situation that existed
+        // before ADR-103. A chat request must not fail because a bookkeeping call did.
+        request.log.warn(
+          { request_id: request.id, conversation_id: conversation.id, err: windowed.error },
+          "conversation summarization failed; continuing with the live window only"
+        );
+      } else if (windowed.summarized) {
+        request.log.info(
+          {
+            request_id: request.id,
+            conversation_id: conversation.id,
+            summarized_message_count: windowed.summarizedMessageCount,
+            prompt_messages: windowed.messages.length,
+          },
+          "conversation summarized: older turns replaced by a rolling summary"
+        );
+      }
+
+      const promptMessages = windowed.messages;
+
+
       // FR-063 — checked before any provider call is made, never after (docs/22_COST_AND_
       // QUOTA_STRATEGY.md): a rough pre-flight estimate (real token counts aren't known until
       // the provider responds) decides only whether to reject now; the usage actually
       // recorded below is always the real post-call figure.
-      const estimatedTokens = estimatePromptTokens(messagesWithMemory.map((m) => m.content).join(" "));
+      const estimatedTokens = estimatePromptTokens(promptMessages.map((m) => m.content).join(" "));
       // Quota is per project (ADR-049): one project's spend must never exhaust another's
       // allowance, so the scope goes into the check itself rather than being a global counter.
       const quotaCheck = await ctx.quota.checkLlmTokens(projectId, estimatedTokens);
@@ -253,7 +355,7 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
             let completed = false;
             try {
               for await (const event of ctx.router.streamChat(
-                { ...chatRequest, messages: messagesWithMemory, conversationId: conversation.id },
+                { ...chatRequest, messages: promptMessages, conversationId: conversation.id },
                 {
                   signal: abort.signal,
                   onFallback: (fallback) => {

@@ -122,6 +122,19 @@ const envSchema = z.object({
   LLM_MODEL: optionalString,
   LLM_API_KEY: optionalString,
   LLM_CONTEXT_WINDOW: z.coerce.number().int().positive().optional(),
+
+  /**
+   * Rolling conversation summarization — FR-030, ADR-103.
+   *
+   * Tunable because the right threshold depends on the deployed model's context window, which
+   * this platform does not choose: a 128k model can afford a far larger live history than an 8k
+   * one, and hardcoding either would be wrong for the other. The default is deliberately well
+   * under the smallest window targeted here — the summary, the live turns, the answer and any
+   * tool schemas all have to fit alongside it.
+   */
+  CHAT_SUMMARY_MAX_PROMPT_TOKENS: z.coerce.number().int().min(200).max(500_000).default(6_000),
+  /** Most recent messages always kept verbatim, whatever the summary says. */
+  CHAT_LIVE_WINDOW_MESSAGES: z.coerce.number().int().min(2).max(200).default(10),
   LLM_SUPPORTS_TOOLS: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
   // Embeddings from the same runtime — real semantic retrieval with no hosted provider.
   EMBEDDING_BASE_URL: optionalString,

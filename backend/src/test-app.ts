@@ -156,6 +156,10 @@ export async function buildTestApp(): Promise<{
     jobQueue,
     assets: new PgAssetRepository(db),
     assetsRoot,
+    conversationWindow: {
+      maxPromptTokens: config.CHAT_SUMMARY_MAX_PROMPT_TOKENS,
+      liveWindowMessages: config.CHAT_LIVE_WINDOW_MESSAGES,
+    },
     assetStore: new LocalAssetStore(assetsRoot, new PgAssetRepository(db)),
     imageGenerations: new PgImageGenerationRepository(db),
     videoProjects: new PgVideoProjectRepository(db),

@@ -50,6 +50,8 @@ export interface AppContext {
   jobQueue: JobQueue;
   assets: AssetRepository;
   assetsRoot: string;
+  /** Rolling-summarization thresholds (FR-030, ADR-103). */
+  conversationWindow: { maxPromptTokens: number; liveWindowMessages: number };
   /** The only sanctioned way to read an asset's bytes — never `readFile(asset.storagePath)`
    * directly, since that path may be a `gs://` URI (docs/26_DECISIONS.md ADR-040). */
   assetStore: AssetStore;
