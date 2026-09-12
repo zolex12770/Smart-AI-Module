@@ -88,6 +88,15 @@ export interface ReasoningResult {
   usage: { inputTokens: number; outputTokens: number };
   toolCallCount: number;
   stopReason: "answered" | "max_iterations" | "budget_exhausted" | "cancelled" | "awaiting_approval";
+  /**
+   * The calls from the final assistant turn that produced NO `tool` message: the one awaiting
+   * approval, and any the model requested after it (ADR-099).
+   *
+   * Only ever non-empty for `awaiting_approval`. The caller needs it because a provider rejects
+   * a transcript whose assistant turn has tool calls without matching results, so a resume must
+   * append one for every call here before it can send the conversation anywhere.
+   */
+  unexecutedCalls?: ToolCall[];
   verification?: { ok: boolean; reason?: string };
 }
 
@@ -196,7 +205,12 @@ export async function runReasoningLoop(
 
         if (outcome.awaitingApproval) {
           emit({ type: "awaiting_approval", call, iteration });
-          return finish("awaiting_approval");
+          // Every call in this turn that has not produced a `tool` message yet -- the one
+          // awaiting approval, and any the model asked for after it. Parking without them left
+          // an assistant turn with N tool calls and fewer than N results, which every provider
+          // rejects outright: the run could not be resumed at all, and the approval silently
+          // led nowhere. A multi-call turn is the common case for a capable model, not an edge.
+          return finish("awaiting_approval", undefined, pendingCalls.slice(pendingCalls.indexOf(call)));
         }
 
         emit({ type: "tool_result", callId: call.id, ok: outcome.ok, content: outcome.content, iteration });
@@ -237,7 +251,8 @@ export async function runReasoningLoop(
 
   function finish(
     stopReason: ReasoningResult["stopReason"],
-    verification?: { ok: boolean; reason?: string }
+    verification?: { ok: boolean; reason?: string },
+    unexecutedCalls?: ToolCall[]
   ): ReasoningResult {
     const lastAssistant = [...transcript].reverse().find((m) => m.role === "assistant" && m.content);
     return {
@@ -248,6 +263,7 @@ export async function runReasoningLoop(
       toolCallCount,
       stopReason,
       verification,
+      ...(unexecutedCalls && unexecutedCalls.length > 0 ? { unexecutedCalls } : {}),
     };
   }
 }

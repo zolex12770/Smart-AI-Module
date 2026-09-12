@@ -85,12 +85,22 @@ export function formatVttTimestamp(totalSeconds: number): string {
   return formatTimestamp(totalSeconds, ".");
 }
 
+/**
+ * Every field is derived from ONE rounded total, so a carry cannot be lost.
+ *
+ * The seconds field used to be floored while the milliseconds field was rounded
+ * independently, so any time whose fractional part was >= 0.9995 produced `millis === 1000`:
+ * `9.9996` rendered as `00:00:09,1000`, a four-digit field that is not a valid cue timestamp.
+ * ffmpeg's `mov_text` muxer and most players stop at the malformed cue, taking the rest of the
+ * track with it -- and a measured duration from ffprobe is exactly the kind of value that lands
+ * a few ten-thousandths under a whole second.
+ */
 function formatTimestamp(totalSeconds: number, msSeparator: string): string {
-  const clamped = Math.max(0, totalSeconds);
-  const hours = Math.floor(clamped / 3600);
-  const minutes = Math.floor((clamped % 3600) / 60);
-  const seconds = Math.floor(clamped % 60);
-  const millis = Math.round((clamped - Math.floor(clamped)) * 1000);
+  const totalMillis = Math.round(Math.max(0, totalSeconds) * 1000);
+  const hours = Math.floor(totalMillis / 3_600_000);
+  const minutes = Math.floor((totalMillis % 3_600_000) / 60_000);
+  const seconds = Math.floor((totalMillis % 60_000) / 1000);
+  const millis = totalMillis % 1000;
   const pad = (n: number, width = 2) => String(n).padStart(width, "0");
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}${msSeparator}${pad(millis, 3)}`;
 }

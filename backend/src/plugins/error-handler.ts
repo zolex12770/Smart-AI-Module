@@ -1,6 +1,5 @@
 import type { FastifyError, FastifyInstance } from "fastify";
 import { AppError } from "@ai-platform/shared";
-import { randomUUID } from "node:crypto";
 
 /**
  * Central error mapping — docs/15_API_ARCHITECTURE.md's response shape.
@@ -9,7 +8,11 @@ import { randomUUID } from "node:crypto";
  */
 export function registerErrorHandler(app: FastifyInstance): void {
   app.setErrorHandler((err: FastifyError | Error, request, reply) => {
-    const requestId = randomUUID();
+    // The REQUEST's id, not a fresh one (ADR-098). This minted its own UUID, so the id handed
+    // to the caller appeared in exactly one log line and could not be used to find the rest of
+    // that request's trail. `genReqId` now makes `request.id` a UUID, so it is both unique
+    // across replicas and the same value the logger already tags every line with.
+    const requestId = request.id;
 
     if (err instanceof AppError) {
       request.log.warn({ err, requestId }, err.code);

@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { TEST_TIMEOUTS } from "../vitest.config.base.js";
 
 // Every other package in this monorepo relies on vitest's own default test-file
 // discovery, which is safe because none of them have a runtime data directory. backend
@@ -8,6 +9,8 @@ import { defineConfig } from "vitest/config";
 // Scoping `include` to real source test files avoids ever touching `./data` again.
 export default defineConfig({
   test: {
+    // Sized for real infrastructure under load, not for fakes (ADR-100).
+    ...TEST_TIMEOUTS,
     include: ["src/**/*.test.ts"],
   },
 });

@@ -385,9 +385,13 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
             units: null,
             estimatedCostUsd: estimateLlmCostUsd(event.provider, event.model, event.usage),
             requestId: request.id,
-            // One request, one charge. The request id is the natural key here — unlike chat
-            // there is no persisted assistant message to hang it off — so a retried request
+            // One request, one charge. The request id is the natural key here -- unlike chat
+            // there is no persisted assistant message to hang it off -- so a retried request
             // conflicts on the unique index instead of double-charging.
+            //
+            // This is sound only because `genReqId` mints a UUID (ADR-098). With Fastify's
+            // default per-process counter it collided across restarts and replicas, and a
+            // collision here DROPS the charge instead of duplicating it.
             idempotencyKey: `llm:rag-query:${request.id}`,
           });
         } else if (event.type === "error") {

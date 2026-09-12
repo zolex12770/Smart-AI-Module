@@ -828,7 +828,10 @@ async function main() {
   // pg-boss's own polling loop until a shutdown signal arrives.
   if (!runs.http) {
     installGracefulShutdown(logger, [
-    () => mcpManager.stopAll(),() => jobQueue.stop(), closeDb]);
+      { name: "mcp", close: () => mcpManager.stopAll() },
+      { name: "jobs", close: () => jobQueue.stop() },
+      { name: "database", close: closeDb },
+    ]);
     logger.info("worker role: no HTTP listener started");
     return;
   }
@@ -1164,7 +1167,11 @@ async function main() {
   // Run sends exactly that signal to an instance it decides to stop mid-rollout, so the
   // window was not hypothetical.
   installGracefulShutdown(logger, [
-    () => mcpManager.stopAll(),() => app.close(), () => jobQueue.stop(), closeDb]);
+    { name: "mcp", close: () => mcpManager.stopAll() },
+    { name: "http", close: () => app.close() },
+    { name: "jobs", close: () => jobQueue.stop() },
+    { name: "database", close: closeDb },
+  ]);
 
   await app.listen({ port: config.PORT, host: "0.0.0.0" });
 }
@@ -1231,16 +1238,35 @@ async function bootstrapFirstAdmin(
  * instance in either role) runs the given close steps in order instead of leaving that
  * risk. Shared by both roles (ADR-039); only the list of things to close differs.
  */
-function installGracefulShutdown(shutdownLogger: Logger, steps: Array<() => Promise<unknown>>): void {
+interface ShutdownStep {
+  name: string;
+  close: () => Promise<unknown>;
+}
+
+function installGracefulShutdown(shutdownLogger: Logger, steps: ShutdownStep[]): void {
   const shutdown = async (signal: string) => {
     shutdownLogger.info({ signal }, "shutting down gracefully");
-    try {
-      for (const step of steps) await step();
-    } catch (err) {
-      shutdownLogger.error({ err }, "error during graceful shutdown");
-    } finally {
-      process.exit(0);
+    // Each step is isolated (ADR-098). They used to be awaited inside ONE try, so the first
+    // rejection jumped to the catch and skipped every step after it -- and `closeDb` is last,
+    // which made the one step this function exists for the first casualty of any other step
+    // failing. PGlite is an embedded engine: an unclean close can leave on-disk state damaged
+    // in a way that only surfaces on a later migration (it did, in Phase 8).
+    const failed: string[] = [];
+    for (const step of steps) {
+      try {
+        await step.close();
+      } catch (err) {
+        failed.push(step.name);
+        shutdownLogger.error({ err, step: step.name }, "a shutdown step failed; continuing with the rest");
+      }
     }
+    if (failed.length > 0) {
+      // Non-zero, because a shutdown that could not close everything is not a clean one and an
+      // operator should be able to tell the difference from the exit status alone.
+      shutdownLogger.error({ failed }, "graceful shutdown completed with failures");
+      process.exit(1);
+    }
+    process.exit(0);
   };
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));

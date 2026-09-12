@@ -640,79 +640,114 @@ export class AgentEngine {
     await this.updateNode(node, { status: "waiting_model", startedAt: this.now() }, "engine");
     const controller = new AbortController();
     this.inFlight.set(node.id, controller);
-
-    /**
-     * On resume, run the call the human actually approved BEFORE handing control back to the
-     * model. Without this the loop would simply re-prompt from the parked transcript, whose
-     * last turn is the assistant asking for the tool — so the model would be answering as if
-     * the action had happened when it never did, and an approval would silently do nothing.
-     * Appending the real result as a `tool` message is also what keeps the transcript a valid
-     * conversation: an assistant turn with tool calls must be followed by their results.
-     */
-    const approvedCall = resumed?.pendingCall;
-    if (approvedCall) {
-      const outcome = await this.deps.toolRegistry.call(approvedCall.name, approvedCall.arguments, {
-        projectId: task.projectId,
-        userId,
-        workspaceRoot: this.deps.workspaceRoot,
-        signal: controller.signal,
-      });
-      priorMessages.push({
-        role: "tool",
-        content: outcome.ok
-          ? JSON.stringify(outcome.output ?? {})
-          : `Error: ${outcome.error ?? "the tool failed without a message"}`,
-        toolCallId: approvedCall.id,
-        name: approvedCall.name,
-      });
-    }
-
-    /**
-     * Filled in when the loop stops for approval, so the node can be parked with context.
-     * A holder object rather than a `let`: it is written inside the executeTool closure, and
-     * TypeScript's control-flow analysis cannot see that, so a bare variable would narrow to
-     * `null` at every read site below.
-     */
-    const approval: { pending: { call: ToolCall; reason: string } | null } = { pending: null };
-
-    /**
-     * Which turn of THIS NODE'S conversation the loop is on, counted across resumes.
-     *
-     * `runReasoningLoop` restarts its own `iteration` at 1 every time it is entered, so a node
-     * that parked for approval and was resumed would produce a second turn 1 — and keying the
-     * charge on the loop's iteration alone would make the resumed turns collide with the
-     * original ones and be dropped as duplicates. The assistant turns already in the transcript
-     * are the stable offset: a resume continues from where it stopped, while a crash-recovery
-     * re-execution of the same persisted transcript replays the same numbers, which is exactly
-     * the ADR-054 dedupe this key is for.
-     */
-    const priorTurns = priorMessages.filter((m) => m.role === "assistant").length;
-    let turn = priorTurns;
-
-    /**
-     * ADR-046's "refuse before spending", applied per TURN rather than once per node.
-     *
-     * `executeModelCallNode` has always checked quota before its single provider call; this
-     * path checked nothing at all, so an agent task could spend an unbounded number of turns'
-     * worth of tokens against an exhausted quota — the larger of the two holes, since a
-     * reasoning node is the expensive kind of node. The check goes immediately before each
-     * turn's provider call because that is the only point where refusing still prevents the
-     * spend; a single pre-flight check on the goal would authorise a ten-turn run on the
-     * strength of a one-turn estimate.
-     */
-    const checkTurnQuota = async (messages: ChatMessage[]): Promise<void> => {
-      if (!this.deps.meter) return;
-      const estimated = estimatePromptTokens(messages.map((m) => m.content).join(" "));
-      const check = await this.deps.meter.checkTokens(estimated, { taskId: task.id, nodeId: node.id });
-      // Thrown, not returned: the loop has no "refused" outcome, and the throw is caught below
-      // and recorded as this node's failure reason — the same end state a refused `model_call`
-      // node reaches, with the same message.
-      if (!check.allowed) throw new Error(check.reason ?? "Token quota exceeded.");
-    };
-    const modelRouter = this.deps.modelRouter;
-    const meter = this.deps.meter;
-
+    // The try starts HERE, not after the approved call below (ADR-098).
+    //
+    // `inFlight.set` happens on the line above, but the try/catch/finally that releases it used
+    // to begin AFTER the approved tool call had already run. A throw from that call — a tool
+    // that errors, a revoked permission, a sandbox refusal — skipped `handleNodeFailure` and
+    // skipped `inFlight.delete`, so the node stayed in `waiting_model` forever with its
+    // AbortController leaked, and the run could no longer be cancelled. The approved call is
+    // the single riskiest statement in this method, and it was the one statement outside the
+    // guard.
     try {
+
+      /**
+       * On resume, run the call the human actually approved BEFORE handing control back to the
+       * model. Without this the loop would simply re-prompt from the parked transcript, whose
+       * last turn is the assistant asking for the tool — so the model would be answering as if
+       * the action had happened when it never did, and an approval would silently do nothing.
+       * Appending the real result as a `tool` message is also what keeps the transcript a valid
+       * conversation: an assistant turn with tool calls must be followed by their results.
+       */
+      const approvedCall = resumed?.pendingCall;
+      if (approvedCall) {
+        const outcome = await this.deps.toolRegistry.call(approvedCall.name, approvedCall.arguments, {
+          projectId: task.projectId,
+          userId,
+          workspaceRoot: this.deps.workspaceRoot,
+          signal: controller.signal,
+        });
+        priorMessages.push({
+          role: "tool",
+          content: outcome.ok
+            ? JSON.stringify(outcome.output ?? {})
+            : `Error: ${outcome.error ?? "the tool failed without a message"}`,
+          toolCallId: approvedCall.id,
+          name: approvedCall.name,
+        });
+
+        /**
+         * Every OTHER call the model asked for in that same turn gets a result too (ADR-099).
+         *
+         * The loop stops at the first call needing approval, so the calls after it were never
+         * executed and never got a `tool` message — and neither did the pending one. That left
+         * an assistant turn with N tool calls and fewer than N results, which OpenAI, Anthropic
+         * and Google all reject: the approval was recorded, the node resumed, and the very first
+         * provider call of the resumed run failed. A capable model asking for two or three tools
+         * in one turn is the normal case, so this was not a rare shape.
+         *
+         * They are reported as not executed rather than silently run: the human approved ONE
+         * specific action, and the others may need approval of their own. The model is told
+         * plainly so it can ask again if it still needs them.
+         */
+        for (const call of resumed.pendingCalls) {
+          if (call.id === approvedCall.id) continue;
+          priorMessages.push({
+            role: "tool",
+            content:
+              "Not executed: the run paused for human approval of a different call in this turn. " +
+              "Request this tool again if you still need it.",
+            toolCallId: call.id,
+            name: call.name,
+          });
+        }
+      }
+
+      /**
+       * Filled in when the loop stops for approval, so the node can be parked with context.
+       * A holder object rather than a `let`: it is written inside the executeTool closure, and
+       * TypeScript's control-flow analysis cannot see that, so a bare variable would narrow to
+       * `null` at every read site below.
+       */
+      const approval: { pending: { call: ToolCall; reason: string } | null } = { pending: null };
+
+      /**
+       * Which turn of THIS NODE'S conversation the loop is on, counted across resumes.
+       *
+       * `runReasoningLoop` restarts its own `iteration` at 1 every time it is entered, so a node
+       * that parked for approval and was resumed would produce a second turn 1 — and keying the
+       * charge on the loop's iteration alone would make the resumed turns collide with the
+       * original ones and be dropped as duplicates. The assistant turns already in the transcript
+       * are the stable offset: a resume continues from where it stopped, while a crash-recovery
+       * re-execution of the same persisted transcript replays the same numbers, which is exactly
+       * the ADR-054 dedupe this key is for.
+       */
+      const priorTurns = priorMessages.filter((m) => m.role === "assistant").length;
+      let turn = priorTurns;
+
+      /**
+       * ADR-046's "refuse before spending", applied per TURN rather than once per node.
+       *
+       * `executeModelCallNode` has always checked quota before its single provider call; this
+       * path checked nothing at all, so an agent task could spend an unbounded number of turns'
+       * worth of tokens against an exhausted quota — the larger of the two holes, since a
+       * reasoning node is the expensive kind of node. The check goes immediately before each
+       * turn's provider call because that is the only point where refusing still prevents the
+       * spend; a single pre-flight check on the goal would authorise a ten-turn run on the
+       * strength of a one-turn estimate.
+       */
+      const checkTurnQuota = async (messages: ChatMessage[]): Promise<void> => {
+        if (!this.deps.meter) return;
+        const estimated = estimatePromptTokens(messages.map((m) => m.content).join(" "));
+        const check = await this.deps.meter.checkTokens(estimated, { taskId: task.id, nodeId: node.id });
+        // Thrown, not returned: the loop has no "refused" outcome, and the throw is caught below
+        // and recorded as this node's failure reason — the same end state a refused `model_call`
+        // node reaches, with the same message.
+        if (!check.allowed) throw new Error(check.reason ?? "Token quota exceeded.");
+      };
+      const modelRouter = this.deps.modelRouter;
+      const meter = this.deps.meter;
+
       const result = await this.withNodeDeadline(
         node,
         controller,
@@ -799,6 +834,13 @@ export class AgentEngine {
             output: {
               resume: { transcript: result.transcript, approvedCallIds: [...preApprovedCallIds, paused.call.id] },
               pendingCall: { id: paused.call.id, name: paused.call.name, arguments: paused.call.arguments },
+              // Every call from that turn that produced no `tool` message (ADR-099): the one a
+              // human was asked about, plus any the model requested after it. The resume needs
+              // all of them, because a provider rejects an assistant turn whose tool calls do
+              // not each have a result.
+              pendingCalls: result.unexecutedCalls ?? [
+                { id: paused.call.id, name: paused.call.name, arguments: paused.call.arguments },
+              ],
               reason: paused.reason,
             },
           },
@@ -1345,9 +1387,12 @@ export const AUTONOMOUS_SYSTEM_PROMPT = [
 ].join(" ");
 
 /** Reads the resume state a paused reasoning node persisted, tolerating anything malformed. */
-function readResumeState(
-  output: Record<string, unknown> | null
-): { transcript: ChatMessage[]; approvedCallIds: string[]; pendingCall: ToolCall | null } | null {
+function readResumeState(output: Record<string, unknown> | null): {
+  transcript: ChatMessage[];
+  approvedCallIds: string[];
+  pendingCall: ToolCall | null;
+  pendingCalls: ToolCall[];
+} | null {
   const resume = (output as { resume?: unknown } | null)?.resume;
   if (!resume || typeof resume !== "object") return null;
   const { transcript, approvedCallIds } = resume as { transcript?: unknown; approvedCallIds?: unknown };
@@ -1358,9 +1403,15 @@ function readResumeState(
   // jsonb column, so its shape is a claim until something checks it.
   const pending = toolCallSchema.safeParse((output as { pendingCall?: unknown } | null)?.pendingCall);
 
+  // Every call from that turn with no result yet (ADR-099). Absent on a node parked by an
+  // older build, which is why it falls back to the single pending call rather than to an empty
+  // list: a run that was already waiting when this deployed must still resume correctly.
+  const many = toolCallSchema.array().safeParse((output as { pendingCalls?: unknown } | null)?.pendingCalls);
+
   return {
     transcript: parsed.data,
     approvedCallIds: Array.isArray(approvedCallIds) ? approvedCallIds.map(String) : [],
     pendingCall: pending.success ? pending.data : null,
+    pendingCalls: many.success && many.data.length > 0 ? many.data : pending.success ? [pending.data] : [],
   };
 }

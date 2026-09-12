@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { TEST_TIMEOUTS } from "../vitest.config.base.js";
 import react from "@vitejs/plugin-react";
 
 /**
@@ -16,6 +17,8 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   test: {
+    // Sized for real infrastructure under load, not for fakes (ADR-100).
+    ...TEST_TIMEOUTS,
     environment: "jsdom",
     globals: true,
     setupFiles: ["./test/setup.ts"],

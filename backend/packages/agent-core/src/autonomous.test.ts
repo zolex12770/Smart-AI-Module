@@ -14,7 +14,7 @@ import {
   type PgliteDb,
 } from "@ai-platform/database";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
-import { createCodingTools, createFilesystemTools, createSearchTools, ToolRegistry } from "@ai-platform/tools";
+import { createCodingTools, createFilesystemTools, createSearchTools, ToolRegistry, type NativeToolEntry } from "@ai-platform/tools";
 import type {
   ChatRequest,
   ChatStreamEvent,
@@ -23,6 +23,7 @@ import type {
   Task,
   ToolCall,
 } from "@ai-platform/shared";
+import { PermissionError } from "@ai-platform/shared";
 import { AgentEngine } from "./engine.js";
 
 /**
@@ -48,6 +49,10 @@ class ScriptedAgentProvider implements LLMProvider {
   readonly isMock = false;
   readonly model = "scripted-1";
   readonly turnsSeen: number[] = [];
+  /** Every transcript this provider was handed, so a test can assert what the model SAW.
+   *  A provider rejects an assistant turn whose tool calls lack results, and that rejection
+   *  is invisible to a scripted provider unless the test checks the shape itself. */
+  readonly requestsSeen: ChatRequest[] = [];
   private index = 0;
 
   constructor(private readonly turns: Array<{ text?: string; calls?: ToolCall[] }>) {}
@@ -58,6 +63,7 @@ class ScriptedAgentProvider implements LLMProvider {
 
   async *streamChat(request: ChatRequest): AsyncGenerator<ChatStreamEvent, void, unknown> {
     this.turnsSeen.push(request.messages.length);
+    this.requestsSeen.push(request);
     const turn = this.turns[Math.min(this.index++, this.turns.length - 1)];
     const calls = turn.calls ?? [];
     for (const call of calls) yield { type: "tool_call", call };
@@ -84,7 +90,11 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
   let tasks: PgTaskRepository;
   let nodes: PgTaskNodeRepository;
 
-  const build = (turns: Array<{ text?: string; calls?: ToolCall[] }>, limits?: { maxIterations?: number }) => {
+  const build = (
+    turns: Array<{ text?: string; calls?: ToolCall[] }>,
+    limits?: { maxIterations?: number },
+    extraTools: NativeToolEntry[] = []
+  ) => {
     const provider = new ScriptedAgentProvider(turns);
     const registry = new ModelRegistry();
     registry.register(provider, { asDefault: true });
@@ -94,6 +104,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
       ...createFilesystemTools(sandboxRoot),
       ...createSearchTools(sandboxRoot),
       ...createCodingTools(sandboxRoot),
+      ...extraTools,
     ]) {
       toolRegistry.register(definition, handler);
     }
@@ -301,4 +312,164 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     const finished = await waitFor(task.id, ["FAILED"]);
     expect(finished.errorMessage).toMatch(/goal/i);
   });
+
+  /**
+   * A multi-call turn that pauses for approval — docs/26_DECISIONS.md ADR-099.
+   *
+   * The loop stopped at the FIRST call needing approval and parked without appending a `tool`
+   * message for it, or for any call the model had requested after it. The parked transcript
+   * therefore held an assistant turn with three tool calls and one result — a shape OpenAI,
+   * Anthropic and Google all reject outright. The approval was recorded, the node resumed, and
+   * the first provider call of the resumed run failed.
+   *
+   * A scripted provider accepts anything, which is exactly why this asserts the SHAPE of the
+   * transcript the model was handed rather than merely that the run completed.
+   */
+  it("parks and resumes a multi-call turn with a result for every tool call", async () => {
+    const ran: string[] = [];
+    const tool = (id: string, gated: boolean): NativeToolEntry => ({
+      definition: {
+        id,
+        name: id,
+        description: `test tool ${id}`,
+        origin: { kind: "native", serverId: null, serverVersion: null },
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        outputSchema: null,
+        permissionLevel: gated ? "destructive" : "read_only",
+        riskLevel: gated ? "high" : "low",
+        requiresApproval: gated ? ("always" as const) : ("never" as const),
+        timeoutMs: 10_000,
+        retryPolicy: { maxAttempts: 1, backoff: "fixed", idempotencyRequired: false },
+        enabled: true,
+      },
+      handler: async () => {
+        ran.push(id);
+        return { ok: true, output: { ran: id } };
+      },
+    });
+
+    const { engine, provider } = build(
+      [
+        // One turn, three calls: the first runs, the second needs a human, the third was never
+        // reached. All three are in the assistant turn the transcript now carries.
+        {
+          calls: [
+            { id: "call-free", name: "test.free", arguments: {} },
+            { id: "call-gated", name: "test.gated", arguments: {} },
+            { id: "call-after", name: "test.after", arguments: {} },
+          ],
+        },
+        { text: "Done." },
+      ],
+      undefined,
+      [tool("test.free", false), tool("test.gated", true), tool("test.after", false)]
+    );
+
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Do the three things." },
+      { projectId: PROJECT, userId: USER }
+    );
+    await waitFor(task.id, ["WAITING_FOR_APPROVAL"]);
+
+    const [parked] = await nodes.listByRootUnscoped(task.id);
+    expect(parked.status).toBe("waiting_approval");
+    // Only the first call ran; the gated one did not, and neither did the one after it.
+    expect(ran).toEqual(["test.free"]);
+
+    // Both un-executed calls are persisted, not just the one a human was asked about.
+    const pendingCalls = (parked.output as { pendingCalls?: Array<{ id: string }> }).pendingCalls ?? [];
+    expect(pendingCalls.map((c) => c.id)).toEqual(["call-gated", "call-after"]);
+
+    await engine.approve(task.id, parked.id, "test-operator");
+    const finished = await waitFor(task.id, ["COMPLETED", "FAILED"]);
+    expect(finished.state).toBe("COMPLETED");
+
+    // The approved call ran; the one after it did not, because nobody approved it.
+    expect(ran).toEqual(["test.free", "test.gated"]);
+
+    // THE LOAD-BEARING ASSERTION: in the transcript the model was handed on resume, every tool
+    // call in every assistant turn has a matching `tool` message. This is precisely the
+    // invariant a real provider enforces, and precisely what parking used to break.
+    const resumed = provider.requestsSeen.at(-1);
+    expect(resumed).toBeDefined();
+    const resultIds = new Set(
+      resumed!.messages.filter((m) => m.role === "tool").map((m) => (m as { toolCallId?: string }).toolCallId)
+    );
+    const requestedIds = resumed!.messages
+      .filter((m) => m.role === "assistant")
+      .flatMap((m) => (m as { toolCalls?: Array<{ id: string }> }).toolCalls ?? [])
+      .map((c) => c.id);
+    expect(requestedIds).toEqual(["call-free", "call-gated", "call-after"]);
+    for (const id of requestedIds) {
+      expect(resultIds.has(id)).toBe(true);
+    }
+
+    // And the un-approved call's result says so plainly, rather than pretending it ran.
+    const afterResult = resumed!.messages.find(
+      (m) => m.role === "tool" && (m as { toolCallId?: string }).toolCallId === "call-after"
+    );
+    expect(afterResult?.content).toMatch(/Not executed/i);
+  });
+
+
+  /**
+   * An approved call that throws must fail the node, not strand it — docs/26 ADR-098.
+   *
+   * `inFlight.set` happened, and then 72 lines ran — including the approved tool call, the single
+   * riskiest statement in the method — before the try/catch/finally that releases it began. A
+   * throw there skipped `handleNodeFailure` AND `inFlight.delete`, so the node stayed
+   * `waiting_model` forever with its AbortController leaked and the run no longer cancellable.
+   *
+   * A `PermissionError` is the realistic trigger: the tool registry returns `ok: false` for
+   * ordinary failures but deliberately RE-THROWS that one, which is what a permission revoked
+   * between parking and approval looks like.
+   */
+  it("fails the node when an approved tool call throws on resume, instead of stranding it", async () => {
+    const gated: NativeToolEntry = {
+      definition: {
+        id: "test.revoked",
+        name: "test.revoked",
+        description: "throws PermissionError when finally executed",
+        origin: { kind: "native", serverId: null, serverVersion: null },
+        inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        outputSchema: null,
+        permissionLevel: "destructive",
+        riskLevel: "high",
+        requiresApproval: "always" as const,
+        timeoutMs: 10_000,
+        retryPolicy: { maxAttempts: 1, backoff: "fixed", idempotencyRequired: false },
+        enabled: true,
+      },
+      handler: async () => {
+        throw new PermissionError("This action is no longer permitted for this project.");
+      },
+    };
+
+    const { engine } = build(
+      [{ calls: [{ id: "call-revoked", name: "test.revoked", arguments: {} }] }, { text: "Done." }],
+      undefined,
+      [gated]
+    );
+
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Do the thing that will be revoked." },
+      { projectId: PROJECT, userId: USER }
+    );
+    await waitFor(task.id, ["WAITING_FOR_APPROVAL"]);
+    const [parked] = await nodes.listByRootUnscoped(task.id);
+    expect(parked.status).toBe("waiting_approval");
+
+    await engine.approve(task.id, parked.id, "test-operator");
+
+    // The load-bearing assertion: it reaches a TERMINAL state. Before the fix it sat in
+    // `waiting_model` until this timed out.
+    const finished = await waitFor(task.id, ["FAILED", "COMPLETED"]);
+    expect(finished.state).toBe("FAILED");
+    const [failedNode] = await nodes.listByRootUnscoped(task.id);
+    expect(failedNode.status).toBe("failed");
+    expect(failedNode.errorMessage).toContain("no longer permitted");
+  });
+
 });

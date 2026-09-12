@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyBaseLogger } from "fastify";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
@@ -56,6 +57,20 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
     // the platform is never exposed directly; behind a proxy that header is rewritten, and
     // in front of one it would be client-controlled.
     trustProxy: true,
+
+    // A UUID, not Fastify's default per-process counter -- ADR-098.
+    //
+    // `request.id` is not only a log tag here: it is written to audit records, propagated into
+    // job payloads, and used as the usage-ledger idempotency key for a RAG query (the one
+    // spending path with no persisted row to key off). The default generator restarts at
+    // `req-1` in every process, so those keys COLLIDED across restarts and across replicas --
+    // and a collision on that unique index silently DROPS the charge rather than
+    // double-charging, which is the direction that loses money quietly.
+    //
+    // It also makes the id in an error response the same id that appears in every log line for
+    // that request. The error handler used to mint its own separate UUID, so the id handed to a
+    // caller matched nothing an operator could grep for.
+    genReqId: () => randomUUID(),
   });
 
   // docs/13_SECURITY_ARCHITECTURE.md §4 — the API sent no security headers at all before
