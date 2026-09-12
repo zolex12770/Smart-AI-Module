@@ -1,10 +1,20 @@
 # Test Report
 
-**Date:** 2026-09-11 · **Commit:** `3074680`
+**Date:** 2026-09-12 · **Commit:** `2bf44dc`
 
-**Result: 556 test cases across 69 files — 556 passing, 0 skipped, 0 failures.
-Plus 7 end-to-end tests in a real browser, 7/7 boot checks, 3/3 migration checks, 0 lint errors
-and 0 type errors across 26 workspaces.**
+**Result: 646 test cases across 79 files — 646 passing, 0 skipped, 0 failures.**
+Plus 7 end-to-end tests in a real browser, 9/9 boundary checks, 7/7 boot checks, 3/3 migration
+checks, 0 lint errors and 0 type errors across 26 workspaces.
+
+**The previous edition of this report was wrong, and how it was wrong matters more than the
+number.** It claimed "556 passing, 0 failures" and that was true on an idle machine. An
+independent audit ran the same command on a loaded one and got between 1 and 8 failures with a
+different count each run — every one a hook or test timeout, because vitest's 5s/10s defaults are
+sized for unit tests against fakes and almost nothing here is that: a typical `beforeEach` builds
+an embedded Postgres and runs every migration. So the product code was fine and the GATE was
+broken, which is worse: a gate that goes red on a busy CI runner teaches everyone to ignore it,
+and CI runs on a shared runner by definition. ADR-100 sizes the timeouts for the infrastructure
+these tests actually use.
 
 **Every environment-gated suite now runs for real.** The previous report listed 13 skips against
 binaries that were not installed; ffmpeg, ClamAV, fake-gcs-server, Terraform and a real local LLM

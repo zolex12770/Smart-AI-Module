@@ -1,5 +1,15 @@
 # Final Implementation Report
 
+> **Superseded. This report describes the tree at `3074680`, and an independent 32-agent audit
+> of that exact tree then confirmed 30 gaps in it — including two P0s and a P1 privacy
+> requirement (NFR-008) that did not exist at all while this report called the implementation
+> complete.**
+>
+> It is kept because deleting it would remove the evidence of how a green set of gates and a
+> confident report can coexist with real defects. For current status read
+> [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md); for what the audit found and how each gap
+> was proven, read [docs/FINAL_PROJECT_AUDIT.md](docs/FINAL_PROJECT_AUDIT.md).
+
 **Date:** 2026-09-11 · **Commit:** `3074680` · **Scope:** the autonomous-completion brief
 
 **Status: IMPLEMENTATION COMPLETE — RUNTIME VERIFICATION BLOCKED for two external dependencies
