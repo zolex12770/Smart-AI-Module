@@ -52,6 +52,33 @@ describe("isBlockedAddress", () => {
     }
   });
 
+  it("refuses an IPv4-mapped address written in HEX, not only in decimal", () => {
+    // The bypass this guard's first version had. `new URL("http://[::ffff:127.0.0.1]/").hostname`
+    // normalises to `::ffff:7f00:1`, so a regex looking for four decimal octets matched nothing
+    // and the address fell past every remaining check as permitted. Found by the test written to
+    // prove the DECIMAL forms were refused, which is why both spellings are asserted here.
+    for (const address of [
+      "::ffff:7f00:1",
+      "::ffff:a9fe:a9fe", // 169.254.169.254, the metadata endpoint
+      "::ffff:a00:1", // 10.0.0.1
+      "0:0:0:0:0:ffff:7f00:1", // fully expanded
+      "::ffff:0a00:0001", // zero-padded groups
+    ]) {
+      expect(isBlockedAddress(address), address).toBe(true);
+    }
+  });
+
+  it("refuses an address carrying a zone index, which names a local interface", () => {
+    expect(isBlockedAddress("fe80::1%eth0")).toBe(true);
+  });
+
+  it("refuses the edges of each blocked IPv6 range, not just the first address in it", () => {
+    for (const address of ["febf::1", "fdff::1", "ff02::1", "2001:db8::1", "100::1"]) {
+      expect(isBlockedAddress(address), address).toBe(true);
+    }
+  });
+
+
   it("permits a public IPv6 address", () => {
     expect(isBlockedAddress("2606:4700:4700::1111")).toBe(false);
   });
@@ -129,6 +156,30 @@ describe("fetchWebPage against a real server", () => {
       fetchWebPage("http://mixed.test/", { resolve: async () => ["93.184.216.34", "127.0.0.1"] })
     ).rejects.toThrow(/non-public address/);
   });
+
+  it("refuses every alternative encoding of a blocked address", async () => {
+    // Node's URL parser normalises octal, decimal, hex and short-form IPv4 to dotted-quad, so
+    // the range check sees the real address — asserted rather than assumed, because a guard that
+    // only understands one spelling of 127.0.0.1 is the classic SSRF bypass.
+    for (const url of [
+      "http://0177.0.0.1/",
+      "http://2130706433/",
+      "http://127.1/",
+      "http://0x7f.0x0.0x0.0x1/",
+      "http://0/",
+      "http://[::1]/",
+      "http://[::ffff:127.0.0.1]/",
+    ]) {
+      await expect(fetchWebPage(url, { timeoutMs: 2_000 }), url).rejects.toThrow(/non-public address/);
+    }
+  });
+
+  it("refuses a blocked host however it is spelled", async () => {
+    for (const url of ["http://LOCALHOST/", "http://localhost./"]) {
+      await expect(fetchWebPage(url, { timeoutMs: 2_000 }), url).rejects.toThrow(/non-public address/);
+    }
+  });
+
 
   it("refuses a non-http scheme", async () => {
     await expect(fetchWebPage("file:///etc/passwd")).rejects.toThrow(/only http and https/i);

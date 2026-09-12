@@ -192,6 +192,16 @@ behind a proxy.
   against a live process. What remains: a host on a public address that PROXIES to a private one
   is indistinguishable from any other public host, and `WEB_FETCH_ALLOWLIST` is the answer for a
   deployment that needs certainty rather than a heuristic.
+- **`web.fetch` is an exfiltration channel for a prompt-injected agent, and the SSRF guard does
+  not address that.** The guard decides which HOST may be contacted; the data leaves in the URL.
+  An agent that has read untrusted content and been persuaded by it can put anything it can see
+  into a query string and fetch a host that is perfectly public. This is a direct consequence of
+  giving an agent network egress and is named here rather than implied by the section above:
+  before ADR-104 the worst outcome of prompt injection was a wrong answer, and now it is a
+  disclosure. The mitigation that actually works is `WEB_FETCH_ALLOWLIST` — a deployment that
+  handles anything sensitive should set it to the hosts it genuinely needs, which turns the
+  channel off for every other destination. Egress is also not metered or quota-counted per
+  project, so it is not visible in the usage ledger the way a model call is.
 - **Prompt injection is mitigated, not solved.** Untrusted content is structurally delimited and
   carries a trust-boundary system message; provenance tracking is not implemented, so a tool call
   that *results from* untrusted content is not automatically escalated for approval.

@@ -108,23 +108,7 @@ export interface WebFetchResult {
 export function isBlockedAddress(address: string): boolean {
   const version = isIP(address);
   if (version === 0) return true; // not an address at all: refuse rather than guess
-
-  if (version === 4) return isBlockedIpv4(address);
-
-  const lower = address.toLowerCase();
-  // IPv4-mapped and IPv4-compatible forms carry an IPv4 address inside an IPv6 one.
-  const mapped = /^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
-  if (mapped) return isBlockedIpv4(mapped[1]);
-
-  if (lower === "::" || lower === "::1") return true; // unspecified, loopback
-  if (lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb")) {
-    return true; // fe80::/10 link-local
-  }
-  if (/^f[cd]/.test(lower)) return true; // fc00::/7 unique-local
-  if (lower.startsWith("ff")) return true; // ff00::/8 multicast
-  if (lower.startsWith("64:ff9b:")) return true; // NAT64, which maps to IPv4 space
-  if (lower.startsWith("2002:")) return true; // 6to4, likewise
-  return false;
+  return version === 4 ? isBlockedIpv4(address) : isBlockedIpv6(address);
 }
 
 function isBlockedIpv4(address: string): boolean {
@@ -135,7 +119,7 @@ function isBlockedIpv4(address: string): boolean {
   if (a === 10) return true; // private
   if (a === 127) return true; // loopback
   if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 carrier NAT
-  if (a === 169 && b === 254) return true; // link-local — the cloud metadata endpoint
+  if (a === 169 && b === 254) return true; // link-local -- the cloud metadata endpoint
   if (a === 172 && b >= 16 && b <= 31) return true; // private
   if (a === 192 && b === 0) return true; // 192.0.0.0/24 protocol assignments, 192.0.2.0/24 doc
   if (a === 192 && b === 168) return true; // private
@@ -143,6 +127,75 @@ function isBlockedIpv4(address: string): boolean {
   if (a === 198 && b === 51) return true; // documentation
   if (a === 203 && b === 0) return true; // documentation
   if (a >= 224) return true; // multicast and reserved
+  return false;
+}
+
+/**
+ * Expands an IPv6 address to its eight 16-bit groups, or null if it cannot be parsed.
+ *
+ * Written because the first version of this guard compared string PREFIXES, and string prefixes
+ * are not a property of an address. `[::ffff:127.0.0.1]` is normalised by the URL parser to
+ * `::ffff:7f00:1` — the same address, spelled in hex — which a regex looking for four decimal
+ * octets does not match, so it fell past every remaining check and came back permitted. The test
+ * written to prove the decimal forms were refused is what caught it.
+ */
+export function expandIpv6(address: string): number[] | null {
+  let text = address.toLowerCase();
+  // A zone index (`fe80::1%eth0`) names a local interface and is never a routable destination.
+  const percent = text.indexOf("%");
+  if (percent !== -1) text = text.slice(0, percent);
+
+  // A trailing dotted-quad is the IPv4-mapped/compatible spelling; convert it to two groups.
+  const dotted = /^(.*:)((?:\d{1,3}\.){3}\d{1,3})$/.exec(text);
+  if (dotted) {
+    const octets = dotted[2].split(".").map(Number);
+    if (octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) return null;
+    const hi = ((octets[0] << 8) | octets[1]).toString(16);
+    const lo = ((octets[2] << 8) | octets[3]).toString(16);
+    text = dotted[1] + hi + ":" + lo;
+  }
+
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 1) {
+    if (head.length !== 8) return null;
+  } else if (fill < 0) {
+    return null;
+  }
+  const groups = [...head, ...Array.from({ length: halves.length === 2 ? fill : 0 }, () => "0"), ...tail];
+  if (groups.length !== 8) return null;
+  const out: number[] = [];
+  for (const group of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(group)) return null;
+    out.push(parseInt(group, 16));
+  }
+  return out;
+}
+
+function isBlockedIpv6(address: string): boolean {
+  const g = expandIpv6(address);
+  if (!g) return true; // unparseable: refuse rather than guess
+
+  // ::ffff:0:0/96 (IPv4-mapped) and ::/96 (IPv4-compatible) carry an IPv4 address in the low
+  // 32 bits. Checking the numbers rather than the spelling is the whole point.
+  const topFiveZero = g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0;
+  if (topFiveZero && (g[5] === 0xffff || g[5] === 0)) {
+    const embedded = [g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff].join(".");
+    // `::` and `::1` fall in this range too and are caught by isBlockedIpv4's 0.0.0.0/8 rule
+    // (0.0.0.0 and 0.0.0.1 respectively), so they need no special case.
+    return isBlockedIpv4(embedded);
+  }
+
+  if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local
+  if ((g[0] & 0xff00) === 0xff00) return true; // ff00::/8 multicast
+  if (g[0] === 0x64 && g[1] === 0xff9b) return true; // 64:ff9b::/96 NAT64 -> IPv4 space
+  if (g[0] === 0x2002) return true; // 2002::/16 6to4 -> IPv4 space
+  if (g[0] === 0x100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return true; // 100::/64 discard
+  if (g[0] === 0x2001 && g[1] === 0xdb8) return true; // documentation
   return false;
 }
 
@@ -170,11 +223,18 @@ export function htmlToText(html: string): string {
 async function validatedAddress(hostname: string, options: WebFetchOptions): Promise<string> {
   const blocked = options.isAddressBlocked ?? isBlockedAddress;
   // A literal address in the URL is validated directly; there is nothing to resolve.
-  if (isIP(hostname) !== 0) {
-    if (blocked(hostname)) {
-      throw new Error(`Refusing to fetch a non-public address (${hostname}).`);
+  //
+  // Brackets are stripped first. `new URL("http://[::1]/").hostname` keeps them, so `isIP`
+  // returns 0 and the address would fall through to the resolver — which happens to refuse it on
+  // this platform, but only because `dns.lookup` tolerated a bracketed name. Relying on that is
+  // relying on a resolver's error handling for a security decision; validating the literal
+  // directly does not depend on it.
+  const literal = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+  if (isIP(literal) !== 0) {
+    if (blocked(literal)) {
+      throw new Error(`Refusing to fetch a non-public address (${literal}).`);
     }
-    return hostname;
+    return literal;
   }
 
   const addresses = options.resolve

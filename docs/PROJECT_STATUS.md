@@ -55,7 +55,7 @@ version was simply wrong, and the reasoning for each number is stated rather tha
 | **Agent engine** | VERIFIED | yes | 51 tests | yes — real model, real tool calls | no | — |
 | **Tool calling** (11 native tools) | VERIFIED | yes | 97 in `tools` | yes — real `tool_calls` from a real model | no | — |
 | **Coding agent** | IN_PROGRESS | yes | yes | partial | no | Full FAIL→patch→PASS cycle not driven by a real model; limited by the local model, not the platform |
-| **Web retrieval** (`web.fetch`) | VERIFIED | yes | 24 tests | yes — real public URLs fetched, SSRF refused | no | **Web SEARCH not built** — needs a search provider's credentials |
+| **Web retrieval** (`web.fetch`) | VERIFIED | yes | 24 tests | yes — real public URLs fetched, SSRF refused | no | **Web SEARCH not built** (needs a provider's credentials); egress is an exfiltration channel for a prompt-injected agent — set `WEB_FETCH_ALLOWLIST`; egress is not metered |
 | **Conversation summarization** (FR-030) | VERIFIED | yes | 8 tests | yes — real model, fact recalled through the summary | no | Threshold is per-deployment config, not per-model automatic |
 | **Sandbox** (process) | VERIFIED | yes | 8 sandbox + 97 in `tools` | yes — real subprocesses | no | — |
 | **Sandbox** (Docker) | BLOCKED_EXTERNAL | yes | unit only | **no** | no | **No Docker CLI/service/WSL, no admin rights** |
