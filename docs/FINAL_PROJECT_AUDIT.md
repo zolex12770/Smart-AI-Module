@@ -13,12 +13,13 @@ The tree audited had already been declared finished. Every gate was green: build
 lint, 556 tests with zero skips, boundary 9/9, migrations 3/3, boot 7/7, E2E 7/7. The status
 document said CODE COMPLETION 96%, "P0 remaining: 0 · P1 remaining: 0".
 
-The audit confirmed **27 gaps**, including two P0s. Two more were found while fixing them. The
+The audit confirmed **27 gaps**, including two P0s. Three more were found while fixing them —
+one of which was a P0 introduced BY one of the fixes. The
 most useful thing in this document is therefore not the table below but that sentence: a complete
 set of passing gates established almost nothing about the properties anyone actually cared about,
 because several of the gates *could not fail*.
 
-**The recurring defect class, stated plainly.** Six of the 29 were gates that reported success
+**The recurring defect class, stated plainly.** Six of the 30 were gates that reported success
 unconditionally:
 
 | Gate | How it could not fail |
@@ -63,7 +64,7 @@ Columns: **I**mplemented · **T**ested · **RV** Runtime Verified · **PV** Prod
 | Tenant isolation: **search tools** | yes | 9 | yes — **was a proven cross-tenant read** | no | — | — |
 | Tenant isolation: **RAG ingestion** | yes | 3 | yes — **was a proven cross-tenant read** | no | — | — |
 | Sandbox containment (symlinks, traversal) | yes | 8 + 9 | yes — real junctions into host directories | no | — | — |
-| SSRF guard (`web.fetch`) | yes | 24 | yes — metadata endpoint, `localhost` via `::1`, `10.0.0.1`, `file://` all refused live | no | — | — |
+| SSRF guard (`web.fetch`) | yes | 32 | yes — metadata endpoint, `localhost` via `::1`, `10.0.0.1`, `file://` and every hex/octal/decimal spelling refused live | no | — | A public host that PROXIES to a private one is indistinguishable; `WEB_FETCH_ALLOWLIST` is the answer. Egress is also an exfiltration channel for a prompt-injected agent, and is not metered |
 | Malware scanning | yes | 7 | yes — real clamd, real EICAR | no | — | — |
 | Upload controls (type, sniff, size, disposition) | yes | yes | yes | no | — | — |
 | Secret handling | yes | staged-diff scan before every commit | yes | no | — | — |
@@ -89,7 +90,7 @@ Columns: **I**mplemented · **T**ested · **RV** Runtime Verified · **PV** Prod
 | RAG (chunk, embed, retrieve, cite) | yes | 47 | yes — citation at real cosine distance | no | — | CSV/code-aware chunking, OCR |
 | Grounding refusal | yes | 10 | yes — refuses where it once fabricated | no | — | — |
 | Embeddings | yes | yes | yes — real nomic-embed-text, 768d | no | — | — |
-| Web retrieval (FR-011) | yes | 24 | yes — real public URLs read | no | — | **Web search not built** |
+| Web retrieval (FR-011) | yes | 32 | yes — real public URLs read | no | — | **Web search not built** |
 | Image generation | yes | 12 | **no** — mock pipeline only | no | **No credentials** | — |
 | Video generation | yes | 31 | **no** — mock pipeline only | no | **No token** | — |
 | Long-form video composition | yes | 26 | yes — h264+aac+mov_text MP4 confirmed by ffprobe | no | — | Scene clips from the mock |
@@ -125,7 +126,7 @@ Columns: **I**mplemented · **T**ested · **RV** Runtime Verified · **PV** Prod
 
 | Dimension | I | T | RV | PV | Blocked | Remaining |
 |---|---|---|---|---|---|---|
-| Test suite | yes | **641 / 79 files, 0 failed, 0 skipped** | yes | no | — | — |
+| Test suite | yes | **646 / 79 files, 0 failed, 0 skipped** | yes | no | — | — |
 | Test gate reliability | yes | n/a | yes — timeouts sized for real infrastructure | no | — | — |
 | E2E (real browser, real API) | yes | 7 | yes — against freshly started servers | no | — | — |
 | Lint (3 type-aware rules) | yes | n/a | yes — 0 errors | no | — | 6 accepted `no-console` warnings |
@@ -173,8 +174,17 @@ pass. P2 = a real defect with a bounded blast radius.
 | 27 | P2 | `TEST_REPORT.md` claimed zero failures | ADR-100 | Reproduced the failures |
 | 28 | P1 | *(found while fixing)* Lockfile still described the old layout | commit `48bf37d` | 26 dead workspace entries |
 | 29 | P1 | *(found while fixing)* E2E silently reused a stale server | ADR-105 | 6/7 failed against a contract that no longer existed |
+| 30 | P0 | *(found while fixing)* The new SSRF guard was bypassable by a hex-spelled IPv4-mapped IPv6 address | commit `82989e9` | A test written to prove the decimal forms were refused |
 
-**Disposition: 29 confirmed, 29 fixed, 0 deferred, 0 disputed.**
+**Disposition: 30 confirmed, 30 fixed, 0 deferred, 0 disputed.**
+
+Number 30 is the one to read twice. It was introduced by the fix for number 25 — closing a gap
+created a P0 in the code that closed it — and it was found only because a test written to prove
+the DECIMAL address encodings were refused happened to include a hex one. It had also been masked
+by an accident: the address never reached the branch that mishandled it, because an earlier step
+failed first for an unrelated reason. Making that earlier step more correct is what exposed it.
+New security code needs the same suspicion as old security code, and a guard that appears to work
+may be working for a reason that is about to change.
 
 ---
 

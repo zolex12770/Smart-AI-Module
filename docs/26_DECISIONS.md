@@ -1718,6 +1718,8 @@ The address policy is injectable for one stated reason: the HTTP mechanics can o
 
 **Web SEARCH is not built.** It needs a search provider's credentials, which this environment does not have, and the matrix says so rather than implying the row is complete.
 
+**Amended the same day.** The first version of `isBlockedAddress` compared IPv6 string PREFIXES, and a prefix is not a property of an address: `[::ffff:127.0.0.1]` normalises to `::ffff:7f00:1`, which the decimal-only mapped-address regex missed, so loopback and the metadata endpoint were reachable through their hex spellings. It was masked by an accident — a bracketed literal did not reach the literal branch at all, so it fell through to `dns.lookup`, which refused a bracketed name on this platform; the guard looked correct because something else failed first. The prefix checks are now a real parse (`expandIpv6`), with `::ffff:0:0/96` and `::/96` unwrapped to their embedded IPv4 address so the two families cannot disagree. Found by the test written to prove the decimal encodings were refused.
+
 **Verified live:** `https://example.com/` returns HTML converted to text and `https://api.github.com/zen` returns plain text, while the metadata endpoint, `localhost` (refused via `::1`), `10.0.0.1` and `file://` are each refused with a specific reason.
 
 **Date:** 2026-09-12

@@ -77,13 +77,13 @@ version was simply wrong, and the reasoning for each number is stated rather tha
 | **Observability: logs** | VERIFIED | yes | yes | yes | no | — |
 | **Observability: traces** | VERIFIED | yes | in `observability`'s 26 | yes — real 3-level span tree | no | — |
 | **Observability: metrics** | VERIFIED | yes | in `observability`'s 26 | yes — real Prometheus exposition | no | — |
-| **Security** | VERIFIED | yes | yes | yes — 15 defects found & fixed | no | See § below |
+| **Security** | VERIFIED | yes | yes | yes — 16 defects found & fixed | no | See § below |
 | **Admin / operations** | VERIFIED | yes | 4 tests | yes — **admin 200, ordinary user 404** | no | No user/project administration UI |
 | **Docker** | BLOCKED_EXTERNAL | yes | no | **no** | no | `docker build` has never run |
 | **Terraform** | IMPLEMENTED | yes | fmt+validate | validate only | no | `terraform apply` needs a GCP project |
 | **CI/CD** | IMPLEMENTED | yes | n/a | **partly** — `npm ci` proven on a fresh clone; workflow never executed | no | **BLOCKED_EXTERNAL:** no git remote |
 | **Documentation** | VERIFIED | yes | n/a | yes — reconciled against source twice | no | — |
-| **Testing** | VERIFIED | 641/79 | 0 skipped | yes | no | — |
+| **Testing** | VERIFIED | 646/79 | 0 skipped | yes | no | — |
 
 ---
 
@@ -146,7 +146,7 @@ All commands below were run on the commit this file names.
 | `npm run build` | pass | — |
 | `npm run typecheck` | 0 errors | — |
 | `npm run lint` | 0 errors, 6 accepted `no-console` warnings | — |
-| `npm test` | **641 passed, 0 failed, 0 skipped, 79 files** | ffmpeg, clamd and fake-gcs all present — a skip would mean a broken gate |
+| `npm test` | **646 passed, 0 failed, 0 skipped, 79 files** | ffmpeg, clamd and fake-gcs all present — a skip would mean a broken gate |
 | `scripts/verify-boundary.sh` | 9/9 | Every check proven able to FAIL by planting the violation it exists to catch |
 | `scripts/verify-migrations.sh` | 3/3 | Clean empty DB, no drift |
 | `scripts/verify-boot.sh` | 7/7 | Refusal cases now assert the REASON, not merely that health never answered |
@@ -173,7 +173,7 @@ judgement about which file belongs to which feature, and this way the numbers ar
 | `shared` | 7 | `scanning` | 7 |
 | `image-mock` | 4 | `database` / `embeddings` | 3 / 3 |
 
-**641 total across 79 files, 0 failed, 0 skipped.** Plus 7 Playwright E2E tests, which run
+**646 total across 79 files, 0 failed, 0 skipped.** Plus 7 Playwright E2E tests, which run
 against real servers rather than in a workspace.
 
 ---
@@ -235,8 +235,8 @@ with "failed to read dockerfile".
 
 ## Security posture
 
-Fifteen defects have been found and fixed across the two audit cycles, each **demonstrated before
-being fixed**:
+Sixteen defects have been found and fixed across the two audit cycles, each **demonstrated
+before being fixed**:
 
 | Defect | How it was found |
 |---|---|
@@ -255,6 +255,7 @@ being fixed**:
 | **MCP reconnect: project permission, process-global effect** | The same audit that found ADR-089's, one route later |
 | **No code path could grant `is_system_admin`** | The whole `/admin` surface answered 404 to everyone |
 | **The boundary gate's secret check could never fail** | Two real secrets planted in frontend source; still PASS |
+| **SSRF guard bypassed by a hex-spelled IPv4-mapped IPv6 address** | A test written to prove the DECIMAL forms were refused |
 
 Still true and deliberate: the rate limiter **fails open** (it is a mitigation, not an
 authorization boundary — the malware scanner fails closed, which is the opposite trade for the
