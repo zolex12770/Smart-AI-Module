@@ -11,7 +11,13 @@ build/
 *.sqlite3
 *.sqlite-wal
 *.sqlite-shm
-apps/*/data/
+# Runtime state, at any depth. This said `apps/*/data/` until the restructure, which matched
+# nothing afterwards: 82 MB of live PGlite databases and one tenant's agent-sandbox files were
+# being copied into the build context and shipped inside the API image.
+**/data/
+backend/data/
+frontend/data/
+.local-tools/
 coverage/
 *.tsbuildinfo
 .git/

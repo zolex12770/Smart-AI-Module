@@ -47,7 +47,7 @@ resource "google_artifact_registry_repository" "images" {
   location      = var.region
   repository_id = "ai-platform"
   format        = "DOCKER"
-  description   = "Container images for apps/api and apps/web (docs/26_DECISIONS.md ADR-037)."
+  description   = "Container images for backend/ and frontend/ (docs/26_DECISIONS.md ADR-037)."
   depends_on    = [google_project_service.apis]
 }
 
@@ -96,7 +96,7 @@ resource "google_sql_user" "app" {
 
 # --- Cloud Storage -------------------------------------------------------------
 # docs/18_CLOUD_ARCHITECTURE.md §1.4. Provisioned ahead of the code that will use them, NOT
-# yet wired up: apps/api's asset store (packages/media's LocalAssetStore) and its RAG/coding
+# yet wired up: the backend's asset store (backend/packages/media's LocalAssetStore) and its RAG/coding
 # -agent sandbox root are both local-disk-only today, which does not survive Cloud Run's
 # ephemeral, multi-instance, scale-to-zero container model — see docs/26_DECISIONS.md
 # ADR-037 and docs/27_RISKS_AND_LIMITATIONS.md for this gap, tracked honestly as a real
@@ -221,7 +221,7 @@ resource "google_service_account" "web" {
   account_id   = "ai-platform-web"
   display_name = "AI Platform web frontend (Cloud Run)"
   # No IAM bindings: the web app only ever calls the API over plain HTTP
-  # (apps/web/app/lib/api.ts) and touches no GCP API directly.
+  # (frontend/app/lib/api.ts) and touches no GCP API directly.
 }
 
 # A separate identity for the worker pool (ADR-039) even though its bindings mirror the API
@@ -370,7 +370,7 @@ resource "google_cloud_run_v2_service" "api" {
 }
 
 # The API has no auth system yet (docs/26_DECISIONS.md ADR-008 — single-operator scope) and
-# is called directly from the browser (apps/web/app/lib/api.ts's client-side fetch calls),
+# is called directly from the browser (frontend/app/lib/api.ts's client-side fetch calls),
 # so it must accept unauthenticated invocations the same way the web frontend does. This is
 # a real, current security-posture fact made visible at the infra level, not a new gap
 # introduced by this file — see docs/27_RISKS_AND_LIMITATIONS.md's existing "no RBAC" row.
@@ -398,7 +398,7 @@ resource "google_cloud_run_v2_service" "web" {
     containers {
       image = var.web_image
       # NEXT_PUBLIC_API_URL is already baked into this image at build time (see
-      # apps/web/Dockerfile's build arg) — nothing to set here at runtime for it.
+      # frontend/Dockerfile's build arg) — nothing to set here at runtime for it.
     }
   }
 

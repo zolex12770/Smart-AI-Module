@@ -1,8 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadConfig, loadDotEnvFiles } from "./config.js";
+import { dotEnvCandidatePaths, loadConfig, loadDotEnvFiles } from "./config.js";
 
 /**
  * The two properties the loader's safety rests on, checked against Node's REAL
@@ -18,6 +20,28 @@ describe("loadDotEnvFiles", () => {
   afterEach(() => {
     delete process.env[KEY];
     if (dir) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("resolves every candidate INSIDE the repository, from src/ and from dist/", () => {
+    // The repo root is located independently of the paths under test -- by walking up for the
+    // package.json that declares the workspaces -- so this compares the loader's arithmetic
+    // against the real tree rather than against itself. `../../../.env` passed every other test
+    // in this file while resolving to the parent of the repository.
+    let repoRoot = dirname(fileURLToPath(import.meta.url));
+    while (!existsSync(join(repoRoot, "package.json")) || !readFileSync(join(repoRoot, "package.json"), "utf8").includes('"workspaces"')) {
+      const up = dirname(repoRoot);
+      expect(up).not.toBe(repoRoot);
+      repoRoot = up;
+    }
+
+    const candidates = dotEnvCandidatePaths();
+    expect(candidates).toHaveLength(2);
+    for (const candidate of candidates) {
+      expect(candidate.startsWith(repoRoot + sep)).toBe(true);
+    }
+    // And one of them must be the repo root itself, which is what .env.example documents.
+    expect(candidates).toContain(join(repoRoot, ".env"));
+    expect(candidates).toContain(join(repoRoot, "backend", ".env"));
   });
 
   it("does nothing under NODE_ENV=test — a developer's .env can never redirect the test suite", () => {

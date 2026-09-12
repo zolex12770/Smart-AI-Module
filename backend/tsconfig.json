@@ -28,6 +28,10 @@
     { "path": "./packages/providers/video-replicate" },
     { "path": "./packages/agent-core" },
     { "path": "./packages/quota" },
-    { "path": "./packages/scanning" }
+    { "path": "./packages/scanning" },
+    { "path": "./packages/memory" },
+    { "path": "./packages/security" },
+    { "path": "./packages/providers/llm-local" },
+    { "path": "./packages/providers/image-openai" }
   ]
 }

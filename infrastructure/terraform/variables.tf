@@ -11,12 +11,12 @@ variable "region" {
 
 variable "api_image" {
   type        = string
-  description = "Full Artifact Registry image reference for the API service, e.g. \"us-central1-docker.pkg.dev/PROJECT/ai-platform/api:TAG\" — built from apps/api/Dockerfile and pushed before this is applied."
+  description = "Full Artifact Registry image reference for the API service, e.g. \"us-central1-docker.pkg.dev/PROJECT/ai-platform/api:TAG\" — built from backend/Dockerfile and pushed before this is applied."
 }
 
 variable "web_image" {
   type        = string
-  description = "Full Artifact Registry image reference for the web service, built from apps/web/Dockerfile — must be built with the API service's URL baked in via the NEXT_PUBLIC_API_URL build arg (see the deployment runbook)."
+  description = "Full Artifact Registry image reference for the web service, built from frontend/Dockerfile — must be built with the API service's URL baked in via the NEXT_PUBLIC_API_URL build arg (see the deployment runbook)."
 }
 
 variable "db_tier" {

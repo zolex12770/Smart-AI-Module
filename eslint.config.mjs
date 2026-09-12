@@ -45,7 +45,7 @@ export default tseslint.config(
 
   {
     // Every TypeScript file in the repo. `files` is explicit rather than inherited so that
-    // apps/web/next.config.mjs — the one JavaScript file in the tree — is left alone.
+    // frontend/next.config.mjs — the one JavaScript file in the tree — is left alone.
     files: ["frontend/**/*.{ts,tsx,mts,cts}", "backend/**/*.{ts,tsx,mts,cts}", "shared/**/*.{ts,tsx,mts,cts}"],
     extends: [js.configs.recommended, tseslint.configs.recommended],
     rules: {
@@ -114,7 +114,7 @@ export default tseslint.config(
         "error",
         {
           // `onSubmit={async (e) => ...}` is how React is written, and React genuinely ignores
-          // the returned promise — the handler owns its own try/catch, as every form in apps/web
+          // the returned promise — the handler owns its own try/catch, as every form in frontend/
           // does. All 14 hits of this rule were that pattern and none was a bug. The other half
           // of the rule, which catches `if (somePromise)` and an async callback passed where a
           // synchronous predicate is expected, stays on: those are always wrong.

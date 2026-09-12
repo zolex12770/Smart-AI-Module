@@ -3,6 +3,24 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
 /**
+ * The files the loader will consider, in order, as absolute paths.
+ *
+ * Exported so the path ARITHMETIC is testable. It was not before, and config.test.ts said so
+ * outright ("exercised by the live boot check ... since it depends on this module's real
+ * on-disk location") -- so when the restructure moved this module up one directory, the
+ * literal `../../../.env` silently began resolving to the PARENT of the repository and no test
+ * noticed. The arithmetic now has a test that fails if a candidate ever leaves the repo.
+ *
+ * `../../.env` is the repo root; `../.env` is `backend/.env`. Both resolve identically from
+ * `src/` and from `dist/`, which sit at the same depth.
+ */
+export function dotEnvCandidatePaths(): string[] {
+  return [new URL("../.env", import.meta.url), new URL("../../.env", import.meta.url)].map((url) =>
+    fileURLToPath(url)
+  );
+}
+
+/**
  * Loads `.env` files into process.env using Node's own loader (`process.loadEnvFile`, no
  * dependency) — docs/26_DECISIONS.md ADR-043. Two locations, resolved relative to THIS
  * module rather than the working directory (which differs between `tsx watch` under
@@ -19,10 +37,8 @@ import { z } from "zod";
  */
 export function loadDotEnvFiles(nodeEnv = process.env.NODE_ENV): string[] {
   if (nodeEnv === "test") return [];
-  const candidates = [new URL("../.env", import.meta.url), new URL("../../../.env", import.meta.url)];
   const loaded: string[] = [];
-  for (const url of candidates) {
-    const path = fileURLToPath(url);
+  for (const path of dotEnvCandidatePaths()) {
     if (!existsSync(path)) continue;
     process.loadEnvFile(path);
     loaded.push(path);

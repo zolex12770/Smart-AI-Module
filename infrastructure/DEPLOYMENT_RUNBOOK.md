@@ -46,15 +46,15 @@ resources — real values are needed starting at step 3.)
 gcloud auth configure-docker <REGION>-docker.pkg.dev
 
 # From the repo root (build context matters — see the Dockerfiles' own comments):
-docker build -f apps/api/Dockerfile -t <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/api:latest .
+docker build -f backend/Dockerfile -t <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/api:latest .
 docker push <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/api:latest
 
 # The web image needs the API's eventual URL baked in at build time (NEXT_PUBLIC_API_URL is a
-# Next.js build-time constant, not something read at container start — apps/web/Dockerfile).
+# Next.js build-time constant, not something read at container start — frontend/Dockerfile).
 # If this is the very first deploy, the API's URL isn't known yet: apply just the API service
 # first (step 4 below, without -target=...web), read its URL from the output, then come back
 # and build the web image with that URL before applying the web service.
-docker build -f apps/web/Dockerfile \
+docker build -f frontend/Dockerfile \
   --build-arg NEXT_PUBLIC_API_URL=https://<api-service-url> \
   -t <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/web:latest .
 docker push <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/web:latest
