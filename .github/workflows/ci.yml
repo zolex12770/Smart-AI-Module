@@ -206,6 +206,13 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Every @ai-platform/* package exports only ./dist, and dist/ is gitignored, so a fresh
+      # `npm ci` leaves nothing to import. Without this step the vitest assertion below failed
+      # with "Failed to resolve entry for package" on correct code — the same could-never-pass
+      # outcome as the grep it replaced, for a different reason (ADR-108).
+      - name: Build packages
+        run: npm run build:packages
+
       # Fails on high/critical only. One moderate advisory is accepted and argued in
       # docs/27_RISKS_AND_LIMITATIONS.md; a blanket `--audit-level=moderate` would fail on it
       # every run and train everyone to ignore the gate.

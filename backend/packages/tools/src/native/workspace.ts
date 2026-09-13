@@ -1,5 +1,6 @@
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { rm } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import type { ToolInvocationContext } from "@ai-platform/shared";
 
 /**
@@ -46,4 +47,29 @@ export function projectWorkspace(deploymentRoot: string, context: Pick<ToolInvoc
   // workspace rather than ENOENT.
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/**
+ * Removes one project's workspace — NFR-008, docs/26_DECISIONS.md ADR-109.
+ *
+ * Account deletion removed the database rows and the asset objects and left
+ * `SANDBOX_ROOT/<projectId>` on disk: every file the agent wrote with `fs.write_file` or the coding
+ * tools, and every document ingested through the sourcePath flow. With the project row gone nothing
+ * could ever address that directory again, and the deletion response said nothing was left behind.
+ *
+ * The id is validated with the same pattern `projectWorkspace` uses, and the resolved path must be a
+ * DIRECT child of the sandbox root, so a malformed id can never turn this into a recursive delete of
+ * something else. It deliberately does not call `projectWorkspace`, which would create the directory
+ * in order to delete it. `rm` removes a symlink rather than following it out of the tree.
+ */
+export async function removeProjectWorkspace(deploymentRoot: string, projectId: string): Promise<void> {
+  if (!SAFE_ID.test(projectId)) {
+    throw new Error("Refusing to remove a workspace for an unusable project id.");
+  }
+  const root = resolve(deploymentRoot);
+  const dir = resolve(root, projectId);
+  if (dirname(dir) !== root) {
+    throw new Error("Refusing to remove a path that is not a direct child of the sandbox root.");
+  }
+  await rm(dir, { recursive: true, force: true });
 }

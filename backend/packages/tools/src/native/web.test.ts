@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ToolInvocationContext } from "@ai-platform/shared";
-import { createWebTools, fetchWebPage, htmlToText, isBlockedAddress } from "./web.js";
+import { createWebTools, fetchWebPage, htmlToText, isBlockedAddress, trimIncompleteUtf8 } from "./web.js";
 
 /**
  * `web.fetch` and its SSRF guard — FR-011, docs/26_DECISIONS.md ADR-104.
@@ -125,6 +125,31 @@ describe("htmlToText", () => {
   it("keeps block structure as newlines and decodes the common entities", () => {
     expect(htmlToText("<h1>Title</h1><p>One &amp; two</p>")).toBe("Title\nOne & two");
   });
+
+  it("runs in linear time on hostile input that made the regex version quadratic (ADR-108)", () => {
+    // 64 KB of "<" took 1.4 s in the regex implementation and quadrupled per doubling, so the
+    // 512 KB cap meant ~90 s of synchronous work blocking every tenant. The bound here is loose on
+    // purpose — it is two orders of magnitude inside the old behaviour, not a benchmark.
+    for (const unit of ["<", "<!--", "<script>", "<a", "</p", "<style x=\"", "&amp;<"]) {
+      const hostile = unit.repeat(Math.ceil(512_000 / unit.length));
+      const started = Date.now();
+      htmlToText(hostile);
+      expect(Date.now() - started, unit).toBeLessThan(2_000);
+    }
+  });
+
+  it("keeps a literal '<' that does not start a tag", () => {
+    expect(htmlToText("<p>5 < 6 and 7 <3</p>")).toBe("5 < 6 and 7 <3");
+  });
+
+  it("drops content of skipped elements case-insensitively, and handles an unterminated one", () => {
+    expect(htmlToText("<p>kept</p><SCRIPT>secret()</ScRiPt><p>also kept</p>")).toBe("kept\nalso kept");
+    expect(htmlToText("<p>kept</p><script>never closed")).toBe("kept");
+  });
+
+  it("does not treat markup-looking text inside a comment as tags", () => {
+    expect(htmlToText("<p>a</p><!-- <script>x</script> --><p>b</p>")).toBe("a\nb");
+  });
 });
 
 describe("fetchWebPage against a real server", () => {
@@ -212,6 +237,97 @@ describe("fetchWebPage against a real server", () => {
 
   it("refuses a URL that embeds credentials rather than silently dropping them", async () => {
     await expect(fetchWebPage("http://user:pass@example.com/")).rejects.toThrow(/embeds credentials/);
+  });
+
+  it("enforces a TOTAL deadline, not an idle timeout a slow-drip server can reset forever (ADR-108)", async () => {
+    let serverSawClose = false;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      const drip = setInterval(() => res.write("x"), 100);
+      req.socket.on("close", () => {
+        serverSawClose = true;
+        clearInterval(drip);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+
+    const started = Date.now();
+    await expect(fetchWebPage(url(), { ...allowLoopback, timeoutMs: 500 })).rejects.toThrow(/did not complete within 500ms/);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(serverSawClose).toBe(true);
+  });
+
+  it("aborts the request when the caller's signal fires (ADR-108)", async () => {
+    let serverSawClose = false;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      const drip = setInterval(() => res.write("x"), 50);
+      req.socket.on("close", () => {
+        serverSawClose = true;
+        clearInterval(drip);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("task cancelled")), 150);
+    await expect(fetchWebPage(url(), { ...allowLoopback, timeoutMs: 10_000, signal: controller.signal })).rejects.toThrow(/task cancelled/);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(serverSawClose).toBe(true);
+  });
+
+  it("closes a redirect's connection instead of draining an endless body (ADR-108)", async () => {
+    let redirectBytes = 0;
+    let redirectClosed = false;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createServer((req, res) => {
+      if (req.url === "/start") {
+        res.writeHead(302, { location: "/final" });
+        const chunk = Buffer.alloc(64 * 1024, 120);
+        const pump = () => {
+          while (!redirectClosed && res.write(chunk)) redirectBytes += chunk.length;
+          if (!redirectClosed) res.once("drain", pump);
+        };
+        req.socket.on("close", () => {
+          redirectClosed = true;
+        });
+        pump();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("final");
+    });
+    await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+
+    const result = await fetchWebPage(url("/start"), allowLoopback);
+    expect(result.content).toBe("final");
+    await new Promise((r) => setTimeout(r, 500));
+    expect(redirectClosed).toBe(true);
+    // Bounded by what was already in flight, not by the server's willingness to keep sending.
+    expect(redirectBytes).toBeLessThan(16 * 1024 * 1024);
+  });
+
+  it("never ends truncated content in U+FFFD when the cap splits a character (ADR-108)", async () => {
+    handler = () => ({ status: 200, headers: { "content-type": "text/plain; charset=utf-8" }, body: "a".repeat(999) + "\u20ac".repeat(10) });
+    const result = await fetchWebPage(url(), { ...allowLoopback, maxBytes: 1_000 });
+    expect(result.truncated).toBe(true);
+    expect(result.content).toBe("a".repeat(999));
+    expect(result.content).not.toContain("\ufffd");
+  });
+
+  it("gives the same refusal for a private name as for an unresolvable one, naming no address (ADR-108)", async () => {
+    const privateName = await fetchWebPage("http://db.internal:5432/", { resolve: async () => ["10.20.30.40"] }).catch((e: Error) => e.message);
+    const missingName = await fetchWebPage("http://db.internal:5432/", {
+      resolve: async () => {
+        throw Object.assign(new Error("getaddrinfo ENOTFOUND db.internal"), { code: "ENOTFOUND" });
+      },
+    }).catch((e: Error) => e.message);
+    expect(privateName).not.toContain("10.20.30.40");
+    expect(missingName).not.toContain("ENOTFOUND");
+    expect(privateName).toBe(missingName);
   });
 
   it("fetches text and reports the content type", async () => {
@@ -323,5 +439,14 @@ describe("the registered tool", () => {
     expect(tool.definition.id).toBe("web.fetch");
     expect(tool.definition.permissionLevel).toBe("network");
     expect(tool.definition.riskLevel).toBe("medium");
+  });
+});
+
+describe("trimIncompleteUtf8", () => {
+  it("drops only an incomplete trailing character", () => {
+    const euro = Buffer.from("\u20ac"); // 3 bytes
+    expect(trimIncompleteUtf8(Buffer.concat([Buffer.from("ab"), euro.subarray(0, 2)])).toString()).toBe("ab");
+    expect(trimIncompleteUtf8(Buffer.concat([Buffer.from("ab"), euro])).toString()).toBe("ab\u20ac");
+    expect(trimIncompleteUtf8(Buffer.from("plain")).toString()).toBe("plain");
   });
 });

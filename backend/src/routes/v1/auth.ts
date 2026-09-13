@@ -1,5 +1,6 @@
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
+  PermissionError,
   UnauthorizedError,
   ValidationError,
   addProjectMemberRequestSchema,
@@ -10,6 +11,7 @@ import {
   signupRequestSchema,
 } from "@ai-platform/shared";
 import { generateCsrfToken } from "@ai-platform/security";
+import { removeProjectWorkspace } from "@ai-platform/tools";
 import type { AppContext } from "../../context.js";
 import { CSRF_COOKIE, SESSION_COOKIE, requireProject, requireUser } from "../../plugins/auth.js";
 
@@ -150,13 +152,32 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
    */
   app.delete(
     "/api/v1/auth/account",
-    { config: { rateLimit: { max: 5, timeWindow: "15 minutes" } } },
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: "15 minutes",
+          // Keyed on the AUTHENTICATED USER and evaluated after authentication (ADR-108). The
+          // default key is `request.ip`, which under `trustProxy: true` is the client-supplied
+          // leftmost X-Forwarded-For entry: rotating that header gave unlimited password guesses.
+          // `preHandler` runs after the auth plugin's own preHandler, so `request.auth` is set.
+          hook: "preHandler",
+          keyGenerator: (req: FastifyRequest) => req.auth?.user.id ?? req.ip,
+        },
+      },
+    },
     async (request, reply) => {
       const user = requireUser(request);
+      // A person with a browser session, not a credential (ADR-108). An API key is a
+      // project-scoped automation credential; it must not be able to destroy the account and
+      // every organization the user solely owns, and a bearer request is exempt from CSRF.
+      if (request.auth?.method !== "session") {
+        throw new PermissionError("Account deletion requires an interactive session; an API key cannot delete an account.");
+      }
       const parsed = deleteAccountRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
 
-      if (!(await ctx.auth.verifyUserPassword(user.id, parsed.data.password))) {
+      if (!(await ctx.auth.verifyUserPassword(user.id, parsed.data.password, { ipAddress: request.ip, requestId: request.id }))) {
         throw new UnauthorizedError("Password is incorrect.");
       }
 
@@ -180,6 +201,21 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
         }
       }
 
+      // And the agent workspaces (ADR-109): every file the agent wrote for a deleted project lives
+      // under SANDBOX_ROOT/<projectId>, and with the project row gone nothing could ever reach it.
+      const workspaceFailures: string[] = [];
+      for (const projectId of result.deletedProjectIds) {
+        try {
+          await removeProjectWorkspace(ctx.sandboxRoot, projectId);
+        } catch (err) {
+          workspaceFailures.push(projectId);
+          request.log.error(
+            { err, project_id: projectId, user_id: result.userId },
+            "account deleted, but a project workspace could not be removed"
+          );
+        }
+      }
+
       reply.clearCookie(SESSION_COOKIE, { path: "/" });
       reply.clearCookie(CSRF_COOKIE, { path: "/" });
       return {
@@ -187,10 +223,13 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
           organizations: result.deletedOrganizationIds.length,
           projects: result.deletedProjectIds.length,
           storageObjects: result.assets.length - failures.length,
+          workspaces: result.deletedProjectIds.length - workspaceFailures.length,
         },
-        // Organizations with other members keep their content; only this user's access ended.
+        // Projects another user can still reach keep their content; only this user's access ended.
         retainedOrganizations: result.retainedOrganizationIds.length,
+        retainedProjects: result.retainedProjectIds.length,
         storageObjectsNotRemoved: failures,
+        workspacesNotRemoved: workspaceFailures,
       };
     }
   );

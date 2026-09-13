@@ -40,7 +40,9 @@ import type { NativeToolEntry } from "./filesystem.js";
  *     302s to 169.254.169.254 is the single most common SSRF bypass; letting the HTTP client
  *     follow redirects would check the first address and none of the rest.
  *
- *  5. **Bounded output and no credentials.** A cap on bytes, a timeout, an allowlist of content
+ *  5. **Bounded output and no credentials.** A cap on bytes, a TOTAL deadline across every hop
+ *     (not merely a socket idle timeout, which a slow-drip server resets forever), cancellation
+ *     through the caller's signal, an allowlist of content
  *     types, no cookies, and no `Authorization` header — the tool cannot be used to spend the
  *     deployment's ambient credentials, and cannot flood the model's context.
  *
@@ -85,6 +87,13 @@ export interface WebFetchOptions {
   isAddressBlocked?: (address: string) => boolean;
   /** Injected in tests so address validation can be exercised without real DNS. */
   resolve?: (hostname: string) => Promise<string[]>;
+  /**
+   * Cancels the fetch — ADR-108. The tool handler passes the invocation's `context.signal`, which
+   * the engine aborts when a task is cancelled or a node passes its deadline. Before this the
+   * handler ignored the signal and the registry's timeout was a bare Promise.race, so a cancelled
+   * or timed-out fetch kept its socket open and kept reading for as long as the server chose.
+   */
+  signal?: AbortSignal;
 }
 
 export interface WebFetchResult {
@@ -214,25 +223,124 @@ function isBlockedIpv6(address: string): boolean {
   return false;
 }
 
-/** Extremely plain HTML-to-text. A parser dependency would buy little for a model's purposes. */
+/** Closing tags after which a line break reads naturally. */
+const BLOCK_TAGS = new Set(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "section", "article", "br"]);
+/** Elements whose CONTENT is not prose and is skipped entirely. */
+const SKIPPED_CONTENT = new Map<string, RegExp>([
+  ["script", /<\/script/gi],
+  ["style", /<\/style/gi],
+  ["noscript", /<\/noscript/gi],
+  ["template", /<\/template/gi],
+]);
+
+function isTagNameChar(code: number): boolean {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+/**
+ * HTML to text in ONE forward pass — ADR-108.
+ *
+ * It used to be a chain of regular expressions, three of which (`<[^>]+>`, `<!--[\s\S]*?-->` and
+ * `<(script|…)\b[\s\S]*?<\/\1>`) re-scan to the end of the input from every candidate start when
+ * the closing token is missing. Measured: 64 KB of `<` took 1.4 s and doubled input took four times
+ * as long, so the 512 KB cap meant about 90 seconds of synchronous work — which blocks the event
+ * loop of the API process for every tenant, and which neither the registry's Promise.race timeout
+ * nor cancellation can interrupt. One hostile page, fetched by a prompt-injected agent with no
+ * approval step, froze the platform.
+ *
+ * Every search below starts where the previous one ended, and the only lookahead that could be
+ * repeated from many starts — "where is the next `>`" — is cached, so the total work is linear in
+ * the input. An unterminated comment, tag or skipped element swallows the rest of the document,
+ * which is also what a browser does.
+ */
 export function htmlToText(html: string): string {
-  return html
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    // Script and style content is not prose and is the bulk of most pages.
-    .replace(/<(script|style|noscript|template)\b[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/(p|div|h[1-6]|li|tr|section|article)>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
+  const out: string[] = [];
+  const n = html.length;
+  let i = 0;
+  let nextGt = -1; // cached index of the next ">" at or after the current scan position
+
+  while (i < n) {
+    const lt = html.indexOf("<", i);
+    if (lt === -1) {
+      out.push(html.slice(i));
+      break;
+    }
+    out.push(html.slice(i, lt));
+
+    if (html.startsWith("<!--", lt)) {
+      const end = html.indexOf("-->", lt + 4);
+      if (end === -1) break;
+      out.push(" ");
+      i = end + 3;
+      continue;
+    }
+
+    let j = lt + 1;
+    const closing = html.charCodeAt(j) === 47; // "/"
+    if (closing) j++;
+    // A tag name must START with an ASCII letter — `<3` and `a < b` are text, not tags.
+    const first = html.charCodeAt(j);
+    let k = j;
+    if ((first >= 65 && first <= 90) || (first >= 97 && first <= 122)) {
+      while (k < n && isTagNameChar(html.charCodeAt(k))) k++;
+    }
+    if (k === j) {
+      // Not a tag ("a < b", "<3"): the character is text.
+      out.push("<");
+      i = lt + 1;
+      continue;
+    }
+    const name = html.slice(j, k).toLowerCase();
+
+    if (nextGt < k) nextGt = html.indexOf(">", k);
+    if (nextGt === -1) break;
+    const gt = nextGt;
+
+    if (!closing && SKIPPED_CONTENT.has(name)) {
+      const closer = SKIPPED_CONTENT.get(name)!;
+      closer.lastIndex = gt + 1;
+      const match = closer.exec(html);
+      if (!match) break;
+      if (nextGt < match.index) nextGt = -1; // cache is behind the new position
+      const after = html.indexOf(">", match.index);
+      if (after === -1) break;
+      out.push(" ");
+      i = after + 1;
+      continue;
+    }
+
+    out.push(BLOCK_TAGS.has(name) && (closing || name === "br") ? "\n" : " ");
+    i = gt + 1;
+  }
+
+  return out
+    .join("")
     .replace(/&nbsp;/gi, " ")
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
+    // Runs are collapsed FIRST, so the newline-trimming pattern after it never sees a long run of
+    // spaces to backtrack through.
     .replace(/[ \t]+/g, " ")
-    .replace(/[ \t]*\n[ \t]*/g, "\n")
+    .replace(/ ?\n ?/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * One message for every hostname refusal — ADR-108.
+ *
+ * The refusal used to name the private address a hostname resolved to, and an unresolvable name
+ * surfaced the raw `getaddrinfo ENOTFOUND`. Together those made the guard an internal DNS oracle
+ * for the model: which internal names exist, and what they point at — collected with no approval
+ * step and then exfiltratable through the same tool. Both outcomes now read identically.
+ */
+function hostnameRefusal(hostname: string): Error {
+  return new Error(
+    `Refusing to fetch "${hostname}": it does not resolve to a usable public address (non-public address or unresolvable).`
+  );
 }
 
 async function validatedAddress(hostname: string, options: WebFetchOptions): Promise<string> {
@@ -243,7 +351,7 @@ async function validatedAddress(hostname: string, options: WebFetchOptions): Pro
   // returns 0 and the address would fall through to the resolver — which happens to refuse it on
   // this platform, but only because `dns.lookup` tolerated a bracketed name. Relying on that is
   // relying on a resolver's error handling for a security decision; validating the literal
-  // directly does not depend on it.
+  // directly does not depend on it. The message may echo a literal address: the caller wrote it.
   const literal = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
   if (isIP(literal) !== 0) {
     if (blocked(literal)) {
@@ -252,17 +360,19 @@ async function validatedAddress(hostname: string, options: WebFetchOptions): Pro
     return literal;
   }
 
-  const addresses = options.resolve
-    ? await options.resolve(hostname)
-    : (await dnsLookup(hostname, { all: true })).map((entry) => entry.address);
-
-  if (addresses.length === 0) throw new Error(`Could not resolve "${hostname}".`);
+  let addresses: string[];
+  try {
+    addresses = options.resolve
+      ? await options.resolve(hostname)
+      : (await dnsLookup(hostname, { all: true })).map((entry) => entry.address);
+  } catch {
+    throw hostnameRefusal(hostname);
+  }
+  if (addresses.length === 0) throw hostnameRefusal(hostname);
   // EVERY address must be acceptable, not merely the first: a hostname that resolves to one
   // public and one private address would otherwise be fetchable on a retry.
   for (const address of addresses) {
-    if (blocked(address)) {
-      throw new Error(`Refusing to fetch "${hostname}": it resolves to a non-public address (${address}).`);
-    }
+    if (blocked(address)) throw hostnameRefusal(hostname);
   }
   return addresses[0];
 }
@@ -279,51 +389,99 @@ function checkAllowlist(hostname: string, allowlist: string[] | undefined): void
   }
 }
 
+/**
+ * Drops an incomplete UTF-8 sequence from the end of a byte-truncated body — ADR-108.
+ *
+ * The byte cap cuts at an offset, and decoding a partial multi-byte character produced U+FFFD at
+ * the end of the content (and could run a byte or two over the cap). Walks back over at most
+ * three continuation bytes to the lead byte and drops the character if it is incomplete.
+ */
+export function trimIncompleteUtf8(buf: Buffer): Buffer {
+  let i = buf.length - 1;
+  let continuation = 0;
+  while (i >= 0 && continuation < 3 && (buf[i] & 0xc0) === 0x80) {
+    i--;
+    continuation++;
+  }
+  if (i < 0) return buf;
+  const lead = buf[i];
+  const need = lead < 0x80 ? 1 : (lead & 0xe0) === 0xc0 ? 2 : (lead & 0xf0) === 0xe0 ? 3 : (lead & 0xf8) === 0xf0 ? 4 : 1;
+  return buf.length - i < need ? buf.subarray(0, i) : buf;
+}
+
+function abortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  return reason instanceof Error ? reason : new Error("The fetch was cancelled.");
+}
+
 export async function fetchWebPage(rawUrl: string, options: WebFetchOptions = {}): Promise<WebFetchResult> {
   const maxBytes = Math.min(options.maxBytes ?? MAX_RESPONSE_BYTES, MAX_RESPONSE_BYTES);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const chain: string[] = [];
   let current = rawUrl;
 
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const url = new URL(current);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error(`Only http and https URLs can be fetched (got "${url.protocol}").`);
-    }
-    // A URL carrying credentials is refused rather than stripped: silently dropping them would
-    // send an unauthenticated request the caller believes was authenticated.
-    if (url.username || url.password) {
-      throw new Error("Refusing a URL that embeds credentials.");
-    }
-    checkAllowlist(url.hostname, options.allowlist);
-    const address = await validatedAddress(url.hostname, options);
-    chain.push(current);
-
-    const response = await once(url, address, timeoutMs, maxBytes);
-    if (response.redirectTo) {
-      if (hop === MAX_REDIRECTS) throw new Error(`Too many redirects (stopped at ${MAX_REDIRECTS}).`);
-      // Resolved against the current URL, then revalidated from the top of the loop — a
-      // relative `Location` is common and a redirect to a private address is the usual bypass.
-      current = new URL(response.redirectTo, current).toString();
-      continue;
-    }
-
-    const contentType = response.contentType?.split(";")[0].trim().toLowerCase() ?? null;
-    if (contentType && !ALLOWED_CONTENT_TYPES.includes(contentType)) {
-      throw new Error(`Refusing content type "${contentType}" — only text, HTML, JSON and XML are readable.`);
-    }
-    const body = response.body.toString("utf8");
-    const content = contentType === "text/html" || contentType === "application/xhtml+xml" ? htmlToText(body) : body;
-    return {
-      url: current,
-      status: response.status,
-      contentType,
-      content,
-      truncated: response.truncated,
-      chain,
-    };
+  // ONE deadline for the whole call — DNS, every redirect hop and the body (ADR-108). The socket's
+  // own `timeout` is an IDLE timer that every received byte resets, so a server sending one byte
+  // just under it held a connection and its buffer open indefinitely; measured, a 500 ms "timeout"
+  // resolved after six seconds. The deadline aborts the request; so does the caller's signal.
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error(`The fetch timed out: it did not complete within ${timeoutMs}ms.`)),
+    timeoutMs
+  );
+  const onExternalAbort = () => controller.abort(options.signal?.reason ?? new Error("The fetch was cancelled."));
+  if (options.signal) {
+    if (options.signal.aborted) onExternalAbort();
+    else options.signal.addEventListener("abort", onExternalAbort, { once: true });
   }
-  throw new Error("Too many redirects.");
+
+  try {
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      if (controller.signal.aborted) throw abortError(controller.signal);
+      const url = new URL(current);
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        throw new Error(`Only http and https URLs can be fetched (got "${url.protocol}").`);
+      }
+      // A URL carrying credentials is refused rather than stripped: silently dropping them would
+      // send an unauthenticated request the caller believes was authenticated.
+      if (url.username || url.password) {
+        throw new Error("Refusing a URL that embeds credentials.");
+      }
+      checkAllowlist(url.hostname, options.allowlist);
+      const address = await validatedAddress(url.hostname, options);
+      if (controller.signal.aborted) throw abortError(controller.signal);
+      chain.push(current);
+
+      const response = await once(url, address, timeoutMs, maxBytes, controller.signal);
+      if (response.redirectTo) {
+        if (hop === MAX_REDIRECTS) throw new Error(`Too many redirects (stopped at ${MAX_REDIRECTS}).`);
+        // Resolved against the current URL, then revalidated from the top of the loop — a
+        // relative `Location` is common and a redirect to a private address is the usual bypass.
+        current = new URL(response.redirectTo, current).toString();
+        continue;
+      }
+
+      const contentType = response.contentType?.split(";")[0].trim().toLowerCase() ?? null;
+      if (contentType && !ALLOWED_CONTENT_TYPES.includes(contentType)) {
+        throw new Error(`Refusing content type "${contentType}" — only text, HTML, JSON and XML are readable.`);
+      }
+      const bytes = response.truncated ? trimIncompleteUtf8(response.body) : response.body;
+      const body = bytes.toString("utf8");
+      const content = contentType === "text/html" || contentType === "application/xhtml+xml" ? htmlToText(body) : body;
+      return {
+        url: current,
+        status: response.status,
+        contentType,
+        content,
+        truncated: response.truncated,
+        chain,
+      };
+    }
+    throw new Error("Too many redirects.");
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", onExternalAbort);
+  }
 }
 
 interface RawResponse {
@@ -335,8 +493,14 @@ interface RawResponse {
 }
 
 /** One request, to one already-validated address, with the connection pinned to it. */
-function once(url: URL, address: string, timeoutMs: number, maxBytes: number): Promise<RawResponse> {
+function once(url: URL, address: string, timeoutMs: number, maxBytes: number, signal: AbortSignal): Promise<RawResponse> {
   return new Promise<RawResponse>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
     const send = url.protocol === "https:" ? httpsRequest : httpRequest;
     const req = send(
       {
@@ -345,6 +509,8 @@ function once(url: URL, address: string, timeoutMs: number, maxBytes: number): P
         port: url.port || (url.protocol === "https:" ? 443 : 80),
         path: url.pathname + url.search,
         method: "GET",
+        // Aborting destroys the request AND its response, closing the socket (ADR-108).
+        signal,
         // THE pin. Returning the validated address means the socket cannot be opened to a
         // different one, which is what closes the DNS-rebinding window that validation alone
         // leaves open. `servername` is left to the hostname so TLS still verifies correctly.
@@ -373,8 +539,11 @@ function once(url: URL, address: string, timeoutMs: number, maxBytes: number): P
         const status = res.statusCode ?? 0;
         const location = res.headers.location;
         if (status >= 300 && status < 400 && location) {
-          res.resume(); // drain, so the socket is freed
-          resolve({ status, contentType: null, body: Buffer.alloc(0), truncated: false, redirectTo: location });
+          // DESTROYED, not drained (ADR-108). `res.resume()` does not free the socket: it reads
+          // the whole body and throws it away, outside the byte cap — measured at 7 GB in six
+          // seconds against an endless redirect body, after the tool had already returned.
+          res.destroy();
+          settle(() => resolve({ status, contentType: null, body: Buffer.alloc(0), truncated: false, redirectTo: location }));
           return;
         }
 
@@ -395,22 +564,30 @@ function once(url: URL, address: string, timeoutMs: number, maxBytes: number): P
           chunks.push(chunk);
         });
         const finish = () =>
-          resolve({
-            status,
-            contentType: (res.headers["content-type"] as string | undefined) ?? null,
-            body: Buffer.concat(chunks),
-            truncated,
-            redirectTo: null,
-          });
+          settle(() =>
+            resolve({
+              status,
+              contentType: (res.headers["content-type"] as string | undefined) ?? null,
+              body: Buffer.concat(chunks),
+              truncated,
+              redirectTo: null,
+            })
+          );
         res.on("end", finish);
-        res.on("close", finish);
-        res.on("error", (err) => (truncated ? finish() : reject(err)));
+        res.on("close", () => {
+          if (truncated || res.complete) return finish();
+          // Closed early and not by us: a cut-off body must not be returned as a success.
+          settle(() =>
+            reject(signal.aborted ? abortError(signal) : new Error(`The connection to ${url.hostname} closed before the response completed.`))
+          );
+        });
+        res.on("error", (err) => (truncated ? finish() : settle(() => reject(signal.aborted ? abortError(signal) : err))));
       }
     );
     req.on("timeout", () => {
-      req.destroy(new Error(`Request to ${url.hostname} timed out after ${timeoutMs}ms.`));
+      req.destroy(new Error(`Request to ${url.hostname} was idle for ${timeoutMs}ms.`));
     });
-    req.on("error", reject);
+    req.on("error", (err) => settle(() => reject(signal.aborted ? abortError(signal) : err)));
     req.end();
   });
 }
@@ -444,11 +621,14 @@ export function createWebTools(options: WebFetchOptions = {}): NativeToolEntry[]
   return [
     {
       definition,
-      handler: async (args) => {
+      handler: async (args, context) => {
         try {
           const result = await fetchWebPage(String(args.url), {
             ...options,
             maxBytes: args.maxBytes === undefined ? options.maxBytes : Number(args.maxBytes),
+            // Cancellation reaches the socket (ADR-108): a cancelled task or an expired node
+            // deadline aborts the request instead of leaving it reading in the background.
+            signal: context?.signal,
           });
           return { ok: true, output: { ...result } };
         } catch (err) {

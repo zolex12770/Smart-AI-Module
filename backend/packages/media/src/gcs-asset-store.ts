@@ -65,16 +65,23 @@ export class CloudStorageAssetStore implements AssetStore {
     });
 
     const checksum = createHash("sha256").update(bytes).digest("hex");
-    const asset = await this.assetRepo.create({
-      id,
-      projectId,
-      kind,
-      mimeType,
-      sizeBytes: bytes.length,
-      storagePath: `gs://${this.bucketName}/${objectName}`,
-      checksum,
-    });
-    return asset.id;
+    const storagePath = `gs://${this.bucketName}/${objectName}`;
+    try {
+      const asset = await this.assetRepo.create({
+        id,
+        projectId,
+        kind,
+        mimeType,
+        sizeBytes: bytes.length,
+        storagePath,
+        checksum,
+      });
+      return asset.id;
+    } catch (err) {
+      // Same reasoning as LocalAssetStore.store (ADR-109): no object without a row.
+      await this.deleteByPath(storagePath).catch(() => undefined);
+      throw err;
+    }
   }
 
   async read(asset: Asset): Promise<Buffer> {

@@ -630,7 +630,11 @@ export class AgentEngine {
       { role: "system", content: AUTONOMOUS_SYSTEM_PROMPT },
       { role: "user", content: goal },
     ];
-    const preApprovedCallIds = new Set<string>(resumed?.approvedCallIds ?? []);
+    // No pre-approved id set (ADR-108). The call a human approved runs directly from
+    // `resumed.pendingCall` below, before the loop starts, so an id set could only ever match a
+    // NEW call — and ids are not unique: the Google adapter synthesises `gemini-call-1` for the
+    // first call of every turn and the local adapter `call_0`. One approval therefore let a
+    // later, different destructive call skip the gate, proven with two `fs.delete_file` calls.
 
     const allowed = Array.isArray(resolvedInput.allowedTools)
       ? new Set((resolvedInput.allowedTools as unknown[]).map(String))
@@ -763,12 +767,12 @@ export class AgentEngine {
             },
             executeTool: async ({ call }) => {
               // Approval is resolved per call, per project — the four modes are real (ADR-059).
-              if (!preApprovedCallIds.has(call.id)) {
-                const decision = await this.deps.toolRegistry.approvalFor(call.name, task.projectId);
-                if (decision.required) {
-                  approval.pending = { call, reason: decision.reason ?? "Approval required." };
-                  return { ok: false, content: "", awaitingApproval: true };
-                }
+              // Every call goes through the gate, including one whose id matches an approved
+              // call's (ADR-108).
+              const decision = await this.deps.toolRegistry.approvalFor(call.name, task.projectId);
+              if (decision.required) {
+                approval.pending = { call, reason: decision.reason ?? "Approval required." };
+                return { ok: false, content: "", awaitingApproval: true };
               }
               const outcome = await this.deps.toolRegistry.call(call.name, call.arguments, {
                 projectId: task.projectId,
@@ -832,7 +836,7 @@ export class AgentEngine {
           {
             status: "waiting_approval",
             output: {
-              resume: { transcript: result.transcript, approvedCallIds: [...preApprovedCallIds, paused.call.id] },
+              resume: { transcript: result.transcript },
               pendingCall: { id: paused.call.id, name: paused.call.name, arguments: paused.call.arguments },
               // Every call from that turn that produced no `tool` message (ADR-099): the one a
               // human was asked about, plus any the model requested after it. The resume needs

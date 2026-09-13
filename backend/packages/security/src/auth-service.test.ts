@@ -271,4 +271,64 @@ describe("AuthService", () => {
       expect(entries.some((e) => e.action === "authz.chat:write" && e.outcome === "denied")).toBe(true);
     });
   });
+
+  describe("system administrator has no implicit tenant access (ADR-108)", () => {
+    const PASSWORD = "a-sufficiently-long-password";
+
+    it("cannot authorize into another tenant's project", async () => {
+      // The flag used to short-circuit authorizeProject into owner+admin on every project in every
+      // organization. Before the fix this returned a context carrying chat:write, apikey:manage and
+      // project:admin on alice's project.
+      const { user: admin } = await auth.bootstrapSystemAdmin({ email: "root@example.com", password: PASSWORD, displayName: "Root" });
+      const { projectId: aliceProject } = await auth.signup({ email: "alice@example.com", password: PASSWORD, displayName: "Alice" });
+      await expect(auth.authorizeProject(admin, aliceProject, "session", "cred-root")).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it("cannot create a project inside another tenant's organization", async () => {
+      const { user: admin } = await auth.bootstrapSystemAdmin({ email: "root@example.com", password: PASSWORD, displayName: "Root" });
+      const { user: alice } = await auth.signup({ email: "alice@example.com", password: PASSWORD, displayName: "Alice" });
+      const aliceOrg = await auth.primaryOrganizationId(alice.id);
+      await expect(auth.createProject(admin, aliceOrg!, "planted")).rejects.toBeInstanceOf(NotFoundError);
+    });
+
+    it("still reaches its own project normally", async () => {
+      const { user: admin, projectId } = await auth.bootstrapSystemAdmin({ email: "root@example.com", password: PASSWORD, displayName: "Root" });
+      const ctx = await auth.authorizeProject(admin, projectId, "session", "cred-root");
+      expect(ctx.permissions).toContain("project:admin");
+    });
+  });
+
+  describe("password re-authentication honours the account lockout (ADR-108)", () => {
+    const PASSWORD = "a-sufficiently-long-password";
+
+    it("refuses a correct password while the account is locked", async () => {
+      // Before the fix verifyUserPassword ignored lockedUntil entirely: login refused a locked
+      // account, and this check still returned true for the correct password.
+      const { user } = await auth.signup({ email: "alice@example.com", password: PASSWORD, displayName: "Alice" });
+      for (let i = 0; i < 10; i++) {
+        await expect(auth.login("alice@example.com", "wrong-password-entirely")).rejects.toThrow();
+      }
+      await expect(auth.verifyUserPassword(user.id, PASSWORD)).rejects.toThrow(/temporarily locked/);
+    });
+
+    it("counts wrong re-authentication attempts toward the lockout", async () => {
+      // Before the fix a wrong guess here never incremented failedLoginCount, so guesses through
+      // this path were unlimited as far as the account was concerned.
+      const { user } = await auth.signup({ email: "alice@example.com", password: PASSWORD, displayName: "Alice" });
+      for (let i = 0; i < 10; i++) {
+        expect(await auth.verifyUserPassword(user.id, "wrong-password-entirely")).toBe(false);
+      }
+      await expect(auth.verifyUserPassword(user.id, PASSWORD)).rejects.toThrow(/temporarily locked/);
+      await expect(auth.login("alice@example.com", PASSWORD)).rejects.toThrow(/temporarily locked/);
+    });
+
+    it("clears the failure count after a correct password", async () => {
+      const { user } = await auth.signup({ email: "alice@example.com", password: PASSWORD, displayName: "Alice" });
+      for (let i = 0; i < 9; i++) await auth.verifyUserPassword(user.id, "wrong-password-entirely");
+      expect(await auth.verifyUserPassword(user.id, PASSWORD)).toBe(true);
+      // Nine more wrong guesses must not lock it, because the counter restarted.
+      for (let i = 0; i < 9; i++) await auth.verifyUserPassword(user.id, "wrong-password-entirely");
+      expect(await auth.verifyUserPassword(user.id, PASSWORD)).toBe(true);
+    });
+  });
 });

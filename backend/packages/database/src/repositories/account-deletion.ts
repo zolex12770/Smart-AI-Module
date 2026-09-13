@@ -1,7 +1,8 @@
-import { and, eq, inArray, ne } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import type { DrizzleDb } from "../client.js";
 import {
   assets,
+  auditLog,
   documents,
   organizationMembers,
   organizations,
@@ -11,40 +12,37 @@ import {
 } from "../schema/index.js";
 
 /**
- * Account and data deletion — NFR-008, docs/26_DECISIONS.md ADR-102.
+ * Account and data deletion — NFR-008, docs/26_DECISIONS.md ADR-102, corrected by ADR-107 and
+ * ADR-109.
  *
- * WHAT WAS MISSING. There was no way to delete an account or its data: no route, no CLI, no
- * repository call, and no way even to suspend one. NFR-008 is a P1 privacy requirement
- * ("a deletion request removes rows/objects across all owning tables and buckets") and it was
- * not merely unimplemented but unreachable, while the status document claimed "P1 remaining: 0".
+ * Content hangs off the PROJECT, not the user — the authorship columns are `onDelete: "set null"` —
+ * so deleting the user row alone would leave every message and document behind with a null author.
  *
- * AND IT IS NOT ACHIEVABLE BY DELETING THE USER ROW. Content does not hang off the user: it
- * hangs off the PROJECT. `conversations`, `tasks`, `documents`, `image_generations`,
- * `video_projects` and `usage_records` all carry `createdByUserId` with
- * `onDelete: "set null"` — deliberately, so an audit trail survives a departing colleague — so
- * deleting the user would leave every message, document and generated asset in place with a null
- * author. The honest unit of deletion is the organization, which cascades to projects and from
- * there to everything.
+ * WHAT THIS DELETES, decided PER PROJECT:
  *
- * WHAT THIS DELETES, and what it deliberately does not:
- *
- *  - Organizations where this user is the ONLY member cascade away entirely: projects,
- *    conversations, messages, tasks, nodes, transitions, documents, chunks, memory, assets,
- *    image and video rows, usage records.
- *  - Organizations with any OTHER member keep their content — it is not this user's to
- *    destroy — and the user's own memberships are removed so their access ends immediately.
- *    "Member" means by EITHER route: an `organization_members` row, or a `project_members`
- *    row on any project in that organization. The API only ever writes the second kind, so
- *    checking the first alone deleted real collaborators' work.
+ *  - The organizations considered are every one the user can reach by EITHER route: an
+ *    `organization_members` row, or a `project_members` row on one of its projects. ADR-107's version
+ *    considered only the first, so when the last collaborator on a kept project deleted their account
+ *    the organization was never looked at again, and its content outlived everyone who could reach it.
+ *  - An organization with ANOTHER organization member is kept whole: any organization role reaches
+ *    every project in it, so none of it is only this user's.
+ *  - Otherwise each project is judged on its own. A project another user is a member of is kept; every
+ *    other project is deleted with its content. ADR-107's version judged the organization as a unit, so
+ *    one collaborator on ANY project kept a private project nobody else could reach — "alice's private
+ *    diary" survived her deletion, ownerless and unreachable. If no project is kept, the organization
+ *    goes too.
+ *  - The user's memberships in everything that survives are removed, so their access ends at once.
+ *  - `audit_log` rows are kept, as an audit trail must be, but scrubbed of personal data: `ip_address`
+ *    is cleared and `email` is removed from `detail`, both on rows that name the user and on
+ *    denied-login rows that recorded the address without a user id. An earlier comment here claimed
+ *    "the row retains no personal data once the user is gone" while the rows kept every login IP.
  *  - The user row goes last, cascading sessions, API keys and personal memory items.
- *  - `audit_log` rows survive with a null user id. A deletion record that deletes itself is not
- *    an audit trail, and the row retains no personal data once the user is gone.
  *
- * STORAGE OBJECTS ARE NOT DELETED HERE. This package knows nothing about object storage, so the
- * asset rows' storage paths are RETURNED and the caller removes the files. The database is
- * committed first on purpose: an orphaned file is a privacy problem an operator can finish by
- * hand from the returned list, while rows pointing at files that are already gone would be a
- * corrupted database nobody can repair.
+ * STORAGE OBJECTS AND WORKSPACES ARE NOT REMOVED HERE. This package knows nothing about object
+ * storage or the agent sandbox, so the deleted projects' asset paths and ids are RETURNED and the
+ * caller removes the files and workspace directories after the commit. The database is committed
+ * first on purpose: an orphaned file is a privacy problem an operator can finish from the returned
+ * list, while rows pointing at files that are already gone would be a corrupt database.
  */
 export interface DeletedAsset {
   id: string;
@@ -54,101 +52,122 @@ export interface DeletedAsset {
 
 export interface AccountDeletionResult {
   userId: string;
-  /** Organizations deleted outright, because this user was their only member. */
+  /** Organizations deleted outright: no other member, and no project anyone else is a member of. */
   deletedOrganizationIds: string[];
-  /** Projects that went with them. */
+  /** Every project deleted with its content, including private projects in organizations that survive. */
   deletedProjectIds: string[];
-  /** Organizations kept because someone else is still a member; the user's access was removed. */
+  /** Organizations kept because another user can still reach at least part of them. */
   retainedOrganizationIds: string[];
+  /** Projects kept because another user is a member of them (or of their organization). */
+  retainedProjectIds: string[];
   /** Storage objects the CALLER must now delete. Empty is a valid answer. */
   assets: DeletedAsset[];
 }
 
 export async function deleteUserAccount(db: DrizzleDb, userId: string): Promise<AccountDeletionResult> {
   return db.transaction(async (tx) => {
-    const existing = await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
+    const existing = await tx
+      .select({ id: users.id, email: users.email })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
     if (existing.length === 0) {
       throw new Error(`Cannot delete account "${userId}": no such user.`);
     }
+    const email = existing[0].email;
 
-    const memberships = await tx
+    const viaOrganization = await tx
       .select({ organizationId: organizationMembers.organizationId })
       .from(organizationMembers)
       .where(eq(organizationMembers.userId, userId));
-    const orgIds = [...new Set(memberships.map((m) => m.organizationId))];
+    const viaProject = await tx
+      .select({ organizationId: projects.organizationId })
+      .from(projectMembers)
+      .innerJoin(projects, eq(projectMembers.projectId, projects.id))
+      .where(eq(projectMembers.userId, userId));
+    const orgIds = [...new Set([...viaOrganization, ...viaProject].map((r) => r.organizationId))];
 
-    const soleOwned: string[] = [];
-    const shared: string[] = [];
+    const deletedOrganizationIds: string[] = [];
+    const retainedOrganizationIds: string[] = [];
+    const deletedProjectIds: string[] = [];
+    const retainedProjectIds: string[] = [];
+    const deletedProjectsInRetainedOrgs: string[] = [];
+
     for (const orgId of orgIds) {
-      // Anyone else at all, by EITHER route — and both routes have to be checked, which is the
-      // whole difficulty. `addProjectMember` (the only API path for inviting a collaborator)
-      // inserts a `projectMembers` row and NO `organizationMembers` row, and `authorizeProject`
-      // grants full project permissions from that row alone. So a real, working collaborator is
-      // invisible to an organization-membership query: the first version of this checked only
-      // `organizationMembers` and cascade-deleted a colleague's project and every message in it.
-      //
-      // Proven, not theorised: a probe that invited a second user through the real service and
-      // then deleted the inviter reported `deletedOrganizationIds: 1` where the invariant says 0,
-      // and the collaborator's messages were gone. The test that was supposed to cover this
-      // passed only because it hand-inserted the `organizationMembers` row the API never writes —
-      // a fixture that took a shortcut the product does not have.
+      const orgProjectIds = (
+        await tx.select({ id: projects.id }).from(projects).where(eq(projects.organizationId, orgId))
+      ).map((p) => p.id);
+
       const otherOrgMember = await tx
         .select({ userId: organizationMembers.userId })
         .from(organizationMembers)
         .where(and(eq(organizationMembers.organizationId, orgId), ne(organizationMembers.userId, userId)))
         .limit(1);
-      const otherProjectMember = await tx
-        .select({ userId: projectMembers.userId })
-        .from(projectMembers)
-        .innerJoin(projects, eq(projectMembers.projectId, projects.id))
-        .where(and(eq(projects.organizationId, orgId), ne(projectMembers.userId, userId)))
-        .limit(1);
-      const hasOthers = otherOrgMember.length > 0 || otherProjectMember.length > 0;
-      (hasOthers ? shared : soleOwned).push(orgId);
-    }
-
-    let doomedProjectIds: string[] = [];
-    let doomedAssets: DeletedAsset[] = [];
-    if (soleOwned.length > 0) {
-      doomedProjectIds = (
-        await tx.select({ id: projects.id }).from(projects).where(inArray(projects.organizationId, soleOwned))
-      ).map((p) => p.id);
-
-      if (doomedProjectIds.length > 0) {
-        doomedAssets = await tx
-          .select({ id: assets.id, projectId: assets.projectId, storagePath: assets.storagePath })
-          .from(assets)
-          .where(inArray(assets.projectId, doomedProjectIds));
-
-        // Documents first. `documents.assetId` is the one foreign key in the schema with no
-        // cascade, so a single cascading delete of the project can reach `assets` while document
-        // rows still reference them. Removing the referencing side explicitly makes the order
-        // deterministic instead of relying on the engine's choice.
-        await tx.delete(documents).where(inArray(documents.projectId, doomedProjectIds));
+      if (otherOrgMember.length > 0) {
+        retainedOrganizationIds.push(orgId);
+        retainedProjectIds.push(...orgProjectIds);
+        continue;
       }
 
-      // One delete; the cascades do the rest. Enumerating twenty child tables here would go
-      // stale the day someone adds the twenty-first, and the schema already states the shape.
-      await tx.delete(organizations).where(inArray(organizations.id, soleOwned));
+      const keep: string[] = [];
+      const doom: string[] = [];
+      for (const projectId of orgProjectIds) {
+        const otherProjectMember = await tx
+          .select({ userId: projectMembers.userId })
+          .from(projectMembers)
+          .where(and(eq(projectMembers.projectId, projectId), ne(projectMembers.userId, userId)))
+          .limit(1);
+        (otherProjectMember.length > 0 ? keep : doom).push(projectId);
+      }
+      deletedProjectIds.push(...doom);
+      retainedProjectIds.push(...keep);
+      if (keep.length === 0) {
+        deletedOrganizationIds.push(orgId);
+      } else {
+        retainedOrganizationIds.push(orgId);
+        deletedProjectsInRetainedOrgs.push(...doom);
+      }
     }
 
-    // Access to organizations that outlive the user ends here.
-    if (shared.length > 0) {
-      await tx.delete(organizationMembers).where(
-        and(eq(organizationMembers.userId, userId), inArray(organizationMembers.organizationId, shared))
-      );
-      await tx.delete(projectMembers).where(eq(projectMembers.userId, userId));
+    let doomedAssets: DeletedAsset[] = [];
+    if (deletedProjectIds.length > 0) {
+      doomedAssets = await tx
+        .select({ id: assets.id, projectId: assets.projectId, storagePath: assets.storagePath })
+        .from(assets)
+        .where(inArray(assets.projectId, deletedProjectIds));
+
+      // Documents first. `documents.assetId` is the one foreign key in the schema with no cascade,
+      // so a cascading delete of the project can reach `assets` while document rows still reference
+      // them. Removing the referencing side explicitly makes the order deterministic.
+      await tx.delete(documents).where(inArray(documents.projectId, deletedProjectIds));
+    }
+    if (deletedProjectsInRetainedOrgs.length > 0) {
+      await tx.delete(projects).where(inArray(projects.id, deletedProjectsInRetainedOrgs));
+    }
+    if (deletedOrganizationIds.length > 0) {
+      // One delete per organization set; the cascades remove projects and everything under them.
+      await tx.delete(organizations).where(inArray(organizations.id, deletedOrganizationIds));
     }
 
-    // Last: cascades sessions, API keys and memory items; nulls the authorship columns on
-    // anything left in an organization that survives.
+    // Access to everything that outlives the user ends here.
+    await tx.delete(organizationMembers).where(eq(organizationMembers.userId, userId));
+    await tx.delete(projectMembers).where(eq(projectMembers.userId, userId));
+
+    // The audit trail survives; the person's data in it does not (ADR-109).
+    const scrubbed = { ipAddress: null, detail: sql`${auditLog.detail} - 'email'` };
+    await tx.update(auditLog).set(scrubbed).where(eq(auditLog.userId, userId));
+    await tx.update(auditLog).set(scrubbed).where(sql`${auditLog.detail} ->> 'email' = ${email}`);
+
+    // Last: cascades sessions, API keys and memory items; nulls the authorship columns on anything
+    // left in a project that survives.
     await tx.delete(users).where(eq(users.id, userId));
 
     return {
       userId,
-      deletedOrganizationIds: soleOwned,
-      deletedProjectIds: doomedProjectIds,
-      retainedOrganizationIds: shared,
+      deletedOrganizationIds,
+      deletedProjectIds,
+      retainedOrganizationIds,
+      retainedProjectIds,
       assets: doomedAssets,
     };
   });

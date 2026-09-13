@@ -472,4 +472,71 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     expect(failedNode.errorMessage).toContain("no longer permitted");
   });
 
+
+  /**
+   * An approval is for ONE call, not for an id — docs/26_DECISIONS.md ADR-108.
+   *
+   * Adapter-synthesised tool-call ids repeat every turn: the Google adapter names the first call of
+   * every turn `gemini-call-1` and the local adapter `call_0`. The engine used to record approved
+   * ids and skip the gate for any later call carrying one, so a single human approval let a
+   * DIFFERENT destructive call through on a later turn. Proven with two `fs.delete_file` calls
+   * before the fix; this reproduces it with a gated test tool.
+   */
+  it("parks again when a later turn reuses the approved call's id for a different call", async () => {
+    const ran: string[] = [];
+    const gated: NativeToolEntry = {
+      definition: {
+        id: "test.destroy",
+        name: "test.destroy",
+        description: "a destructive action that must always be approved",
+        origin: { kind: "native", serverId: null, serverVersion: null },
+        inputSchema: {
+          type: "object",
+          properties: { target: { type: "string" } },
+          required: ["target"],
+          additionalProperties: false,
+        },
+        outputSchema: null,
+        permissionLevel: "destructive",
+        riskLevel: "critical",
+        requiresApproval: "always" as const,
+        timeoutMs: 10_000,
+        retryPolicy: { maxAttempts: 1, backoff: "fixed", idempotencyRequired: false },
+        enabled: true,
+      },
+      handler: async (args) => {
+        ran.push(String((args as { target: string }).target));
+        return { ok: true, output: { destroyed: (args as { target: string }).target } };
+      },
+    };
+
+    const { engine } = build(
+      [
+        // The same synthesised id on two different turns, for two different targets.
+        { calls: [{ id: "gemini-call-1", name: "test.destroy", arguments: { target: "first" } }] },
+        { calls: [{ id: "gemini-call-1", name: "test.destroy", arguments: { target: "second" } }] },
+        { text: "Done." },
+      ],
+      undefined,
+      [gated]
+    );
+
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Destroy the two targets." },
+      { projectId: PROJECT, userId: USER }
+    );
+    await waitFor(task.id, ["WAITING_FOR_APPROVAL"]);
+    const [firstPark] = await nodes.listByRootUnscoped(task.id);
+    expect(ran).toEqual([]);
+
+    await engine.approve(task.id, firstPark.id, "test-operator");
+
+    // The approved call runs; the second call, same id, different target, must NOT.
+    const state = await waitFor(task.id, ["WAITING_FOR_APPROVAL", "COMPLETED", "FAILED"]);
+    expect(ran).toEqual(["first"]);
+    expect(state.state).toBe("WAITING_FOR_APPROVAL");
+    const [secondPark] = await nodes.listByRootUnscoped(task.id);
+    expect((secondPark.output as { pendingCall?: { arguments?: { target?: string } } }).pendingCall?.arguments?.target).toBe("second");
+  });
 });

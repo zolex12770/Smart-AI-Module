@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ModelRegistry } from "@ai-platform/model-router";
 import type { Logger } from "@ai-platform/observability";
 import { loadConfig, type AppConfig } from "./config.js";
-import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./index.js";
+import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 
 /**
  * No fake implementation is reachable in production — docs/26_DECISIONS.md ADR-101,

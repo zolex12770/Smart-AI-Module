@@ -67,16 +67,25 @@ export class LocalAssetStore implements AssetStore {
     await writeFile(fullPath, bytes);
 
     const checksum = createHash("sha256").update(bytes).digest("hex");
-    const asset = await this.assetRepo.create({
-      id,
-      projectId,
-      kind,
-      mimeType,
-      sizeBytes: bytes.length,
-      storagePath: fullPath,
-      checksum,
-    });
-    return asset.id;
+    try {
+      const asset = await this.assetRepo.create({
+        id,
+        projectId,
+        kind,
+        mimeType,
+        sizeBytes: bytes.length,
+        storagePath: fullPath,
+        checksum,
+      });
+      return asset.id;
+    } catch (err) {
+      // The bytes were written first; if the row cannot be, they must not stay behind (ADR-109).
+      // The case that proved it: a job still running when its project's account was deleted wrote
+      // its output, then hit the foreign key to the deleted project — leaving a file with no row,
+      // absent from the deletion response, that nothing could ever find.
+      await this.deleteByPath(fullPath).catch(() => undefined);
+      throw err;
+    }
   }
 
   async read(asset: Asset): Promise<Buffer> {

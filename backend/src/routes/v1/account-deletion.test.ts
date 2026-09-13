@@ -133,4 +133,65 @@ describe("DELETE /api/v1/auth/account", () => {
     expect(res.statusCode).toBe(403);
     expect(await db.select().from(users).where(eq(users.id, auth.userId))).toHaveLength(1);
   });
+
+  it("refuses an API key: deletion requires an interactive session (ADR-108)", async () => {
+    // Before the fix a bearer key plus the password deleted the account: requireUser accepts any
+    // credential, and a bearer request is exempt from CSRF.
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/api-keys",
+      headers: auth.headers,
+      payload: { name: "automation", projectId: auth.projectId },
+    });
+    expect(created.statusCode).toBe(201);
+    const key = (created.json() as { key: string }).key;
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/auth/account",
+      headers: { authorization: `Bearer ${key}`, "x-project-id": auth.projectId },
+      payload: { password: PASSWORD, confirm: "DELETE MY ACCOUNT" },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(await db.select().from(users).where(eq(users.id, auth.userId))).toHaveLength(1);
+  });
+
+  it("rate-limits password guesses per USER, so rotating X-Forwarded-For does not help (ADR-108)", async () => {
+    // The limit was keyed on request.ip, which under trustProxy comes from X-Forwarded-For: twelve
+    // guesses with a different header each time all returned 401 and none returned 429.
+    const statuses: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const res = await app.inject({
+        method: "DELETE",
+        url: "/api/v1/auth/account",
+        headers: { ...auth.headers, "x-forwarded-for": `203.0.113.${i + 1}` },
+        payload: { password: "wrong-password-entirely", confirm: "DELETE MY ACCOUNT" },
+      });
+      statuses.push(res.statusCode);
+    }
+    expect(statuses.slice(0, 5)).toEqual([401, 401, 401, 401, 401]);
+    expect(statuses.slice(5)).toEqual([429, 429]);
+    expect(await db.select().from(users).where(eq(users.id, auth.userId))).toHaveLength(1);
+  });
+
+  it("removes the deleted project's agent workspace from disk (ADR-109)", async () => {
+    // Before the fix the route removed only asset objects: a file written into
+    // SANDBOX_ROOT/<projectId> by the agent survived with the project row gone and a 200 response
+    // that reported nothing left behind.
+    const workspace = join(ctx.sandboxRoot, auth.projectId);
+    mkdirSync(workspace, { recursive: true });
+    writeFileSync(join(workspace, "agent-written-secret.txt"), "private");
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/auth/account",
+      headers: auth.headers,
+      payload: { password: PASSWORD, confirm: "DELETE MY ACCOUNT" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { deleted: { workspaces: number }; workspacesNotRemoved: string[] };
+    expect(body.workspacesNotRemoved).toEqual([]);
+    expect(body.deleted.workspaces).toBe(1);
+    expect(existsSync(workspace)).toBe(false);
+  });
 });

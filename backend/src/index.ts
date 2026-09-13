@@ -29,14 +29,8 @@ import {
 } from "@ai-platform/database";
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MemoryService } from "@ai-platform/memory";
-import { MockImageProvider } from "@ai-platform/image-mock";
-import { OpenAICompatibleImageProvider } from "@ai-platform/image-openai";
 import { fromPglite, JobQueue, type JobQueueOptions } from "@ai-platform/jobs";
-import { AnthropicProvider } from "@ai-platform/llm-anthropic";
-import { GoogleProvider } from "@ai-platform/llm-google";
-import { LocalEmbeddingProvider, LocalOpenAICompatibleProvider } from "@ai-platform/llm-local";
-import { MockLLMProvider } from "@ai-platform/llm-mock";
-import { OpenAIProvider } from "@ai-platform/llm-openai";
+import { LocalEmbeddingProvider } from "@ai-platform/llm-local";
 import { McpManager, parseMcpServerConfigs } from "@ai-platform/mcp";
 import {
   CloudStorageAssetStore,
@@ -69,8 +63,6 @@ import { AuthService, createSandbox, type ExecutionSandbox } from "@ai-platform/
 import {
   signupRequestSchema,
   type EmbeddingProvider,
-  type ImageProvider,
-  type VideoProvider,
 } from "@ai-platform/shared";
 import {
   createCodingTools,
@@ -82,12 +74,11 @@ import {
   resolveSandboxedPath,
   ToolRegistry,
 } from "@ai-platform/tools";
-import { MockVideoProvider } from "@ai-platform/video-mock";
-import { ReplicateVideoProvider } from "@ai-platform/video-replicate";
 import { sql } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import { loadConfig, type AppConfig } from "./config.js";
+import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 import type { AppContext } from "./context.js";
 import { roleRuns, type RoleResponsibilities } from "./role.js";
 import { buildServer } from "./server.js";
@@ -182,93 +173,6 @@ const videoRenderJobSchema = jobScopeSchema.extend({ videoProjectId: z.string().
  * one that actually runs (product brief §7). A hosted key present alongside it is an escape
  * hatch for capabilities the local model lacks, not a silent upgrade.
  */
-/**
- * The image provider for this deployment, or null when there is none — ADR-101.
- *
- * Extracted from `main()` so the "no fake implementation in production" rule is something a
- * TEST asserts rather than something a grep guesses at. The CI gate for it used to be
- * `grep -rn "new Mock" backend/src | grep -v NODE_ENV`, which was wrong in both directions: the
- * LLM guard sits on the line ABOVE its construction, so the gate fired on correct code and the
- * security job could never pass; and a trailing `// NODE_ENV` comment would have defeated it.
- * A behavioural check cannot be fooled by where a line break falls.
- */
-export function selectImageProvider(config: AppConfig): ImageProvider | null {
-  const realImageProvider =
-    config.IMAGE_BASE_URL && config.IMAGE_MODEL
-      ? new OpenAICompatibleImageProvider({
-          baseUrl: config.IMAGE_BASE_URL,
-          model: config.IMAGE_MODEL,
-          apiKey: config.IMAGE_API_KEY,
-          supportsNegativePrompt: config.IMAGE_SUPPORTS_NEGATIVE_PROMPT,
-          supportsSeed: config.IMAGE_SUPPORTS_SEED,
-        })
-      : null;
-  return realImageProvider ?? (config.NODE_ENV !== "production" ? new MockImageProvider() : null);
-}
-
-/** The video provider for this deployment, or null when there is none — ADR-101, as above. */
-export function selectVideoProvider(config: AppConfig): VideoProvider | null {
-  const realVideoProvider =
-    config.VIDEO_PROVIDER === "replicate" && config.VIDEO_API_TOKEN && config.VIDEO_MODEL_VERSION
-      ? new ReplicateVideoProvider({
-          apiToken: config.VIDEO_API_TOKEN,
-          modelVersion: config.VIDEO_MODEL_VERSION,
-        })
-      : null;
-  return realVideoProvider ?? (config.NODE_ENV !== "production" ? new MockVideoProvider() : null);
-}
-
-export function registerLlmProviders(config: AppConfig, registry: ModelRegistry, logger: Logger): void {
-  // 1. Self-hosted runtime — Ollama, vLLM, llama.cpp's server, LM Studio, or any
-  //    OpenAI-compatible gateway. No third-party account involved.
-  if (config.LLM_BASE_URL && config.LLM_MODEL) {
-    registry.register(
-      new LocalOpenAICompatibleProvider({
-        baseUrl: config.LLM_BASE_URL,
-        model: config.LLM_MODEL,
-        apiKey: config.LLM_API_KEY,
-        contextWindow: config.LLM_CONTEXT_WINDOW,
-        supportsTools: config.LLM_SUPPORTS_TOOLS,
-      }),
-      { asDefault: true }
-    );
-  }
-
-  // 2-4. Hosted adapters, each registering only when its key is present (ADR-010). Each has
-  // been fixture-tested and confirmed to reach its live endpoint correctly, not
-  // full-success-tested (ADR-023/024).
-  if (config.ANTHROPIC_API_KEY) {
-    registry.register(new AnthropicProvider({ apiKey: config.ANTHROPIC_API_KEY }));
-  }
-  if (config.OPENAI_API_KEY) {
-    registry.register(
-      new OpenAIProvider({
-        apiKey: config.OPENAI_API_KEY,
-        organizationId: config.OPENAI_ORG_ID,
-        projectId: config.OPENAI_PROJECT_ID,
-      })
-    );
-  }
-  // `||`, not `??` — docs/26_DECISIONS.md ADR-045. The schema already maps an empty value to
-  // undefined, but this is the line where a blank `GOOGLE_API_KEY=` silently shadowed a real
-  // key set under the documented alias, so it states the intent locally too.
-  const googleApiKey = config.GOOGLE_API_KEY || config.GEMINI_API_KEY;
-  if (googleApiKey) {
-    registry.register(new GoogleProvider({ apiKey: googleApiKey }));
-  }
-
-  // 5. The mock. ADR-013 says it must never serve production traffic; ADR-045 turned that
-  // from a constructor throw (which killed every production boot, even with a valid key) into
-  // "never constructed in production". Outside production it stays the zero-configuration
-  // default so the platform runs with no credentials at all — but only as the default when
-  // nothing real is registered, so a configured runtime is never shadowed by it.
-  if (config.NODE_ENV !== "production") {
-    registry.register(new MockLLMProvider(), { asDefault: registry.list().length === 0 });
-  } else {
-    logger.info("mock LLM provider NOT registered — NODE_ENV=production (ADR-013)");
-  }
-}
-
 async function main() {
   const config = loadConfig();
   const runs = roleRuns(config.ROLE);
@@ -862,8 +766,12 @@ async function main() {
   // pool has no ingress, so there is nothing to listen for. The process stays alive on
   // pg-boss's own polling loop until a shutdown signal arrives.
   if (!runs.http) {
+    // No "mcp" step (ADR-108). The worker role never constructs an McpManager — `const
+    // mcpManager` is declared further down, after this branch returns — so the closure read a
+    // binding in its temporal dead zone and threw on every shutdown. The old single-try shutdown
+    // hid that by silently skipping the jobs and database steps; ADR-098's per-step isolation
+    // made it visible as a failed step and exit code 1 on every clean worker stop.
     installGracefulShutdown(logger, [
-      { name: "mcp", close: () => mcpManager.stopAll() },
       { name: "jobs", close: () => jobQueue.stop() },
       { name: "database", close: closeDb },
     ]);

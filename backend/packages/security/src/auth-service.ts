@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import {
   apiKeys,
@@ -224,28 +225,79 @@ export class AuthService {
   }
 
   /**
-   * Confirms a caller really knows their own password — NFR-008, ADR-102.
+   * Confirms a caller really knows their own password — NFR-008, ADR-102, hardened by ADR-108.
    *
-   * Separate from `login` on purpose: this must NOT mint a session, and it must not touch the
-   * lockout counter either way. A re-authentication prompt that can lock you out of the account
-   * you are about to delete is a worse experience than the risk it mitigates, and the rate limit
-   * on the route already bounds guessing.
+   * It does not mint a session, but it IS subject to the same per-account lockout as `login`.
+   * The first version deliberately skipped the lockout counter and leaned on the route's rate
+   * limit instead — and that limit was keyed on `request.ip`, which comes from a client-supplied
+   * `X-Forwarded-For` under `trustProxy: true`. Rotating that header gave unlimited guesses, and
+   * the check ignored `lockedUntil`, so even an account `login` had locked would accept a correct
+   * guess here. A correct guess deletes the account, which is precisely the stolen-cookie case this
+   * check exists to stop. Being locked out of the account you are trying to delete is a far smaller
+   * harm than that.
    */
-  async verifyUserPassword(userId: string, password: string): Promise<boolean> {
+  async verifyUserPassword(userId: string, password: string, meta: RequestMeta = {}): Promise<boolean> {
     const rows = await this.db
-      .select({ passwordHash: users.passwordHash, status: users.status })
+      .select({
+        passwordHash: users.passwordHash,
+        status: users.status,
+        failedLoginCount: users.failedLoginCount,
+        lockedUntil: users.lockedUntil,
+      })
       .from(users)
       .where(eq(users.id, userId))
       .limit(1);
     const row = rows[0];
     if (!row || row.status !== "active") return false;
-    return verifyPassword(password, row.passwordHash);
+
+    const now = this.now();
+    if (row.lockedUntil && row.lockedUntil > now) {
+      await this.recordAudit({
+        userId,
+        action: "auth.reauth",
+        outcome: "denied",
+        method: "session",
+        detail: { reason: "locked" },
+        ...meta,
+      });
+      throw new UnauthorizedError("This account is temporarily locked after too many failed attempts.");
+    }
+
+    const ok = await verifyPassword(password, row.passwordHash);
+    if (!ok) {
+      const failed = row.failedLoginCount + 1;
+      await this.db
+        .update(users)
+        .set({
+          failedLoginCount: failed,
+          lockedUntil: failed >= this.maxFailedLogins ? new Date(now.getTime() + this.lockoutMs) : row.lockedUntil,
+          updatedAt: now,
+        })
+        .where(eq(users.id, userId));
+      await this.recordAudit({
+        userId,
+        action: "auth.reauth",
+        outcome: "denied",
+        method: "session",
+        detail: { reason: "bad_password" },
+        ...meta,
+      });
+      return false;
+    }
+
+    if (row.failedLoginCount > 0) {
+      await this.db
+        .update(users)
+        .set({ failedLoginCount: 0, lockedUntil: null, updatedAt: now })
+        .where(eq(users.id, userId));
+    }
+    return true;
   }
 
   /**
    * Deletes the caller's account and the data they solely own — NFR-008, ADR-102.
    *
-   * The audit record is written AFTER the deletion succeeds, with a null user id and the email
+   * The audit record is written AFTER the deletion succeeds, with a null user id and a SHA-256 of the email
    * in `detail`. Writing it first — which an earlier version did, for the real reason that
    * `audit_log.user_id` is `onDelete: "set null"` and cannot name a deleted user — meant a
    * rollback left a permanent row asserting a deletion that never happened, which is the one
@@ -262,8 +314,8 @@ export class AuthService {
     // left a permanent audit row asserting a deletion that had not happened — the one question
     // an operator queries this row to answer. The original reason for writing first was real:
     // `audit_log.user_id` is `onDelete: "set null"`, so a row written afterwards cannot name a
-    // user that no longer exists. The answer is to write it with a null user id and the email in
-    // `detail`, which is what survives the deletion anyway and what an operator actually needs.
+    // user that no longer exists. The answer is to write it afterwards with a null user id and a hash of the email in
+    // `detail` (ADR-109), which is what an operator actually needs.
     const result = await deleteUserAccount(this.db, userId);
     await this.recordAudit({
       userId: null,
@@ -271,12 +323,18 @@ export class AuthService {
       outcome: "success",
       method: "session",
       detail: {
-        email: rows[0].email,
+        // A hash of the address, not the address (ADR-109). It still answers "was the account for
+        // alice@example.com deleted, and when" — hash the address and look — without the record of
+        // an erasure being the one row that retains the person's email.
+        email_sha256: createHash("sha256").update(rows[0].email).digest("hex"),
         deleted_user_id: userId,
         organizations_deleted: result.deletedOrganizationIds.length,
         organizations_retained: result.retainedOrganizationIds.length,
+        projects_deleted: result.deletedProjectIds.length,
+        projects_retained: result.retainedProjectIds.length,
       },
-      ...meta,
+      // No IP address on this row either, for the same reason; the request id still correlates it.
+      requestId: meta.requestId,
     });
     return result;
   }
@@ -496,14 +554,19 @@ export class AuthService {
 
     const orgRole = (row.orgRole as OrgRole | null) ?? null;
     const projectRole = (row.projectRole as ProjectRole | null) ?? null;
-    if (!orgRole && !projectRole && !user.isSystemAdmin) {
+    // Membership is the ONLY route into a project (ADR-108). `isSystemAdmin` used to short-circuit
+    // this into owner+admin on every project in every organization — read every tenant's data,
+    // spend their quota, mint API keys bound to their projects — while SECURITY.md, ADR-096 and
+    // the permission table described the flag as gating the `/admin` surface only. The branch was
+    // harmless while no account could hold the flag; ADR-096 made the flag reachable, which made
+    // the branch a silent cross-tenant super-user. Operating the deployment does not require
+    // reading its tenants' content, so the grant is removed rather than documented.
+    if (!orgRole && !projectRole) {
       // Deliberately a 404, not a 403 — see the method docstring.
       throw new NotFoundError(`Project "${projectId}" not found.`);
     }
 
-    const permissions = user.isSystemAdmin
-      ? resolvePermissions("owner", "admin")
-      : resolvePermissions(orgRole, projectRole);
+    const permissions = resolvePermissions(orgRole, projectRole);
 
     return {
       user,
@@ -570,7 +633,8 @@ export class AuthService {
       .from(organizationMembers)
       .where(and(eq(organizationMembers.organizationId, organizationId), eq(organizationMembers.userId, user.id)))
       .limit(1);
-    if (!membership[0] && !user.isSystemAdmin) {
+    // Organization membership only — no system-administrator bypass (ADR-108).
+    if (!membership[0]) {
       throw new NotFoundError(`Organization "${organizationId}" not found.`);
     }
 

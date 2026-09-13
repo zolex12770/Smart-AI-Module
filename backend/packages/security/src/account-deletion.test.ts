@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   auditLog,
@@ -173,7 +174,10 @@ describe("deleting an account", () => {
     const deletion = rows.find((r) => r.action === "auth.account_deleted");
     expect(deletion).toBeDefined();
     expect(deletion!.userId).toBeNull();
-    expect((deletion!.detail as { email: string }).email).toBe("alice@example.com");
+    const expectedHash = createHash("sha256").update("alice@example.com").digest("hex");
+    expect((deletion!.detail as { email_sha256: string }).email_sha256).toBe(expectedHash);
+    // The erasure record must not itself be the row that keeps the address (ADR-109).
+    expect(JSON.stringify(deletion!.detail)).not.toContain("alice@example.com");
   });
 
   it("refuses a password that is not the caller's", async () => {
@@ -204,10 +208,90 @@ describe("deleting an account", () => {
     await seedContent(projectId, user.id, "alice");
     await auth.deleteOwnAccount(user.id);
     const [row] = (await db.select().from(auditLog)).filter((r) => r.action === "auth.account_deleted");
-    const detail = row.detail as { organizations_deleted: number; organizations_retained: number; email: string };
+    const detail = row.detail as { organizations_deleted: number; organizations_retained: number; email_sha256: string };
     expect(detail.organizations_deleted).toBe(1);
     expect(detail.organizations_retained).toBe(0);
-    expect(detail.email).toBe("alice@example.com");
+    expect(detail.email_sha256).toBe(createHash("sha256").update("alice@example.com").digest("hex"));
   });
 
+
+  it("deletes a PRIVATE project even when another project in the same organization has a collaborator (ADR-109)", async () => {
+    // ADR-107 judged the organization as a unit: one collaborator on ANY project kept the whole
+    // organization, including a private project only the departing user could reach.
+    const { user: alice, projectId: sharedProject } = await signup("alice@example.com");
+    const aliceOrg = await auth.primaryOrganizationId(alice.id);
+    const { id: privateProject } = await auth.createProject(alice, aliceOrg!, "private");
+    await seedContent(privateProject, alice.id, "diary");
+    await signup("bob@example.com");
+    const aliceCtx = await auth.authorizeProject(alice, sharedProject, "session", "cred-alice");
+    await auth.addProjectMember(aliceCtx, "bob@example.com", "viewer");
+
+    const result = await auth.deleteOwnAccount(alice.id);
+
+    expect(result.deletedProjectIds).toEqual([privateProject]);
+    expect(result.retainedProjectIds).toEqual([sharedProject]);
+    expect(result.assets.map((a) => a.id)).toEqual(["asset-diary"]);
+    expect(await db.select().from(projects).where(eq(projects.id, privateProject))).toEqual([]);
+    expect(await db.select().from(projects).where(eq(projects.id, sharedProject))).toHaveLength(1);
+    expect((await db.select().from(messages)).map((m) => m.content)).not.toContain("secret content diary");
+  });
+
+  it("removes the organization when its LAST collaborator later deletes their account too (ADR-109)", async () => {
+    // A deletes first: the project Bob works on is kept. Then Bob deletes. ADR-107 only ever looked
+    // at organizations from the deleter's organization_members rows, so Bob's deletion never
+    // considered A's organization and its content outlived everyone who could reach it.
+    const { user: alice, projectId } = await signup("alice@example.com");
+    await seedContent(projectId, alice.id, "shared");
+    const { user: bob } = await signup("bob@example.com");
+    const aliceCtx = await auth.authorizeProject(alice, projectId, "session", "cred-alice");
+    await auth.addProjectMember(aliceCtx, "bob@example.com", "editor");
+
+    await auth.deleteOwnAccount(alice.id);
+    expect(await db.select().from(projects).where(eq(projects.id, projectId))).toHaveLength(1);
+
+    await auth.deleteOwnAccount(bob.id);
+    expect(await db.select().from(organizations)).toEqual([]);
+    expect(await db.select().from(projects)).toEqual([]);
+    expect(await db.select().from(messages)).toEqual([]);
+  });
+
+  it("scrubs the IP and email from every audit row the person left behind (ADR-109)", async () => {
+    const { user } = await signup("alice@example.com");
+    await expect(auth.login("alice@example.com", "wrong-password-entirely", { ipAddress: "203.0.113.77" })).rejects.toThrow();
+    await auth.login("alice@example.com", PASSWORD, { ipAddress: "198.51.100.42" });
+
+    await auth.deleteOwnAccount(user.id, { ipAddress: "203.0.113.200", requestId: "req-del" });
+
+    const rows = await db.select().from(auditLog);
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      expect(row.ipAddress, row.action).toBeNull();
+      expect(JSON.stringify(row.detail ?? {}), row.action).not.toContain("alice@example.com");
+    }
+  });
+
+  it("writes no deletion record when the deletion itself fails inside its transaction (ADR-109)", async () => {
+    // The not-found test cannot tell audit-first from audit-after: both throw before either write.
+    // This forces a failure AFTER the lookup, inside deleteUserAccount's transaction, which is the
+    // only case in which writing the success row first would leave a false record.
+    const { user } = await signup("alice@example.com");
+    await db.$client.exec(`
+      CREATE FUNCTION refuse_user_delete() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'simulated failure during account deletion'; END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER refuse_user_delete BEFORE DELETE ON users FOR EACH ROW EXECUTE FUNCTION refuse_user_delete();
+    `);
+
+    // Drizzle wraps the database error ("Failed query: ...") and keeps the original as `cause`,
+    // so the assertion follows the chain rather than matching the wrapper's text.
+    const failure = await auth.deleteOwnAccount(user.id).then(
+      () => null,
+      (err: Error & { cause?: unknown }) => err
+    );
+    expect(failure).not.toBeNull();
+    expect(String((failure!.cause as Error | undefined)?.message ?? failure!.message)).toMatch(/simulated failure/);
+    expect(await db.select().from(users).where(eq(users.id, user.id))).toHaveLength(1);
+    const records = (await db.select().from(auditLog)).filter((r) => r.action === "auth.account_deleted");
+    expect(records).toEqual([]);
+  });
 });
