@@ -50,10 +50,13 @@ fi
 # alternation group does not anchor reliably in ERE, which is how the first version of this
 # check silently matched nothing and reported a pass -- a boundary check that cannot fail is
 # worse than no check at all.
-RUNTIME=$(sources frontend | xargs grep -n "@ai-platform/shared" 2>/dev/null \
-  | grep -E "import|require" \
-  | grep -v "import type" \
-  | grep -v '"@ai-platform/shared":' || true)
+# Delegated to a parser (ADR-106). A line-based grep cannot judge a statement that spans lines:
+# a multi-line import puts the package name on the `} from "@ai-platform/shared";` line, which
+# contains neither `import` nor `require`, so the previous pipeline discarded the one line that
+# named it and a real value import split across lines PASSED. Proven by planting exactly that.
+# `export { x } from` was invisible for the same reason. That was the third version of this
+# check that could not fail, which is why it is no longer a pipeline.
+RUNTIME=$(sources frontend | node scripts/check-shared-imports.mjs 2>/dev/null || true)
 if [ -z "$RUNTIME" ]; then
   ok "every frontend import of shared/ is type-only"
 else

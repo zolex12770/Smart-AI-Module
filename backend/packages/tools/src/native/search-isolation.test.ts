@@ -18,6 +18,30 @@ import { createSearchTools } from "./search.js";
  * because that is the actual attack: a read tool with no `WHERE project_id` is a cross-tenant
  * disclosure even though it never writes anything.
  */
+/**
+ * Can this platform create a FILE symlink? Probed once, at collection time, so the case below
+ * can be reported as SKIPPED rather than passing with no assertions.
+ *
+ * It previously used a try/catch and an early `return`, which vitest counts as a pass — an
+ * assertion-free green on the platform this repository is developed on, which is the same
+ * "cannot fail" defect this suite exists to close. Reported as a skip instead, it is visible
+ * locally AND caught in CI, where the zero-skip gate fails the build on any skip at all and
+ * Linux creates file symlinks without ceremony. A junction covers the directory case; there is
+ * no junction equivalent for a single file, which is why this one case needs the real thing.
+ */
+const FILE_SYMLINKS_SUPPORTED = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "symlink-probe-"));
+  try {
+    writeFileSync(join(dir, "target"), "x");
+    symlinkSync(join(dir, "target"), join(dir, "link"), "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 const ctx = (projectId: string, workspaceRoot?: string): ToolInvocationContext =>
   ({ projectId, userId: "user-1", workspaceRoot }) as ToolInvocationContext;
 
@@ -103,24 +127,11 @@ describe("search tools are scoped to one project workspace", () => {
     expect(JSON.stringify(result.output)).not.toContain("HOST-FILE-OUTSIDE-SANDBOX");
   });
 
-  it("does not follow a FILE symlink out of the workspace", async () => {
-    // A file symlink needs developer mode or elevation on Windows, and there is no junction
-    // equivalent for a file. When it cannot be created the test states so loudly rather than
-    // passing quietly — a skipped test is not a passing test (product brief §29).
-    let linked = true;
-    try {
-      symlinkSync(join(outside, "host-secret.txt"), join(root, "tenant-b", "leak.txt"), "file");
-    } catch {
-      linked = false;
-    }
-    if (!linked) {
-      console.warn(
-        "SKIPPING the file-symlink containment case: this platform refused symlinkSync " +
-          "(Windows needs developer mode or elevation). The directory case above still ran."
-      );
-      return;
-    }
+  it.skipIf(!FILE_SYMLINKS_SUPPORTED)("does not follow a FILE symlink out of the workspace", async () => {
+    // The `stats.isFile()` branch of the walk, which the directory case does not reach.
+    symlinkSync(join(outside, "host-secret.txt"), join(root, "tenant-b", "leak.txt"), "file");
     const result = await tools().search.handler({ pattern: "HOST-FILE" }, ctx("tenant-b"));
+    expect(result.ok).toBe(true);
     expect(JSON.stringify(result.output)).not.toContain("HOST-FILE-OUTSIDE-SANDBOX");
   });
 
