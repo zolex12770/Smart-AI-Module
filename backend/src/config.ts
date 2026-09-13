@@ -229,6 +229,13 @@ const envSchema = z.object({
    * operator decision; removing the limit is not, so there is no "off".
    */
   AUTH_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(1000).default(5),
+  /**
+   * How many reverse proxies in front of this process may be trusted to have appended to
+   * X-Forwarded-For — docs/26_DECISIONS.md ADR-112. 0, the default, uses the connection's own
+   * address, which is right when nothing sits in front; Cloud Run's front end is 1. A number
+   * higher than the real hop count lets a caller choose its own address again.
+   */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().max(365).default(30),
   // `docker` gives real container isolation for agent-run commands; `process` is the
   // development fallback and is refused in production unless explicitly acknowledged.

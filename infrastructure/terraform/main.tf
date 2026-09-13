@@ -295,6 +295,14 @@ resource "google_cloud_run_v2_service" "api" {
         value = "api"
       }
       env {
+        # ADR-112 — how many proxies' X-Forwarded-For entries to trust. Cloud Run's front end
+        # appends the caller's address, so 1 takes that entry and ignores anything the caller
+        # wrote; an external HTTPS load balancer in front makes it 2. Not verified against a live
+        # Cloud Run service — this environment has no GCP project.
+        name  = "TRUST_PROXY_HOPS"
+        value = "1"
+      }
+      env {
         # ADR-040 — generated assets go to Cloud Storage, not the instance's ephemeral disk.
         # Authenticated via the attached service account (objectAdmin on this bucket, above).
         name  = "ASSETS_BUCKET"

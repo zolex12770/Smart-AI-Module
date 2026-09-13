@@ -1768,3 +1768,94 @@ The lesson is ADR-104's amendment again, generalised: new code written to close 
 **Date:** 2026-09-13
 **Impact:** `backend/packages/database/src/repositories/account-deletion.ts`, `backend/packages/security/src/auth-service.ts`, `backend/packages/memory/src/conversation-window.ts`, `backend/packages/tools/src/native/web.ts` + 9 tests.
 
+## ADR-108: One approval is one call; no implicit tenant access; `web.fetch` bounded in time and CPU
+
+**Decision:** Fixes to seventeen defects a third independent audit confirmed in this phase's own diff, excluding account deletion (ADR-109). Each has a test written to fail on the old code, or was verified live.
+
+**An approval was reusable (P1).** The engine remembered approved tool calls by id. Adapters synthesise those ids — `gemini-call-1`, `call_0` — and they repeat every turn, so one human approval let a *different* destructive call with a recycled id skip the gate later. The id set is gone: every call goes through `approvalFor`, and a parked task resumes from its transcript.
+
+**A system administrator held owner+admin on every tenant's projects (P1).** `authorizeProject` short-circuited on `isSystemAdmin`. That was invisible until ADR-096 made the flag reachable; from then on the bootstrapped administrator could read, spend in and mint API keys for any tenant's project. Membership is now the only route into a project. The administrator role gates `/api/v1/admin/*` and tool/MCP controls, and nothing else.
+
+**Re-authentication could be brute-forced (P2).** The password re-check before account deletion ignored the lockout and never counted a failure, and its route's rate limit keyed on `request.ip` — at the time the client-written `X-Forwarded-For` (ADR-112). Twelve guesses with a rotated header got twelve 401s and no 429; a locked account still accepted the right password. It now counts toward the account lockout and audits failures, and the route limit is keyed on the authenticated user, evaluated after authentication.
+
+**An API key could delete the account (P2).** Deletion is session-only; a bearer request gets 403.
+
+**`web.fetch`.** Five defects, all in code ADR-104 added:
+
+- *Quadratic HTML stripping (P1).* The regex pipeline backtracked: 64 KB of `<` took 1.4 s, about 90 s at the byte cap, on the API process's event loop — every tenant frozen by one page. Replaced by a single forward scanner; 512 KB of hostile input is asserted under 2 s.
+- *A DNS oracle (P2).* A refusal named the private address an internal name resolved to, and an unresolvable name returned the raw `ENOTFOUND` — so a prompt-injected model could map internal DNS. Private and unresolvable names now get one identical message.
+- *No deadline (P2).* `timeout` was a socket idle timer, which a server sending a byte every few seconds resets forever, and the registry's timeout only raced a promise. One deadline now spans DNS, every redirect hop and the body, and the invocation's abort signal reaches the socket.
+- *A redirect body kept downloading (P1).* It was drained with `resume()`, not closed — 7 GB in six seconds after the tool had returned, measured. It is destroyed.
+- *Truncation split a character (P2).* The byte cap could end the content in U+FFFD; the incomplete sequence is dropped.
+
+**Gates and shutdown.** Every worker-role shutdown threw on an MCP manager that role never constructs, and exited 1 (verified live: SIGINT now exits 0). The CI `security` job ran vitest against packages it never built, so it could never pass. `no-fake-in-production.test.ts` imported `index.ts`, whose import boots the server; the provider factories moved to a side-effect-free `providers.ts`.
+
+**Date:** 2026-09-13
+**Impact:** `agent-core/src/engine.ts`, `security/src/auth-service.ts`, `tools/src/native/web.ts`, `backend/src/{index,providers}.ts`, `routes/v1/auth.ts`, `.github/workflows/ci.yml` + 21 tests.
+
+## ADR-109: Account deletion decides per project, and leaves nothing behind
+
+**Decision:** Deletion considers every organization the user reaches by either membership route, keeps exactly the projects someone else can still reach, and removes everything else the deleted projects owned — rows, files, agent workspaces, queued jobs and the person's data in the audit trail.
+
+This corrects ADR-102 and ADR-107 a second time. What the third audit found, all reproduced through the real app:
+
+- **A private project survived, unreachable (P1).** "Shared" was decided per organization: one collaborator on ANY project kept the whole organization, so a project only the deleter could reach — "alice's private diary" — outlived her, ownerless. Each project is now judged on its own; an organization with another organization member is kept whole, because an organization role reaches every project in it.
+- **The last collaborator's deletion kept everything (P2).** A kept organization was only ever considered through `organization_members`, so when the collaborator who had kept it deleted their own account, nothing looked at it again. Organizations reachable through `project_members` are considered too.
+- **Agent workspaces stayed on disk (P1).** Everything the agent wrote lived under `SANDBOX_ROOT/<projectId>`, the route reported 200, and with the project row gone no path could ever reach the directory again. Each deleted project's workspace is removed after the commit, through a helper that validates the id and refuses anything but a direct child of the root; a failure is reported in the response.
+- **The audit trail kept the person (P2).** `audit_log.user_id` is `set null`, which clears the id and nothing else: every login IP, and the email on every denied login, survived — while a comment claimed "no personal data". Those rows are scrubbed inside the deletion transaction, including denied logins that recorded the address with no user id. The erasure record itself stores a SHA-256 of the address, not the address or an IP.
+- **In-flight work left orphans (P2).** A job running at deletion wrote its bytes, failed the row insert at the foreign key, and left a file nothing referenced. Both asset stores now delete the bytes when the row cannot be written. And queued jobs for the deleted projects are cancelled, so no paid provider is called for an account that no longer exists; work already started cannot be stopped, which is why the asset stores' cleanup is still needed.
+- **A test could not tell audit-first from audit-after (P2).** The "no deletion record when the deletion fails" test now fails the transaction from a trigger, after the lookup.
+
+**Date:** 2026-09-13
+**Impact:** `database/src/repositories/account-deletion.ts`, `security/src/auth-service.ts`, `media/src/{asset-store,gcs-asset-store}.ts`, `tools/src/native/workspace.ts`, `jobs/src/queue.ts`, `routes/v1/auth.ts` + 10 tests.
+
+## ADR-110: A summary is trusted only for the history it was built from
+
+**Decision:** The turns a rolling summary covers are fingerprinted (SHA-256, migration 0002). A request whose history does not match the fingerprint rebuilds the summary instead of trusting it. The live window never begins on a tool result, turns a failed pass did not cover are sent verbatim, and each summarization call has its own usage key.
+
+**A count is a position, not an identity (P1/P2).** ADR-107 made `summarized_message_count` a count of turns rather than prompt positions, which fixed one trigger. But it is still a position in whatever array the client sends. The web client keeps a failed turn's error text in its list while the server stores nothing for it, so after a reload the history is one message shorter and the stored count points past a turn that then appears in neither the summary nor the prompt. An API client that edits or branches its history got a summary of turns no longer in the conversation. The fingerprint turns both into a detectable mismatch; the first-party client also stops sending error placeholders.
+
+**Tool calls were cut in half (P1).** The cut at `turns.length - liveWindowMessages` could land between an assistant turn carrying `toolCalls` and its results, summarizing the call away and sending results with no call — a shape OpenAI and Anthropic both reject with a 400, and one a client retrying the same history hits forever. The cut moves back until the live window starts on something other than a tool result. The summarizer's transcript now records calls and results; it used to render such a turn as `assistant: ` with every name, argument and id gone.
+
+**A bad summary was stored as a good one (P2).** An empty reply advanced the count past turns it never covered. A summary cut off at the output limit (`finishReason: "length"`) became the base of every later pass. Both are refused.
+
+**A failed pass dropped turns (P2).** When summarization failed, the prompt was the stale summary plus the live window, and the turns between them were simply absent. They are now sent verbatim: a larger prompt is recoverable, a silently shorter history is not.
+
+**A charge could be dropped (P2).** The usage idempotency key was the conversation id plus the stored count, which two real calls share whenever they start from the same count — two tabs, or a pass whose summary failed to persist — and a conflict on that unique index discards the second call's tokens. One key per call; `summarize` runs once per request and is never retried, so this cannot double-charge.
+
+Each fix is killed by a mutant of it: reverting any one makes a test fail. One guard did not survive that test — refusing a live window that begins on an orphaned tool result after a failed pass — and was removed as unreachable: a stored count is always a previous tool-safe split point, and the fingerprint proves the history is the same one.
+
+**Date:** 2026-09-13
+**Impact:** `memory/src/conversation-window.ts`, `database/src/schema/index.ts`, `migrations/0002_*`, `conversation-repository.ts`, `routes/v1/chat.ts`, `frontend/app/lib/chat-history.ts`, `ChatView.tsx` + 9 tests.
+
+## ADR-111: A boundary check that reads syntax, and suites that run where CI runs
+
+**Decision:** `scripts/check-boundary.mjs` replaces every grep in `verify-boundary.sh` with the TypeScript compiler's syntax tree and must pass a self-test of planted evasions before it judges the real tree. The long-form video suite and the Docker sandbox get tests that can actually run.
+
+**Every grep had been defeated.** ADR-106 made check 2 a statement parser; the third audit then showed it and its neighbours still passed real violations: a comment containing "import type" ahead of a value import, a default binding before `{ type X }`, a file without semicolons, `import()`, `require()`, single quotes, `node:fs/promises`, bare `fs`, `process.env["X"]` and destructuring, a bare `../../shared`, and any `.js`/`.jsx`/`.mjs`/`.cjs` file at all. Check 7 printed a pass after testing only that a `package.json` existed. A module specifier is a property of the syntax tree, so the checker now reads the tree: comments are not in it, statements are delimited by the parser, and every import form is its own node kind.
+
+**It proves it can fail.** `--self-test` builds a throwaway repository with 39 planted violations — every evasion above — and 10 clean files, and requires each violation to be reported under the right rule and nothing in the clean files. Each of 15 mutants that disables one rule or one import form is killed by that self-test. `verify-boundary.sh` runs `--all`, so a checker that cannot detect its own fixtures never reports the real tree green. An internal error exits 2, never 0.
+
+Rule 7 now checks every package manifest, not only the three applications. Widened, it found `drizzle-orm` imported by `backend/src` and `uuid` by quota's tests, neither declared — both resolved only because npm hoisted another package's dependency. Both are declared.
+
+**The long-form suite could never run on Linux (P1).** It skipped unless `SapiSpeechProvider.isAvailable()`, which is `process.platform === "win32"`, so on CI's ubuntu runner it always skipped and the zero-skip gate failed the build on every run — while the documents said the gate passed. What the suite verifies is composition: narration and subtitles muxed into a playable MP4 with timings from the measured audio. That needs real audio of a known length, not a particular voice, so where no synthesiser exists it uses a deterministic PCM tone, declared `isMock` and constructed only in that file. Verified here on both paths, SAPI and forced tone: 3/3 each.
+
+**No test built a DockerSandbox (P1).** The status documents said "unit only" and "flag construction verified", and the documented verification command passed on a machine with no Docker. `dockerRunArgs` is extracted and every isolation flag, the single workspace mount, environment scrubbing and the containment refusal are asserted. A real-container suite runs only through `npm run test:docker` and fails, rather than skips, when docker is unusable — confirmed here, where docker is not installed. Whether those flags contain a process in a real container therefore remains unverified in this environment.
+
+**Date:** 2026-09-13
+**Impact:** `scripts/check-boundary.mjs` (new), `scripts/verify-boundary.sh`, `scripts/check-shared-imports.mjs` (removed), `backend/package.json`, `quota/package.json`, `media/src/video-longform.integration.test.ts`, `security/src/sandbox.ts`, `security/vitest*.config.ts` + 13 tests.
+
+## ADR-112: The client's address is the deployment's to state; the API document is checked against the server
+
+**Decision:** `request.ip` trusts exactly `TRUST_PROXY_HOPS` proxies (default 0). `docs/API.md` is generated from each route's own registration, and a test sends a real request for every row it documents. CI fails if the file drifts from the routes.
+
+**`trustProxy: true` let a caller choose its address.** Fastify then takes the LEFTMOST `X-Forwarded-For` entry, which is the one the client writes. Every per-IP rate limit — signup, login, generation — could be sidestepped by rotating a header, and every audit row recorded whatever address a caller claimed. ADR-108 keyed one route on the user; this fixes the source. A hop count trusts only what the deployment's own proxies appended. 0 uses the socket's address, which is right when nothing sits in front; Terraform sets 1 for Cloud Run's front end, which appends the caller's address. Asserted through the audit row a failed login writes, at 0, 1 and 2 hops, and killed by restoring `trustProxy: true`. The Cloud Run value is not verified against a live service; this environment has no GCP project.
+
+**The generated API document was wrong in six rows.** The generator labelled each route from a fixed 1400-character window after its path, so routes inherited their neighbour's guard and rate limit: dead-letter replay was published as administrator-only (any editor can replay, and replays spend quota), login and logout as needing a credential, `me` and both `projects` routes as `project:admin`, and a 300/minute route as its neighbour's 30. It also hard-coded this machine's checkout path, and its conventions said another tenant's resource is "404, never 403" when an API key naming a foreign project gets 403. The generator now reads each route's own options object and handler, takes public paths from `server.ts` instead of inferring them from a missing guard, and stops rather than guesses when a route has neither.
+
+Regenerating cannot catch a generator that is wrong, so `backend/src/routes/api-contract.test.ts` checks the document against the server: an anonymous request to every row (public rows must admit it, every other row must answer 401), a viewer's request to every protected row (403 naming exactly the documented permission when the viewer lacks it; the administrator guard's own 404 for administrator rows; neither 401 nor 403 otherwise), and the `x-ratelimit-limit` the server applies. Run against the previous document, it fails and names each wrong row.
+
+**Each application now starts from a fresh clone.** `cd backend && npm run dev` failed there: every workspace package exports only `dist/`, which is gitignored, and only the root `dev` script built them. The backend's `predev` and the frontend's `prebuild` build what each imports.
+
+**Date:** 2026-09-13
+**Impact:** `backend/src/{config,server}.ts`, `infrastructure/terraform/main.tf`, `.env.example`, `scripts/generate-api-docs.py`, `docs/API.md`, `.github/workflows/ci.yml`, `backend/package.json`, `frontend/package.json` + 5 tests.

@@ -194,4 +194,27 @@ describe("DELETE /api/v1/auth/account", () => {
     expect(body.deleted.workspaces).toBe(1);
     expect(existsSync(workspace)).toBe(false);
   });
+  it("cancels the deleted project's queued jobs, so no provider is called for an account that no longer exists (ADR-109)", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/images",
+      headers: auth.headers,
+      payload: { prompt: "a render still waiting in the queue" },
+    });
+    expect(created.statusCode).toBe(202);
+    const [queued] = await ctx.jobQueue.listForProject(auth.projectId, { queue: "image.generate" });
+    expect(queued.state).toBe("created");
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/api/v1/auth/account",
+      headers: auth.headers,
+      payload: { password: PASSWORD, confirm: "DELETE MY ACCOUNT" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deleted.queuedJobs).toBe(1);
+
+    const [after] = await ctx.jobQueue.listForProject(auth.projectId, { queue: "image.generate" });
+    expect(after.state).toBe("cancelled");
+  });
 });

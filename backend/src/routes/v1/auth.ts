@@ -140,9 +140,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
    * because a privacy requirement satisfied only by asking someone else is not satisfied.
    *
    * Three things guard it, and each guards something different:
-   *  - the session (who), the current password (that it is really them, not a stolen cookie),
-   *    and a typed confirmation (that they meant this request and not a neighbouring one).
-   *  - a tight rate limit, because the password check here is a password check like any other.
+   *  - an interactive session (who — an API key is refused), the current password (that it is
+   *    really them, counted against the account lockout), and a typed confirmation (that they
+   *    meant this request and not a neighbouring one).
+   *  - a rate limit per user, because the password check here is a password check like any other.
    *  - a wrong password is 401 and a wrong confirmation is 400, so the two are distinguishable
    *    to the person typing and neither reveals anything to anyone else.
    *
@@ -158,9 +159,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
           max: 5,
           timeWindow: "15 minutes",
           // Keyed on the AUTHENTICATED USER and evaluated after authentication (ADR-108). The
-          // default key is `request.ip`, which under `trustProxy: true` is the client-supplied
-          // leftmost X-Forwarded-For entry: rotating that header gave unlimited password guesses.
-          // `preHandler` runs after the auth plugin's own preHandler, so `request.auth` is set.
+          // default key is `request.ip`, which was once the client-supplied leftmost
+          // X-Forwarded-For entry (ADR-112): rotating that header gave unlimited password guesses.
+          // A per-user key holds however the address is derived. `preHandler` runs after the auth
+          // plugin's own preHandler, so `request.auth` is set.
           hook: "preHandler",
           keyGenerator: (req: FastifyRequest) => req.auth?.user.id ?? req.ip,
         },
@@ -216,6 +218,23 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
         }
       }
 
+      // Queued work for a deleted project would still run — calling a paid provider for an account
+      // that no longer exists — and then fail at the foreign key (ADR-109). Work that has already
+      // started cannot be stopped here; the asset stores remove its bytes when its row cannot be written.
+      let queuedJobsCancelled = 0;
+      const jobFailures: string[] = [];
+      for (const projectId of result.deletedProjectIds) {
+        try {
+          queuedJobsCancelled += await ctx.jobQueue.cancelPendingForProject(projectId);
+        } catch (err) {
+          jobFailures.push(projectId);
+          request.log.error(
+            { err, project_id: projectId, user_id: result.userId },
+            "account deleted, but its queued jobs could not be cancelled"
+          );
+        }
+      }
+
       reply.clearCookie(SESSION_COOKIE, { path: "/" });
       reply.clearCookie(CSRF_COOKIE, { path: "/" });
       return {
@@ -224,12 +243,14 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
           projects: result.deletedProjectIds.length,
           storageObjects: result.assets.length - failures.length,
           workspaces: result.deletedProjectIds.length - workspaceFailures.length,
+          queuedJobs: queuedJobsCancelled,
         },
         // Projects another user can still reach keep their content; only this user's access ended.
         retainedOrganizations: result.retainedOrganizationIds.length,
         retainedProjects: result.retainedProjectIds.length,
         storageObjectsNotRemoved: failures,
         workspacesNotRemoved: workspaceFailures,
+        projectsWithJobsNotCancelled: jobFailures,
       };
     }
   );

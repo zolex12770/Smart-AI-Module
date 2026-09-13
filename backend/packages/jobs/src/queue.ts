@@ -446,6 +446,31 @@ export class JobQueue {
     return replayedId;
   }
 
+  /**
+   * Cancels every job of one project that has not started — docs/26_DECISIONS.md ADR-109.
+   *
+   * For account deletion. A queued image, video or document job for a project that no longer
+   * exists would still run: it would call a paid provider for a deleted account, then fail at the
+   * foreign key when it stored the result. Every queue is included, not only the ones this
+   * process ensured — an API process need not have ensured the queues its workers consume — and so
+   * are dead letters, which for a deleted project are incidents nobody can act on.
+   *
+   * Work that has already STARTED cannot be stopped from here. The asset stores remove any bytes
+   * whose row cannot be written, so that case leaves nothing behind either.
+   */
+  async cancelPendingForProject(projectId: string): Promise<number> {
+    const rows = await this.query<{ id: string; name: string }>(
+      `select id, name from pgboss.job
+        where data->>'projectId' = $1
+          and state in ('created', 'retry')`,
+      [projectId]
+    );
+    for (const row of rows) {
+      await this.boss.cancel(row.name, row.id);
+    }
+    return rows.length;
+  }
+
   /** Cancels one job, but only if it belongs to the caller's project. */
   async cancelForProject(projectId: string, queueName: string, jobId: string): Promise<boolean> {
     const job = await this.getJob<{ projectId?: string }>(queueName, jobId);

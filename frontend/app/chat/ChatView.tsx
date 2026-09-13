@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { streamChat, type ChatMessage } from "../lib/chat-stream";
 import { listConversations, type Conversation, type Message } from "../lib/api";
+import { historyForRequest } from "../lib/chat-history";
 
 interface DisplayMessage extends ChatMessage {
   isError?: boolean;
@@ -48,7 +49,7 @@ export default function ChatView({
 
     try {
       const stream = streamChat(
-        nextMessages.map(({ role, content }) => ({ role, content })),
+        historyForRequest(nextMessages),
         conversationIdRef.current,
         controller.signal
       );

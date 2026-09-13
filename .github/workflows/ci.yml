@@ -64,6 +64,14 @@ jobs:
       - name: Verify frontend/backend boundary
         run: bash scripts/verify-boundary.sh
 
+      # docs/API.md is generated from the route registrations. A route changed without regenerating
+      # it publishes a contract the code no longer has (ADR-112); the generated labels themselves are
+      # checked against real requests by backend/src/routes/api-contract.test.ts.
+      - name: Verify docs/API.md matches the routes
+        run: |
+          python3 scripts/generate-api-docs.py
+          git diff --exit-code -- docs/API.md
+
       - name: Verify migrations
         run: bash scripts/verify-migrations.sh
 

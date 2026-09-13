@@ -230,7 +230,7 @@ export class AuthService {
    * It does not mint a session, but it IS subject to the same per-account lockout as `login`.
    * The first version deliberately skipped the lockout counter and leaned on the route's rate
    * limit instead — and that limit was keyed on `request.ip`, which comes from a client-supplied
-   * `X-Forwarded-For` under `trustProxy: true`. Rotating that header gave unlimited guesses, and
+   * `X-Forwarded-For` under the former `trustProxy: true` (ADR-112). Rotating that header gave unlimited guesses, and
    * the check ignored `lockedUntil`, so even an account `login` had locked would accept a correct
    * guess here. A correct guess deletes the account, which is precisely the stolen-cookie case this
    * check exists to stop. Being locked out of the account you are trying to delete is a far smaller

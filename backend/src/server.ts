@@ -48,15 +48,17 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   // types just don't structurally line up on an optional `msgPrefix` field.
   const app = Fastify({
     loggerInstance: logger as unknown as FastifyBaseLogger,
-    // Cloud Run (and any load balancer) terminates the connection itself, so without this
-    // every request appears to come from the proxy's address. That is not cosmetic: the
-    // per-IP rate limiter below keys on `request.ip`, so one shared address meant every
-    // client in the world shared a single 300/minute bucket — the limiter would have been
-    // simultaneously useless (one abusive client is diluted) and hostile (one busy client
-    // locks everyone out). `request.ip` now comes from X-Forwarded-For. Safe only because
-    // the platform is never exposed directly; behind a proxy that header is rewritten, and
-    // in front of one it would be client-controlled.
-    trustProxy: true,
+    // Whose address `request.ip` is — ADR-112. It feeds every per-IP rate limit and every audit
+    // row. This was `trustProxy: true`, which takes the LEFTMOST X-Forwarded-For entry: the one
+    // the client writes. Any caller could name its own address and rotate it per request, so no
+    // per-IP limit bound anyone and the audit trail recorded whatever a client claimed. A hop
+    // count trusts only what the deployment's own proxies appended — 1 behind Cloud Run's front
+    // end. 0, the default, trusts nothing and uses the socket's address, which is correct for a
+    // process exposed directly. The number must match the deployment in both directions: too
+    // low behind a proxy and every client shares the proxy's one address and one bucket.
+    // A function, not the bare number: Fastify 5's types do not accept one. Hop 0 is the socket
+    // peer, so with TRUST_PROXY_HOPS=0 nothing is trusted and the socket's own address is used.
+    trustProxy: (_address: string, hop: number) => hop < config.TRUST_PROXY_HOPS,
 
     // A UUID, not Fastify's default per-process counter -- ADR-098.
     //
