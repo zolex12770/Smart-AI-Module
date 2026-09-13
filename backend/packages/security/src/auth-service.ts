@@ -107,10 +107,19 @@ export class AuthService {
    * isolation. `bootstrapFirstAdmin` logged "BOOTSTRAPPED THE FIRST ADMINISTRATOR" and had in
    * fact created an ordinary account.
    *
-   * Emptiness is re-checked INSIDE the transaction: the caller's check is an optimisation, this
-   * is the guarantee. So two processes racing cannot both win, and this can never promote anyone
-   * on a database that already has users — the one property that makes an unauthenticated
-   * bootstrap path safe to have at all.
+   * Emptiness is re-checked INSIDE the transaction, so it cannot promote anyone on a database
+   * that already has COMMITTED users — which is the property that matters, because it is what
+   * makes the two environment variables inert on every boot after the first.
+   *
+   * It is NOT a mutual-exclusion guarantee, and an earlier version of this comment claimed it
+   * was. The check is a plain SELECT under the default READ COMMITTED isolation: two
+   * transactions can both see an empty table and both insert. What actually bounds that is
+   * narrower and worth stating precisely — the only caller is boot-time and HTTP-role-only, and
+   * two replicas booting with the SAME `BOOTSTRAP_ADMIN_EMAIL` collide on `users_email_unique`.
+   * Two replicas booting simultaneously with DIFFERENT bootstrap emails would produce two
+   * administrators. That is an operator configuring two different bootstrap identities at once,
+   * not an attack, and closing it properly needs an advisory lock or a serializable transaction —
+   * which is a real change, deliberately not made here rather than described as already done.
    */
   async bootstrapSystemAdmin(
     input: SignupInput,
@@ -236,11 +245,11 @@ export class AuthService {
   /**
    * Deletes the caller's account and the data they solely own — NFR-008, ADR-102.
    *
-   * The audit record is written BEFORE the deletion, because `audit_log.user_id` is
-   * `onDelete: "set null"`: writing it afterwards would mean writing a row about a user that no
-   * longer exists, and the foreign key would reject it. Written first, it survives the deletion
-   * with a null user id and the email preserved in its metadata — which is what an operator
-   * needs to answer "was this account deleted, and when", without retaining an account.
+   * The audit record is written AFTER the deletion succeeds, with a null user id and the email
+   * in `detail`. Writing it first — which an earlier version did, for the real reason that
+   * `audit_log.user_id` is `onDelete: "set null"` and cannot name a deleted user — meant a
+   * rollback left a permanent row asserting a deletion that never happened, which is the one
+   * question an operator queries this row to answer.
    *
    * Returns the storage objects the caller must now remove; see `deleteUserAccount`.
    */
@@ -248,16 +257,28 @@ export class AuthService {
     const rows = await this.db.select({ email: users.email }).from(users).where(eq(users.id, userId)).limit(1);
     if (!rows[0]) throw new NotFoundError("Account not found.");
 
+    // The deletion first, the record afterwards (ADR-107). It was the other way round, with
+    // `outcome: "success"` written BEFORE the attempt, so any rollback inside the transaction
+    // left a permanent audit row asserting a deletion that had not happened — the one question
+    // an operator queries this row to answer. The original reason for writing first was real:
+    // `audit_log.user_id` is `onDelete: "set null"`, so a row written afterwards cannot name a
+    // user that no longer exists. The answer is to write it with a null user id and the email in
+    // `detail`, which is what survives the deletion anyway and what an operator actually needs.
+    const result = await deleteUserAccount(this.db, userId);
     await this.recordAudit({
-      userId,
+      userId: null,
       action: "auth.account_deleted",
       outcome: "success",
       method: "session",
-      detail: { email: rows[0].email },
+      detail: {
+        email: rows[0].email,
+        deleted_user_id: userId,
+        organizations_deleted: result.deletedOrganizationIds.length,
+        organizations_retained: result.retainedOrganizationIds.length,
+      },
       ...meta,
     });
-
-    return deleteUserAccount(this.db, userId);
+    return result;
   }
 
 

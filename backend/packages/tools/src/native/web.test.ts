@@ -79,6 +79,30 @@ describe("isBlockedAddress", () => {
   });
 
 
+  it("refuses the ranges an independent audit found unblocked", () => {
+    // Each of these was permitted by the version of this guard that had already been reviewed,
+    // tested and committed — found by a second pass that went looking specifically for ranges the
+    // first had missed. They are three separate mechanisms for reaching IPv4 space or a local
+    // interface, which is why one pattern did not cover them.
+    for (const address of [
+      "::ffff:0:7f00:1", // ::ffff:0:0:0/96 IPv4-translated (RFC 2765 SIIT) -> 127.0.0.1
+      "::ffff:0:a9fe:a9fe", // the same form -> 169.254.169.254
+      "2001:0:4136:e378:8000:63bf:3fff:fdd2", // Teredo 2001::/32, embeds an arbitrary IPv4
+      "fec0::1", // site-local; deprecated by RFC 3879, still routed by stacks configured earlier
+      "feff::1", // the top of fec0::/10
+    ]) {
+      expect(isBlockedAddress(address), address).toBe(true);
+    }
+  });
+
+  it("does not over-block the 2001::/16 neighbours of Teredo", () => {
+    // Teredo is 2001::/32 — only when the second group is zero. `2001:1::1` and `2003::1` are
+    // ordinary global addresses, and a guard that refuses everything is not a guard.
+    expect(isBlockedAddress("2001:1::1")).toBe(false);
+    expect(isBlockedAddress("2003::1")).toBe(false);
+  });
+
+
   it("permits a public IPv6 address", () => {
     expect(isBlockedAddress("2606:4700:4700::1111")).toBe(false);
   });
@@ -219,6 +243,22 @@ describe("fetchWebPage against a real server", () => {
         : { status: 200, headers: { "content-type": "text/plain" }, body: "should never be reached" };
     await expect(fetchWebPage(url("/redirect"), allowLoopback)).rejects.toThrow(/non-public address/);
   });
+
+  it("applies every check to the redirect TARGET, not only to the first URL", async () => {
+    // Each of these is a real bypass attempt against a guard that validates only the URL it was
+    // given: the scheme check, the credential check and the address check all have to run again
+    // on each hop, which is the reason redirects are followed by hand rather than by the client.
+    const cases: Array<[string, string, RegExp]> = [
+      ["/ws", " http://169.254.169.254/", /non-public address/],
+      ["/scheme", "file:///etc/passwd", /only http and https/i],
+      ["/userinfo", "http://user:pw@example.com/", /embeds credentials/],
+    ];
+    for (const [path, location, expected] of cases) {
+      handler = (p) => (p === path ? { status: 302, headers: { location }, body: "" } : { status: 200, headers: { "content-type": "text/plain" }, body: "reached" });
+      await expect(fetchWebPage(url(path), allowLoopback), path).rejects.toThrow(expected);
+    }
+  });
+
 
   it("follows a redirect that stays permitted, and reports the chain", async () => {
     handler = (path) =>

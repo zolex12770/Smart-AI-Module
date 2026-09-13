@@ -127,13 +127,20 @@ export async function applyConversationWindow(
   let summarized = false;
   let error: string | undefined;
 
-  // Only the turns the stored summary does not already cover.
-  const newlyAged = aged.slice(Math.max(0, covered - lead));
+  // Counted in TURNS, never in prompt-array positions. `covered` used to be stored as
+  // `lead + aged.length` and read back as `aged.slice(covered - lead)`, which only cancels when
+  // `lead` is the same on both requests — and it is not: `withMemoryContext` prepends its system
+  // message ONLY when retrieval matched something, so `lead` flips between 0 and 1 from one
+  // request to the next (a client-supplied system message does the same). On a 1 -> 0 transition
+  // one aged turn fell into neither the summary nor the live window and was silently lost from
+  // the model's view; on 0 -> 1 a covered turn was summarized twice. The count is now relative to
+  // the turns alone, so the preamble's presence cannot shift it.
+  const newlyAged = aged.slice(Math.min(covered, aged.length));
   if (newlyAged.length > 0) {
     const transcript = newlyAged.map((m) => m.role + ": " + m.content).join("\n");
     try {
       summary = (await deps.summarize({ previousSummary: summary, transcript })).trim();
-      covered = lead + aged.length;
+      covered = aged.length;
       summarized = true;
       await deps.conversationRepo.updateSummary(input.projectId, conversation.id, summary, covered);
     } catch (err) {

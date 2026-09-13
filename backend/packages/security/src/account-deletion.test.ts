@@ -6,7 +6,6 @@ import {
   createDb,
   documents,
   messages,
-  organizationMembers,
   organizations,
   projectMembers,
   projects,
@@ -122,42 +121,48 @@ describe("deleting an account", () => {
     expect(await auth.authenticate({ kind: "session", token })).toBeNull();
   });
 
-  it("does NOT destroy an organization that has another member — that content is not theirs", async () => {
-    const { user: alice, projectId: aliceProject } = await signup("alice@example.com");
+  it("does NOT destroy an organization whose project has a COLLABORATOR — via the real invite path", async () => {
+    // The API's only way to add a collaborator, `addProjectMember`, writes a `projectMembers`
+    // row and NO `organizationMembers` row — and `authorizeProject` grants full project
+    // permissions from that row alone. So this test deliberately goes through the service rather
+    // than inserting membership rows by hand. The previous version of it inserted an
+    // `organizationMembers` row the API never writes, which is exactly why it passed while the
+    // code cascade-deleted a colleague's project and every message in it.
+    const { user: alice, projectId } = await signup("alice@example.com");
     const { user: bob } = await signup("bob@example.com");
-    await seedContent(aliceProject, alice.id, "shared");
+    await seedContent(projectId, alice.id, "shared");
 
-    // Bob joins Alice's organization and project.
-    const now = new Date();
-    const [org] = await db.select().from(organizations).limit(1);
-    await db.insert(organizationMembers).values({
-      id: "om-bob",
-      organizationId: org.id,
-      userId: bob.id,
-      role: "member",
-      createdAt: now,
-    });
-    await db.insert(projectMembers).values({
-      id: "pm-bob",
-      projectId: aliceProject,
-      userId: bob.id,
-      role: "editor",
-      createdAt: now,
-    });
+    const aliceCtx = await auth.authorizeProject(alice, projectId, "session", "cred-alice");
+    await auth.addProjectMember(aliceCtx, "bob@example.com", "editor");
 
     const result = await auth.deleteOwnAccount(alice.id);
 
+    const [org] = await db.select().from(organizations);
     expect(result.deletedOrganizationIds).toEqual([]);
     expect(result.retainedOrganizationIds).toEqual([org.id]);
     // Bob's project and its content survive.
-    expect(await db.select().from(projects).where(eq(projects.id, aliceProject))).toHaveLength(1);
+    expect(await db.select().from(projects).where(eq(projects.id, projectId))).toHaveLength(1);
     expect(await db.select().from(messages)).toHaveLength(1);
     // Alice is gone, her memberships with her, and the surviving rows keep a null author.
     expect(await db.select().from(users).where(eq(users.id, alice.id))).toEqual([]);
-    expect(await db.select().from(organizationMembers).where(eq(organizationMembers.userId, alice.id))).toEqual([]);
+    expect(await db.select().from(projectMembers).where(eq(projectMembers.userId, alice.id))).toEqual([]);
     const [conv] = await db.select().from(conversations);
     expect(conv.createdByUserId).toBeNull();
+    // And Bob can still reach the project he was invited to.
+    const bobCtx = await auth.authorizeProject(bob, projectId, "session", "cred-bob");
+    expect(bobCtx.projectId).toBe(projectId);
   });
+
+  it("still destroys an organization whose only other membership row is the departing user's own", async () => {
+    // The other direction: a solo account must not be retained by its own rows.
+    const { user, projectId } = await signup("solo@example.com");
+    await seedContent(projectId, user.id, "solo");
+    const result = await auth.deleteOwnAccount(user.id);
+    expect(result.deletedOrganizationIds).toHaveLength(1);
+    expect(await db.select().from(projects)).toEqual([]);
+    expect(await db.select().from(messages)).toEqual([]);
+  });
+
 
   it("leaves an audit record that survives the account it describes", async () => {
     const { user } = await signup("alice@example.com");
@@ -182,4 +187,27 @@ describe("deleting an account", () => {
     await auth.deleteOwnAccount(user.id);
     await expect(auth.deleteOwnAccount(user.id)).rejects.toThrow();
   });
+
+  it("writes no 'deleted' audit record when the deletion does not happen", async () => {
+    // The record used to be written BEFORE the attempt with outcome "success", so a failure left a
+    // permanent row asserting a deletion that had not occurred — the one thing this row is
+    // queried to answer. A non-existent user is the reachable failure: it must produce no record.
+    const before = await db.select().from(auditLog);
+    await expect(auth.deleteOwnAccount("no-such-user")).rejects.toThrow();
+    const after = await db.select().from(auditLog);
+    expect(after.filter((r) => r.action === "auth.account_deleted")).toEqual([]);
+    expect(after).toHaveLength(before.length);
+  });
+
+  it("records what was actually destroyed, not merely that something was", async () => {
+    const { user, projectId } = await signup("alice@example.com");
+    await seedContent(projectId, user.id, "alice");
+    await auth.deleteOwnAccount(user.id);
+    const [row] = (await db.select().from(auditLog)).filter((r) => r.action === "auth.account_deleted");
+    const detail = row.detail as { organizations_deleted: number; organizations_retained: number; email: string };
+    expect(detail.organizations_deleted).toBe(1);
+    expect(detail.organizations_retained).toBe(0);
+    expect(detail.email).toBe("alice@example.com");
+  });
+
 });

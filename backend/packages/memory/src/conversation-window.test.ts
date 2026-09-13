@@ -151,4 +151,62 @@ describe("applyConversationWindow", () => {
     expect(result.messages).toBe(messages);
     expect(d.summarize).not.toHaveBeenCalled();
   });
+
+  it("loses no turn when the memory preamble appears or disappears between requests", async () => {
+    // The defect this covers: `covered` was stored as `lead + aged.length` and read back as
+    // `aged.slice(covered - lead)`, which only cancels when `lead` is the same on both requests.
+    // It is not — `withMemoryContext` prepends its system message ONLY when retrieval matched
+    // something, so `lead` flips between 1 and 0 from one request to the next. On the 1 -> 0
+    // transition one aged turn fell into neither the summary nor the live window.
+    const summarizedTurns: string[][] = [];
+    const d = deps();
+    d.summarize.mockImplementation(async ({ transcript }: { transcript: string }) => {
+      summarizedTurns.push(transcript.split("\n").map((line) => line.split(" ")[1]));
+      return "SUMMARY";
+    });
+
+    const memory: ChatMessage = { role: "system", content: "Known facts: …" };
+    const history = turns(18);
+
+    // Request 1: retrieval matched, so the preamble is present.
+    const first = await applyConversationWindow(
+      d,
+      { projectId: "proj-1", conversation: conversation(), messages: [memory, ...history] },
+      OPTS
+    );
+    const storedAfterFirst = d.updateSummary.mock.calls.at(-1)![3] as number;
+
+    // Request 2: retrieval matched NOTHING, so there is no preamble this time.
+    const second = await applyConversationWindow(
+      d,
+      {
+        projectId: "proj-1",
+        conversation: conversation({ summary: "SUMMARY", summarizedMessageCount: storedAfterFirst }),
+        messages: [...history, ...turns(2, "later")],
+      },
+      OPTS
+    );
+
+    // Every turn is either summarized or in the live window — none in neither.
+    const summarized = new Set(summarizedTurns.flat());
+    const liveNow = new Set(second.messages.filter((m) => m.role !== "system").map((m) => m.content.split(" ")[0]));
+    const allTurns = [...history, ...turns(2, "later")].map((m) => m.content.split(" ")[0]);
+    const lost = allTurns.filter((t) => !summarized.has(t) && !liveNow.has(t));
+    expect(lost).toEqual([]);
+    expect(first.summarized).toBe(true);
+  });
+
+  it("counts the summary in TURNS, so the preamble cannot shift it", async () => {
+    const d = deps();
+    const memory: ChatMessage = { role: "system", content: "Known facts: …" };
+    await applyConversationWindow(
+      d,
+      { projectId: "proj-1", conversation: conversation(), messages: [memory, ...turns(12)] },
+      OPTS
+    );
+    // 12 turns, 4 live -> 8 aged. The stored count is 8, not 9: it does not include the preamble,
+    // which was never summarized.
+    expect(d.updateSummary).toHaveBeenCalledWith("proj-1", "conv-1", "ROLLING SUMMARY", 8);
+  });
+
 });

@@ -31,8 +31,11 @@ import {
  *  - Organizations where this user is the ONLY member cascade away entirely: projects,
  *    conversations, messages, tasks, nodes, transitions, documents, chunks, memory, assets,
  *    image and video rows, usage records.
- *  - Organizations with OTHER members keep their content — it is not this user's to destroy —
- *    and the user's memberships are removed so their access ends immediately.
+ *  - Organizations with any OTHER member keep their content — it is not this user's to
+ *    destroy — and the user's own memberships are removed so their access ends immediately.
+ *    "Member" means by EITHER route: an `organization_members` row, or a `project_members`
+ *    row on any project in that organization. The API only ever writes the second kind, so
+ *    checking the first alone deleted real collaborators' work.
  *  - The user row goes last, cascading sessions, API keys and personal memory items.
  *  - `audit_log` rows survive with a null user id. A deletion record that deletes itself is not
  *    an audit trail, and the row retains no personal data once the user is gone.
@@ -77,14 +80,31 @@ export async function deleteUserAccount(db: DrizzleDb, userId: string): Promise<
     const soleOwned: string[] = [];
     const shared: string[] = [];
     for (const orgId of orgIds) {
-      // Anyone else at all, not "any other owner": an organization with a second member is not
-      // this user's to destroy whatever their roles are.
-      const others = await tx
+      // Anyone else at all, by EITHER route — and both routes have to be checked, which is the
+      // whole difficulty. `addProjectMember` (the only API path for inviting a collaborator)
+      // inserts a `projectMembers` row and NO `organizationMembers` row, and `authorizeProject`
+      // grants full project permissions from that row alone. So a real, working collaborator is
+      // invisible to an organization-membership query: the first version of this checked only
+      // `organizationMembers` and cascade-deleted a colleague's project and every message in it.
+      //
+      // Proven, not theorised: a probe that invited a second user through the real service and
+      // then deleted the inviter reported `deletedOrganizationIds: 1` where the invariant says 0,
+      // and the collaborator's messages were gone. The test that was supposed to cover this
+      // passed only because it hand-inserted the `organizationMembers` row the API never writes —
+      // a fixture that took a shortcut the product does not have.
+      const otherOrgMember = await tx
         .select({ userId: organizationMembers.userId })
         .from(organizationMembers)
         .where(and(eq(organizationMembers.organizationId, orgId), ne(organizationMembers.userId, userId)))
         .limit(1);
-      (others.length === 0 ? soleOwned : shared).push(orgId);
+      const otherProjectMember = await tx
+        .select({ userId: projectMembers.userId })
+        .from(projectMembers)
+        .innerJoin(projects, eq(projectMembers.projectId, projects.id))
+        .where(and(eq(projects.organizationId, orgId), ne(projectMembers.userId, userId)))
+        .limit(1);
+      const hasOthers = otherOrgMember.length > 0 || otherProjectMember.length > 0;
+      (hasOthers ? shared : soleOwned).push(orgId);
     }
 
     let doomedProjectIds: string[] = [];

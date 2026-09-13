@@ -179,10 +179,18 @@ function isBlockedIpv6(address: string): boolean {
   const g = expandIpv6(address);
   if (!g) return true; // unparseable: refuse rather than guess
 
-  // ::ffff:0:0/96 (IPv4-mapped) and ::/96 (IPv4-compatible) carry an IPv4 address in the low
-  // 32 bits. Checking the numbers rather than the spelling is the whole point.
-  const topFiveZero = g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0 && g[4] === 0;
-  if (topFiveZero && (g[5] === 0xffff || g[5] === 0)) {
+  // Any form that embeds an IPv4 address is unwrapped and judged by the v4 rules, so the two
+  // families cannot disagree. Three distinct prefixes do this:
+  //   ::ffff:0:0/96   IPv4-mapped      (g[4] = 0, g[5] = ffff)
+  //   ::/96           IPv4-compatible  (g[4] = 0, g[5] = 0)
+  //   ::ffff:0:0:0/96 IPv4-translated  (g[4] = ffff, g[5] = 0) -- RFC 2765 SIIT
+  // The third was missed by the first version of this function, which required g[0..4] to be
+  // zero: `::ffff:0:7f00:1` is loopback and came back permitted.
+  const topFourZero = g[0] === 0 && g[1] === 0 && g[2] === 0 && g[3] === 0;
+  const embedsIpv4 =
+    topFourZero &&
+    ((g[4] === 0 && (g[5] === 0xffff || g[5] === 0)) || (g[4] === 0xffff && g[5] === 0));
+  if (embedsIpv4) {
     const embedded = [g[6] >> 8, g[6] & 0xff, g[7] >> 8, g[7] & 0xff].join(".");
     // `::` and `::1` fall in this range too and are caught by isBlockedIpv4's 0.0.0.0/8 rule
     // (0.0.0.0 and 0.0.0.1 respectively), so they need no special case.
@@ -190,10 +198,17 @@ function isBlockedIpv6(address: string): boolean {
   }
 
   if ((g[0] & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
+  // fec0::/10 site-local. Deprecated by RFC 3879 and therefore easy to leave out — but a
+  // deprecated range is still routed by stacks that were configured before it was deprecated,
+  // and "the RFC says nobody should use this" is not a reason to let a tool reach it.
+  if ((g[0] & 0xffc0) === 0xfec0) return true;
   if ((g[0] & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local
   if ((g[0] & 0xff00) === 0xff00) return true; // ff00::/8 multicast
   if (g[0] === 0x64 && g[1] === 0xff9b) return true; // 64:ff9b::/96 NAT64 -> IPv4 space
   if (g[0] === 0x2002) return true; // 2002::/16 6to4 -> IPv4 space
+  // 2001::/32 Teredo, which tunnels IPv6 over IPv4 and embeds an arbitrary IPv4 address in the
+  // low bits — the same reachability as 6to4 and NAT64 above, by a third mechanism.
+  if (g[0] === 0x2001 && g[1] === 0) return true;
   if (g[0] === 0x100 && g[1] === 0 && g[2] === 0 && g[3] === 0) return true; // 100::/64 discard
   if (g[0] === 0x2001 && g[1] === 0xdb8) return true; // documentation
   return false;
