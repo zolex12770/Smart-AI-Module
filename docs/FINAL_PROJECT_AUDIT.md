@@ -14,13 +14,14 @@ lint, 556 tests with zero skips, boundary 9/9, migrations 3/3, boot 7/7, E2E 7/7
 document said CODE COMPLETION 96%, "P0 remaining: 0 · P1 remaining: 0".
 
 The audit confirmed **27 gaps**, including two P0s. Three more were found while fixing them —
-one of which was a P0 introduced BY one of the fixes. The
+one of which was a P0 introduced BY one of the fixes — and a second independent audit of the
+fixes themselves then confirmed seven more. The
 most useful thing in this document is therefore not the table below but that sentence: a complete
 set of passing gates established almost nothing about the properties anyone actually cared about,
 because several of the gates *could not fail*.
 
-**The recurring defect class, stated plainly.** Six of the 30 were gates that reported success
-unconditionally:
+**The recurring defect class, stated plainly.** Eight of the 37 were gates or tests that reported
+success unconditionally:
 
 | Gate | How it could not fail |
 |---|---|
@@ -30,6 +31,8 @@ unconditionally:
 | `verify-boot.sh` refusal cases | Asserted only that health never answered — which a port clash or a syntax error satisfies as well as the refusal under test |
 | Playwright `reuseExistingServer` | Silently reused a backend from an earlier session, so E2E tested code that was not under test |
 | `npm test` timeouts | Passed on an idle machine and failed on a loaded one with a different count each run |
+| `verify-boundary.sh` check 2 (third version) | A multi-line value import puts the package name on the `} from` line, which a line grep for `import` discards. Now a statement parser, proven against eight planted shapes |
+| File-symlink containment test | Caught the platform's refusal and `return`ed — zero assertions, counted as a pass on the platform the repository is developed on. Now a reported skip that CI must run |
 
 Every one is now proven able to fail, by planting the violation it exists to catch. That is the
 standard this document applies: a check nobody has watched fail is a check of unknown value.
@@ -55,10 +58,10 @@ Columns: **I**mplemented · **T**ested · **RV** Runtime Verified · **PV** Prod
 
 | Dimension | I | T | RV | PV | Blocked | Remaining |
 |---|---|---|---|---|---|---|
-| Authentication (scrypt, sessions, API keys, CSRF, lockout) | yes | 43 in `security` | yes — live 401/403/404 | no | — | Password reset, email verification, MFA, SSO |
+| Authentication (scrypt, sessions, API keys, CSRF, lockout) | yes | 46 in `security` | yes — live 401/403/404 | no | — | Password reset, email verification, MFA, SSO |
 | Authorization as a SQL predicate | yes | yes | yes — cross-tenant 404 in a real browser | no | — | Per-project tool/MCP policy |
 | Deny-by-default authentication | yes | 4 | yes | no | — | — |
-| Administrator role | yes | 4 | yes — **admin 200, ordinary user 404, live** | no | — | No administration UI |
+| Administrator role | yes | 4 | yes — **admin 200, ordinary user 404, live** | no | — | No administration UI; concurrent bootstraps with different emails can both succeed (READ COMMITTED; acknowledged, not locked) |
 | Tenant isolation: database | yes | yes | yes | no | — | — |
 | Tenant isolation: agent workspaces | yes | 9 | yes | no | — | — |
 | Tenant isolation: **search tools** | yes | 9 | yes — **was a proven cross-tenant read** | no | — | — |
@@ -68,7 +71,7 @@ Columns: **I**mplemented · **T**ested · **RV** Runtime Verified · **PV** Prod
 | Malware scanning | yes | 7 | yes — real clamd, real EICAR | no | — | — |
 | Upload controls (type, sniff, size, disposition) | yes | yes | yes | no | — | — |
 | Secret handling | yes | staged-diff scan before every commit | yes | no | — | — |
-| Account and data deletion (NFR-008) | yes | 12 | yes — live, including the file on disk | no | — | No operator-initiated deletion or export-before-delete |
+| Account and data deletion (NFR-008) | yes | 15 | yes — live, including the file on disk | no | — | No operator-initiated deletion or export-before-delete |
 | Rate limiting | yes | 10 | yes — 201,201,201,429,429 | no | — | Fail-open by design |
 | Dependency audit | yes | `npm audit` in CI | partly — 6 moderate advisories, none high | no | — | — |
 
@@ -81,12 +84,12 @@ Columns: **I**mplemented · **T**ested · **RV** Runtime Verified · **PV** Prod
 | Hosted LLM adapters (OpenAI, Anthropic, Google) | yes | 36 fixture tests | **no** | no | **No credentials** | — |
 | Self-hosted LLM adapter | yes | 12 | yes | no | — | — |
 | Agent engine (task graph, retries, approval, recovery) | yes | 51 | yes — real model, real tool calls | no | — | — |
-| Tool calling (11 native tools) | yes | 97 | yes — real `tool_calls` from a real model | no | — | — |
+| Tool calling (11 native tools) | yes | 104 (+1 skipped) | yes — real `tool_calls` from a real model | no | — | — |
 | Multi-call turn + approval transcript | yes | 1 (fails on old code) | partly — proven by test, not yet by a live multi-call approval | no | — | — |
 | Coding agent | yes | yes | partly — 6 real tool calls, verification correctly refused to pass unchanged source | no | — | Full FAIL→patch→PASS not completed; limited by the local model |
 | MCP (stdio + HTTP) | yes | 39 | yes — 14 tools, 0 enabled by default | no | — | — |
-| Memory (store, retrieve, inject) | yes | 25 | yes — **changed a real model's answer** | no | — | — |
-| Conversation summarization (FR-030) | yes | 8 | yes — fact from turn 1 recalled through the summary, live | no | — | Per-deployment threshold, not per-model |
+| Memory (store, retrieve, inject) | yes | 27 | yes — **changed a real model's answer** | no | — | — |
+| Conversation summarization (FR-030) | yes | 10 | yes — fact from turn 1 recalled through the summary, live | no | — | Per-deployment threshold, not per-model |
 | RAG (chunk, embed, retrieve, cite) | yes | 47 | yes — citation at real cosine distance | no | — | CSV/code-aware chunking, OCR |
 | Grounding refusal | yes | 10 | yes — refuses where it once fabricated | no | — | — |
 | Embeddings | yes | yes | yes — real nomic-embed-text, 768d | no | — | — |
@@ -126,7 +129,7 @@ Columns: **I**mplemented · **T**ested · **RV** Runtime Verified · **PV** Prod
 
 | Dimension | I | T | RV | PV | Blocked | Remaining |
 |---|---|---|---|---|---|---|
-| Test suite | yes | **646 / 79 files, 0 failed, 0 skipped** | yes | no | — | — |
+| Test suite | yes | **653 passed, 1 skipped, 0 failed, 79 files** | yes | no | — | The skip is a file-symlink case Windows refuses unelevated; CI must run it |
 | Test gate reliability | yes | n/a | yes — timeouts sized for real infrastructure | no | — | — |
 | E2E (real browser, real API) | yes | 7 | yes — against freshly started servers | no | — | — |
 | Lint (3 type-aware rules) | yes | n/a | yes — 0 errors | no | — | 6 accepted `no-console` warnings |
@@ -175,13 +178,28 @@ pass. P2 = a real defect with a bounded blast radius.
 | 28 | P1 | *(found while fixing)* Lockfile still described the old layout | commit `48bf37d` | 26 dead workspace entries |
 | 29 | P1 | *(found while fixing)* E2E silently reused a stale server | ADR-105 | 6/7 failed against a contract that no longer existed |
 | 30 | P0 | *(found while fixing)* The new SSRF guard was bypassable by a hex-spelled IPv4-mapped IPv6 address | commit `82989e9` | A test written to prove the decimal forms were refused |
+| 31 | P1 | *(second audit)* Account deletion missed project-only collaborators and cascade-deleted their shared project | ADR-107 | Invited through the real `addProjectMember`, then deleted the inviter |
+| 32 | P2 | *(second audit)* Summarization stored `covered` as a prompt position; a toggling memory preamble dropped a turn | ADR-107 | Turn `t14` in neither the summary nor the live window |
+| 33 | P2 | *(second audit)* Boundary check 2 could not see a multi-line value import | ADR-106 | Planted one; the script reported PASS |
+| 34 | P2 | *(second audit)* SSRF guard missed `::ffff:0:0:0/96`, Teredo `2001::/32` and `fec0::/10` | ADR-107 | `isBlockedAddress` returned false for each |
+| 35 | P2 | *(second audit)* A containment test passed with zero assertions when symlinks were refused | ADR-106 | Read the early `return` path; ran on Windows |
+| 36 | P2 | *(second audit)* A docstring claimed `bootstrapSystemAdmin` excluded concurrent winners | ADR-107 | READ COMMITTED plain SELECT; comment corrected, race recorded |
+| 37 | P2 | *(second audit)* The deletion audit row asserted success before the deletion ran | ADR-107 | A failed deletion now writes no row, asserted by test |
 
-**Disposition: 30 confirmed, 30 fixed, 0 deferred, 0 disputed.**
+**Disposition: 37 confirmed, 37 fixed, 0 disputed.** One of the 37 (number 36) was a false claim in
+a comment; the comment is corrected, and the race it had denied is recorded as a known limitation
+rather than locked, because an advisory lock is a real change that was not made.
 
 The arithmetic, stated so the numbers cannot be read two ways: **29 of the 30 were present in
 the audited tree** — 27 found by the audit, and two (the lockfile, the E2E server reuse) found
 while fixing those. The thirtieth was **introduced by the fix for number 25** and did not exist
 before this phase.
+
+Numbers 31–37 came from a second independent audit of this phase's diff. Six of them (31, 32, 34,
+35, 36, 37) are defects in code written this phase to close 1–30. Number 33 was already present
+in the audited tree — boundary check 2's line-based design — and the first audit did not catch it.
+So across both audits: **30 gaps were present in the tree declared finished, and 7 were introduced
+by the work of fixing them.**
 
 Number 30 is the one to read twice. It was introduced by the fix for number 25 — closing a gap
 created a P0 in the code that closed it — and it was found only because a test written to prove
@@ -204,6 +222,7 @@ Measured, not asserted. Each command is reproducible from the repository root.
 | `: any` / `as any` in production code | **0** | The grep hits are the English word "any" in prose comments |
 | `eslint-disable` | 12 | All `no-console`, in boot and shutdown paths where the structured logger is not yet constructed or is already closed |
 | `it.skip` / `it.todo` / `it.only` | **0** | A skipped test is not a passing test (brief §29), and CI now fails on any skip |
+| `it.skipIf` | 1 | The file-symlink containment case, probed at collection time. Reported as a skip on Windows (which refuses file symlinks unelevated); on Linux CI it runs, and a skip there fails the build |
 | Lint errors | **0** | 6 accepted `no-console` warnings, same paths as above |
 | Type errors | **0** | `tsc --noEmit` across all 26 workspaces |
 

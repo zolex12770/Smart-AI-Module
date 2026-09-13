@@ -1,8 +1,8 @@
 # Test Report
 
-**Date:** 2026-09-12 · **Commit:** `2bf44dc`
+**Date:** 2026-09-12 · **Commit:** `fa296c6`
 
-**Result: 646 test cases across 79 files — 646 passing, 0 skipped, 0 failures.**
+**Result: 654 test cases across 79 files — 653 passing, 1 skipped, 0 failures.**
 Plus 7 end-to-end tests in a real browser, 9/9 boundary checks, 7/7 boot checks, 3/3 migration
 checks, 0 lint errors and 0 type errors across 26 workspaces.
 
@@ -19,7 +19,11 @@ these tests actually use.
 **Every environment-gated suite now runs for real.** The previous report listed 13 skips against
 binaries that were not installed; ffmpeg, ClamAV, fake-gcs-server, Terraform and a real local LLM
 runtime have since been installed under `.local-tools/` (ADR-078), so those suites execute rather
-than skip. A skipped test is not a passing test (product brief §29) — and there are now none.
+than skip. A skipped test is not a passing test (product brief §29). The one skip that remains is
+not an environment gate in that sense: it is a file-symlink containment case that Windows refuses
+without elevation. It used to catch that refusal and `return` — zero assertions, counted as a
+PASS — and a second audit caught it. It is now reported as a skip locally, and on Linux CI it
+runs; the CI gate fails the build on any skip, so it cannot silently stop running there.
 
 ## Totals
 

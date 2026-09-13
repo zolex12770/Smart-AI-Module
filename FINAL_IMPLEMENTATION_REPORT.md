@@ -1,7 +1,7 @@
 # Final Implementation Report
 
 > **Superseded. This report describes the tree at `3074680`, and an independent 32-agent audit
-> of that exact tree, plus the work of fixing what it found, established **29 gaps in it** —
+> of that exact tree, plus the work of fixing what it found, established **30 gaps in it** —
 > including two P0s and a P1 privacy
 > requirement (NFR-008) that did not exist at all while this report called the implementation
 > complete.**

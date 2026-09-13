@@ -1,6 +1,6 @@
 # Project Status — the single source of truth
 
-**Date:** 2026-09-12 · **Commit:** `9e794b3`
+**Date:** 2026-09-13 · **Commit:** `fa296c6`
 
 This file supersedes every other status claim in the repository. Where it disagrees with a
 report, a README, an ADR or the root `PROJECT_STATUS.md` (which is a historical phase log, not a
@@ -28,8 +28,9 @@ its emptiness is visible rather than implied.
 "P0 remaining: 0 · P1 remaining: 0". An independent 32-agent audit of that tree confirmed **27
 gaps**, including two P0s (a proven cross-tenant read through `fs.search`, and a boundary check
 structurally incapable of failing) and a P1 privacy requirement — NFR-008, account deletion —
-that was **entirely absent** while being counted as complete. Two more were found while fixing
-those. The scores below are lower than the previous version's in places where the previous
+that was **entirely absent** while being counted as complete. Three more were found while fixing
+those, and a second independent audit — of the FIXES, not the old tree — confirmed seven more,
+six of them in code written this phase to close the first audit's gaps. The scores below are lower than the previous version's in places where the previous
 version was simply wrong, and the reasoning for each number is stated rather than asserted.
 
 ---
@@ -42,10 +43,10 @@ version was simply wrong, and the reasoning for each number is stated rather tha
 | **Frontend** (`frontend/`, 17 screens) | VERIFIED | yes | 32 unit + 7 E2E | yes — real browser vs real API | no | Long-form video progress UI is basic |
 | **Backend** (`backend/`, 54 routes) | VERIFIED | yes | 79 in `backend/src` | yes — live boots, live curl | no | — |
 | **API contract** | IMPLEMENTED | yes | yes | yes | no | No generated OpenAPI document |
-| **Authentication** | VERIFIED | yes | 43 in `security` + route tests | yes — 401/403/404 live | no | No password reset, email verification, MFA or SSO |
+| **Authentication** | VERIFIED | yes | 46 in `security` + route tests | yes — 401/403/404 live | no | No password reset, email verification, MFA or SSO |
 | **RBAC / authorization** | VERIFIED | yes | yes | yes — 404 cross-tenant live | no | Per-project tool/MCP policy (ADR-089/097 are the narrow fixes) |
 | **Deny-by-default auth** | VERIFIED | yes | 4 tests | yes | no | — |
-| **Account + data deletion** (NFR-008) | VERIFIED | yes | 7 service + 5 route | yes — live, incl. file on disk | no | No operator-initiated deletion, no export-before-delete |
+| **Account + data deletion** (NFR-008) | VERIFIED | yes | 10 service + 5 route | yes — live, incl. file on disk | no | No operator-initiated deletion, no export-before-delete |
 | **Database** (22 tables, 45 indexes) | VERIFIED | yes | yes | yes — real Postgres + pgvector | no | — |
 | **Migrations** | VERIFIED | yes | 3 checks | yes — clean empty DB, no drift | no | — |
 | **Tenant isolation** | VERIFIED | yes | yes | yes — data, files, workspaces, search | no | — |
@@ -53,13 +54,13 @@ version was simply wrong, and the reasoning for each number is stated rather tha
 | **LLM providers** (5 adapters) | PARTIAL | yes | 60 fixture tests | self-hosted only | no | **BLOCKED_EXTERNAL:** no hosted credentials |
 | **Embeddings** | VERIFIED | yes | yes | yes — real nomic-embed-text, 768d | no | — |
 | **Agent engine** | VERIFIED | yes | 51 tests | yes — real model, real tool calls | no | — |
-| **Tool calling** (11 native tools) | VERIFIED | yes | 97 in `tools` | yes — real `tool_calls` from a real model | no | — |
+| **Tool calling** (11 native tools) | VERIFIED | yes | 104 in `tools` (+1 skipped on Windows) | yes — real `tool_calls` from a real model | no | — |
 | **Coding agent** | IN_PROGRESS | yes | yes | partial | no | Full FAIL→patch→PASS cycle not driven by a real model; limited by the local model, not the platform |
-| **Web retrieval** (`web.fetch`) | VERIFIED | yes | 24 tests | yes — real public URLs fetched, SSRF refused | no | **Web SEARCH not built** (needs a provider's credentials); egress is an exfiltration channel for a prompt-injected agent — set `WEB_FETCH_ALLOWLIST`; egress is not metered |
-| **Conversation summarization** (FR-030) | VERIFIED | yes | 8 tests | yes — real model, fact recalled through the summary | no | Threshold is per-deployment config, not per-model automatic |
-| **Sandbox** (process) | VERIFIED | yes | 8 sandbox + 97 in `tools` | yes — real subprocesses | no | — |
+| **Web retrieval** (`web.fetch`) | VERIFIED | yes | 32 tests | yes — real public URLs fetched, SSRF refused | no | **Web SEARCH not built** (needs a provider's credentials); egress is an exfiltration channel for a prompt-injected agent — set `WEB_FETCH_ALLOWLIST`; egress is not metered |
+| **Conversation summarization** (FR-030) | VERIFIED | yes | 10 tests | yes — real model, fact recalled through the summary | no | Threshold is per-deployment config, not per-model automatic |
+| **Sandbox** (process) | VERIFIED | yes | 8 sandbox + 104 in `tools` | yes — real subprocesses | no | — |
 | **Sandbox** (Docker) | BLOCKED_EXTERNAL | yes | unit only | **no** | no | **No Docker CLI/service/WSL, no admin rights** |
-| **Memory** | VERIFIED | yes | 25 tests | yes — **changed a real model's answer** | no | — |
+| **Memory** | VERIFIED | yes | 27 tests | yes — **changed a real model's answer** | no | — |
 | **RAG** | VERIFIED | yes | 47 tests | yes — real retrieval + citation | no | CSV/code-aware chunking; no OCR |
 | **Grounding** | VERIFIED | yes | 10 tests | yes — refuses where it once fabricated | no | — |
 | **Files / uploads** | VERIFIED | yes | yes | yes | no | — |
@@ -77,13 +78,13 @@ version was simply wrong, and the reasoning for each number is stated rather tha
 | **Observability: logs** | VERIFIED | yes | yes | yes | no | — |
 | **Observability: traces** | VERIFIED | yes | in `observability`'s 26 | yes — real 3-level span tree | no | — |
 | **Observability: metrics** | VERIFIED | yes | in `observability`'s 26 | yes — real Prometheus exposition | no | — |
-| **Security** | VERIFIED | yes | yes | yes — 16 defects found & fixed | no | See § below |
-| **Admin / operations** | VERIFIED | yes | 4 tests | yes — **admin 200, ordinary user 404** | no | No user/project administration UI |
+| **Security** | VERIFIED | yes | yes | yes — 18 defects found & fixed | no | See § below |
+| **Admin / operations** | VERIFIED | yes | 4 tests | yes — **admin 200, ordinary user 404** | no | No user/project administration UI; two replicas booting at once with DIFFERENT bootstrap emails could both create an admin |
 | **Docker** | BLOCKED_EXTERNAL | yes | no | **no** | no | `docker build` has never run |
 | **Terraform** | IMPLEMENTED | yes | fmt+validate | validate only | no | `terraform apply` needs a GCP project |
 | **CI/CD** | IMPLEMENTED | yes | n/a | **partly** — `npm ci` proven on a fresh clone; workflow never executed | no | **BLOCKED_EXTERNAL:** no git remote |
 | **Documentation** | VERIFIED | yes | n/a | yes — reconciled against source twice | no | — |
-| **Testing** | VERIFIED | 646/79 | 0 skipped | yes | no | — |
+| **Testing** | VERIFIED | 653 passed / 79 files | 1 skipped on Windows, 0 in CI | yes | no | — |
 
 ---
 
@@ -135,6 +136,15 @@ file, which was wrong; the difference now is that an independent audit was run a
 making the claim, every confirmed gap was fixed, and the gates that would have caught them were
 themselves repaired and proven able to fail.
 
+**And the fixes were audited too.** A second independent audit read only this phase's own diff
+and confirmed seven defects: an account deletion that destroyed an invited collaborator's project,
+a summarization window that permanently dropped a turn, three IPv6 ranges the new SSRF guard
+missed, a boundary check that could not fail for the third time, a test that passed with zero
+assertions, an audit record written before the event it described, and a comment claiming a race
+guarantee the code did not provide. All seven are fixed, each proven against the old code. That
+closing gaps creates new ones is not a reason to stop closing them; it is the reason the fixes
+get the same scrutiny as the code they replace.
+
 ---
 
 ## Gates, and what each one now proves
@@ -146,7 +156,7 @@ All commands below were run on the commit this file names.
 | `npm run build` | pass | — |
 | `npm run typecheck` | 0 errors | — |
 | `npm run lint` | 0 errors, 6 accepted `no-console` warnings | — |
-| `npm test` | **646 passed, 0 failed, 0 skipped, 79 files** | ffmpeg, clamd and fake-gcs all present — a skip would mean a broken gate |
+| `npm test` | **653 passed, 0 failed, 1 skipped, 79 files** | ffmpeg, clamd and fake-gcs all present. The one skip is a file-symlink case Windows refuses unelevated; it is reported as a skip rather than passed with no assertions, and CI fails the build on any skip |
 | `scripts/verify-boundary.sh` | 9/9 | Every check proven able to FAIL by planting the violation it exists to catch |
 | `scripts/verify-migrations.sh` | 3/3 | Clean empty DB, no drift |
 | `scripts/verify-boot.sh` | 7/7 | Refusal cases now assert the REASON, not merely that health never answered |
@@ -161,11 +171,11 @@ judgement about which file belongs to which feature, and this way the numbers ar
 
 | Workspace | Tests | Workspace | Tests |
 |---|---|---|---|
-| `tools` | 97 | `observability` | 26 |
-| `api` (backend/src) | 79 | `memory` | 25 |
+| `tools` | 104 (+1 skipped) | `observability` | 26 |
+| `api` (backend/src) | 79 | `memory` | 27 |
 | `agent-core` | 51 | `model-router` | 18 |
 | `rag` | 47 | `jobs` | 16 |
-| `security` | 43 | `llm-openai` | 13 |
+| `security` | 46 | `llm-openai` | 13 |
 | `mcp` | 39 | `llm-google` / `llm-local` | 12 / 12 |
 | `media` | 38 | `quota` | 11 |
 | `web` (frontend) | 32 | `llm-anthropic` | 11 |
@@ -173,7 +183,7 @@ judgement about which file belongs to which feature, and this way the numbers ar
 | `shared` | 7 | `scanning` | 7 |
 | `image-mock` | 4 | `database` / `embeddings` | 3 / 3 |
 
-**646 total across 79 files, 0 failed, 0 skipped.** Plus 7 Playwright E2E tests, which run
+**653 passed and 1 skipped across 79 files, 0 failed.** Plus 7 Playwright E2E tests, which run
 against real servers rather than in a workspace.
 
 ---
@@ -235,8 +245,8 @@ with "failed to read dockerfile".
 
 ## Security posture
 
-Sixteen defects have been found and fixed across the two audit cycles, each **demonstrated
-before being fixed**:
+Eighteen defects have been found and fixed across the audit cycles, each **demonstrated before
+being fixed**:
 
 | Defect | How it was found |
 |---|---|
@@ -256,6 +266,8 @@ before being fixed**:
 | **No code path could grant `is_system_admin`** | The whole `/admin` surface answered 404 to everyone |
 | **The boundary gate's secret check could never fail** | Two real secrets planted in frontend source; still PASS |
 | **SSRF guard bypassed by a hex-spelled IPv4-mapped IPv6 address** | A test written to prove the DECIMAL forms were refused |
+| **SSRF guard missed SIIT-translated, Teredo and site-local IPv6** | Second audit, probing the reviewed guard for ranges it did not name |
+| **Account deletion destroyed an invited collaborator's project** | Second audit: invited a user through the real API, deleted the inviter |
 
 Still true and deliberate: the rate limiter **fails open** (it is a mitigation, not an
 authorization boundary — the malware scanner fails closed, which is the opposite trade for the

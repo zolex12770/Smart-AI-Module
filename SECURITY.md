@@ -33,7 +33,8 @@ which is why nothing noticed — but a route that forgets is now closed anyway.
 
 **An account can be deleted, with its data** (ADR-102, NFR-008). `DELETE /api/v1/auth/account`
 requires the session, the current password and a typed confirmation. Organizations the caller
-solely owns cascade away entirely; ones with other members keep their content and only the
+solely owns cascade away entirely; ones with any other member — by organization OR project
+membership, which the first version got wrong (ADR-107) — keep their content and only the
 caller's access ends. Storage objects are removed after the database commits, and any that could
 not be removed are reported in the response rather than swallowed.
 
@@ -169,6 +170,12 @@ behind a proxy.
 
 ## What is NOT protected — read this before deploying
 
+- **The first-administrator bootstrap is not mutually exclusive across replicas.** Its
+  empty-table check is a plain SELECT under READ COMMITTED, so two replicas booting at the same
+  instant with DIFFERENT `BOOTSTRAP_ADMIN_EMAIL` values could both create an administrator (the
+  same email collides on a unique index). It can never promote anyone on a database that already
+  has committed users, which is what makes the variables inert after first boot. An earlier comment
+  claimed stronger; it was wrong and has been corrected. Set the bootstrap variables on one replica.
 - **The rate limiter fails open.** Counters are shared across instances via Postgres (ADR-071), so
   N instances enforce one limit rather than N — but if the database is unreachable the request is
   allowed and the error is logged. That is deliberate and opposite to the malware scanner's
@@ -186,7 +193,8 @@ behind a proxy.
 - **SSRF is guarded, not eliminated.** `web.fetch` (ADR-104) exists now, so the protections it
   used to be exempt from are implemented: http(s) only, every resolved address checked against the
   private/loopback/link-local/carrier-NAT/multicast/reserved ranges in both IP families (including
-  the `::ffff:` mapped and NAT64/6to4 forms), the socket pinned to the validated address so DNS
+  the `::ffff:` mapped, SIIT-translated, NAT64, 6to4 and Teredo forms, and site-local), the socket
+  pinned to the validated address so DNS
   rebinding cannot redirect it, redirects followed by hand with every hop revalidated, and a byte
   cap. Verified by refusing `169.254.169.254`, `localhost` (via `::1`), `10.0.0.1` and `file://`
   against a live process. What remains: a host on a public address that PROXIES to a private one

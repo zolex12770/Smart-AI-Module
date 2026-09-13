@@ -1736,3 +1736,35 @@ The direction that matters is the other one. A stale server can just as easily P
 **Date:** 2026-09-12
 **Impact:** `frontend/playwright.config.ts`.
 
+## ADR-106: Boundary check 2 is a parser; a test that cannot run is reported as skipped
+
+**Decision:** `scripts/check-shared-imports.mjs` judges each import/export statement whole; `verify-boundary.sh` delegates check 2 to it. The file-symlink containment case uses `it.skipIf(!FILE_SYMLINKS_SUPPORTED)`, probed at collection time.
+
+**Check 2 could not fail, for the third time.** The first version anchored with `^` inside an ERE alternation group, which does not anchor. The second was `grep "@ai-platform/shared" | grep -E "import|require" | grep -v "import type"` — and a multi-line import puts the package name on the `} from "@ai-platform/shared";` line, which contains neither `import` nor `require`, so the second filter discarded the only line that mattered. A real value import split across lines passed, proven by planting one. A statement that spans lines cannot be judged by a tool that reads one line at a time, so this one no longer tries: whitespace is normalised, each statement is matched whole, and an import is type-only when the statement is `import type` or every named binding carries an inline `type`. Proven against eight planted shapes: single-line, multi-line, re-export, default and mixed value+type imports are caught; `import type`, `{ type A, type B }` and multi-line `import type` are allowed.
+
+**A test passed with zero assertions.** On a platform that refuses file symlinks it caught the error, logged, and `return`ed — which vitest counts as a pass, on the platform this repository is developed on. Reported as a skip instead, it is visible locally, and on Linux CI it runs; the zero-skip gate fails the build if it ever skips there. The honest local count is therefore 1 skipped, and the documents say so rather than keep a "0 skipped" that was only true because a test lied.
+
+**Date:** 2026-09-13
+**Impact:** `scripts/check-shared-imports.mjs` (new), `scripts/verify-boundary.sh`, `backend/packages/tools/src/native/search-isolation.test.ts`.
+
+## ADR-107: Fixes to the fixes — a second audit of this phase's own diff
+
+**Decision:** Five defects in code written this phase are fixed, and one false comment corrected, each proven against the old code.
+
+A second independent audit read only this phase's diff rather than the old tree. It confirmed seven findings; ADR-106 covers two. The rest:
+
+**Account deletion destroyed an invited collaborator's work (P1).** The sole-ownership test (ADR-102) queried only `organization_members`. But `addProjectMember` — the API's only way to invite someone — writes a `project_members` row and no organization row, and `authorizeProject` grants full access from that row alone. So an invited collaborator was invisible, and deleting the inviter cascade-deleted the shared project and every message in it. The covering test passed only because it hand-inserted the organization row the API never writes. "Member" now means either route, and the test uses the real invite path.
+
+**Summarization permanently dropped a turn (P2).** ADR-103 stored `covered` as a prompt-array position (`lead + aged.length`) and read it back as a turn offset (`covered - lead`). Those cancel only when `lead` is equal on both requests, and it is not — long-term memory prepends its system message only when retrieval matched something. On a 1 -> 0 transition one aged turn was in neither the summary nor the live window. The count is now in turns.
+
+**The SSRF guard missed three IPv6 ranges (P2).** ADR-104's parser unwrapped `::ffff:0:0/96` and `::/96` but not SIIT's `::ffff:0:0:0/96` (`::ffff:0:7f00:1` is loopback), and did not name Teredo `2001::/32` or site-local `fec0::/10`. All three are blocked, with Teredo's `2001:1::/32` neighbour asserted not blocked.
+
+**The deletion audit row asserted success before the deletion ran (P2).** A rollback would have left a permanent record of a deletion that never happened. It is now written after, with a null user id, the email, and the counts of what was actually destroyed; a failed deletion writes nothing, asserted by test.
+
+**A comment claimed a race guarantee the code did not have (P2).** `bootstrapSystemAdmin`'s emptiness check is a plain SELECT under READ COMMITTED; two replicas booting at once with different bootstrap emails could both win. The comment now says exactly that, and SECURITY.md lists it. An advisory lock would close it and was deliberately not added in the same change that discovered the claim was false.
+
+The lesson is ADR-104's amendment again, generalised: new code written to close a gap gets the same suspicion as the code it replaces, because six of these seven were in exactly that code.
+
+**Date:** 2026-09-13
+**Impact:** `backend/packages/database/src/repositories/account-deletion.ts`, `backend/packages/security/src/auth-service.ts`, `backend/packages/memory/src/conversation-window.ts`, `backend/packages/tools/src/native/web.ts` + 9 tests.
+
