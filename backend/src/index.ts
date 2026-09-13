@@ -77,7 +77,7 @@ import {
 import { sql } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
-import { loadConfig, type AppConfig } from "./config.js";
+import { loadConfig, type AppConfig, resolveListenHost } from "./config.js";
 import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 import type { AppContext } from "./context.js";
 import { roleRuns, type RoleResponsibilities } from "./role.js";
@@ -1120,7 +1120,7 @@ async function main() {
     { name: "database", close: closeDb },
   ]);
 
-  await app.listen({ port: config.PORT, host: "0.0.0.0" });
+  await app.listen({ port: config.PORT, host: resolveListenHost(config) });
 }
 
 /**

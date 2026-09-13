@@ -70,6 +70,14 @@ const optionalString = z.preprocess(
  */
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  /**
+   * The interface to listen on — docs/26_DECISIONS.md ADR-113. Unset: 127.0.0.1 outside production
+   * and 0.0.0.0 in production. It used to be 0.0.0.0 always, so a developer's `npm run dev` served
+   * the whole LAN: anyone on the network could sign up, own a project, approve their own tool calls
+   * and run model-authored commands under development's default process-level isolation. A
+   * container still needs 0.0.0.0 to receive its platform's traffic, and production gets exactly that.
+   */
+  HOST: optionalString,
   PORT: z.coerce.number().int().positive().default(8787),
   // docs/26_DECISIONS.md ADR-039 — which responsibilities this process takes on (see role.ts).
   // Defaults to "all" so local dev (where PGlite permits only one process per data dir,
@@ -291,6 +299,11 @@ const envSchema = z.object({
   });
 
 export type AppConfig = z.infer<typeof envSchema>;
+
+/** The interface to listen on (ADR-113): an explicit HOST, otherwise loopback outside production. */
+export function resolveListenHost(config: Pick<AppConfig, "HOST" | "NODE_ENV">): string {
+  return config.HOST ?? (config.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1");
+}
 
 export function loadConfig(): AppConfig {
   const envFiles = loadDotEnvFiles();
