@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Conversation } from "@ai-platform/database";
 import type { ChatMessage } from "@ai-platform/shared";
-import { applyConversationWindow, type ConversationWindowDeps } from "./conversation-window.js";
+import {
+  applyConversationWindow,
+  conversationFingerprint,
+  renderTranscriptLine,
+  type ConversationWindowDeps,
+} from "./conversation-window.js";
 
 /**
  * FR-030 — docs/26_DECISIONS.md ADR-103.
@@ -22,6 +27,7 @@ const conversation = (over: Partial<Conversation> = {}): Conversation => ({
   title: null,
   summary: null,
   summarizedMessageCount: 0,
+  summaryFingerprint: null,
   createdAt: new Date("2026-01-01T00:00:00Z"),
   updatedAt: new Date("2026-01-01T00:00:00Z"),
   deletedAt: null,
@@ -73,7 +79,7 @@ describe("applyConversationWindow", () => {
   it("persists the summary and how much of the history it covers", async () => {
     const d = deps();
     await applyConversationWindow(d, { projectId: "proj-1", conversation: conversation(), messages: turns(12) }, OPTS);
-    expect(d.updateSummary).toHaveBeenCalledWith("proj-1", "conv-1", "ROLLING SUMMARY", 8);
+    expect(d.updateSummary).toHaveBeenCalledWith("proj-1", "conv-1", "ROLLING SUMMARY", 8, conversationFingerprint(turns(12).slice(0, 8)));
   });
 
   it("never folds a leading system message into the summary", async () => {
@@ -95,7 +101,7 @@ describe("applyConversationWindow", () => {
     const messages = turns(16);
     await applyConversationWindow(
       d,
-      { projectId: "proj-1", conversation: conversation({ summary: "FIRST SUMMARY", summarizedMessageCount: 8 }), messages },
+      { projectId: "proj-1", conversation: conversation({ summary: "FIRST SUMMARY", summarizedMessageCount: 8, summaryFingerprint: conversationFingerprint(messages.slice(0, 8)) }), messages },
       OPTS
     );
 
@@ -113,7 +119,7 @@ describe("applyConversationWindow", () => {
     const messages = turns(12);
     const result = await applyConversationWindow(
       d,
-      { projectId: "proj-1", conversation: conversation({ summary: "STORED", summarizedMessageCount: 8 }), messages },
+      { projectId: "proj-1", conversation: conversation({ summary: "STORED", summarizedMessageCount: 8, summaryFingerprint: conversationFingerprint(messages.slice(0, 8)) }), messages },
       OPTS
     );
 
@@ -129,16 +135,17 @@ describe("applyConversationWindow", () => {
     const messages = turns(12);
     const result = await applyConversationWindow(
       d,
-      { projectId: "proj-1", conversation: conversation({ summary: "OLD", summarizedMessageCount: 4 }), messages },
+      { projectId: "proj-1", conversation: conversation({ summary: "OLD", summarizedMessageCount: 4, summaryFingerprint: conversationFingerprint(messages.slice(0, 4)) }), messages },
       OPTS
     );
 
     // A chat request must not fail because a bookkeeping call did.
     expect(result.error).toContain("provider unavailable");
     expect(result.summarized).toBe(false);
-    // It still shrank the prompt, using the summary it already had.
+    // It keeps the summary it already had AND the turns that summary does not cover, verbatim.
+    // Dropping them because the bookkeeping call failed was the silent-loss defect (ADR-110).
     expect(result.messages[0].content).toContain("OLD");
-    expect(result.messages).toHaveLength(5);
+    expect(result.messages.slice(1)).toEqual(messages.slice(4));
     expect(d.updateSummary).not.toHaveBeenCalled();
   });
 
@@ -181,7 +188,11 @@ describe("applyConversationWindow", () => {
       d,
       {
         projectId: "proj-1",
-        conversation: conversation({ summary: "SUMMARY", summarizedMessageCount: storedAfterFirst }),
+        conversation: conversation({
+          summary: "SUMMARY",
+          summarizedMessageCount: storedAfterFirst,
+          summaryFingerprint: d.updateSummary.mock.calls.at(-1)![4] as string,
+        }),
         messages: [...history, ...turns(2, "later")],
       },
       OPTS
@@ -206,7 +217,79 @@ describe("applyConversationWindow", () => {
     );
     // 12 turns, 4 live -> 8 aged. The stored count is 8, not 9: it does not include the preamble,
     // which was never summarized.
-    expect(d.updateSummary).toHaveBeenCalledWith("proj-1", "conv-1", "ROLLING SUMMARY", 8);
+    expect(d.updateSummary).toHaveBeenCalledWith("proj-1", "conv-1", "ROLLING SUMMARY", 8, expect.any(String));
   });
 
+  it("never starts the live window on a tool result, so no call is separated from its results (ADR-110)", async () => {
+    const d = deps();
+    const long = "x".repeat(400);
+    const messages: ChatMessage[] = [
+      { role: "user", content: "u0 " + long },
+      { role: "assistant", content: "a0 " + long },
+      { role: "user", content: "u1 " + long },
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "lookup", arguments: { q: 1 } }, { id: "c2", name: "lookup", arguments: { q: 2 } }] },
+      { role: "tool", content: "r1 " + long, toolCallId: "c1", name: "lookup" },
+      { role: "tool", content: "r2 " + long, toolCallId: "c2", name: "lookup" },
+      { role: "assistant", content: "a2 " + long },
+      { role: "user", content: "u2 " + long },
+    ];
+    const result = await applyConversationWindow(d, { projectId: "proj-1", conversation: conversation(), messages }, OPTS);
+
+    const seenCalls = new Set<string>();
+    for (const m of result.messages) {
+      for (const c of m.toolCalls ?? []) seenCalls.add(c.id);
+      if (m.role === "tool") expect(seenCalls.has(m.toolCallId as string), `orphan result ${m.toolCallId}`).toBe(true);
+    }
+  });
+
+  it("writes tool calls and results into the summarizer transcript instead of an empty 'assistant: '", () => {
+    expect(renderTranscriptLine({ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "weather", arguments: { city: "Paris" } }] }))
+      .toBe('assistant: [called weather({"city":"Paris"}) [call c1]]');
+    expect(renderTranscriptLine({ role: "tool", content: "18C", toolCallId: "c1", name: "weather" })).toBe("tool weather [call c1]: 18C");
+  });
+
+  it("discards a stored summary when the sent history no longer matches it, losing no turn (ADR-110)", async () => {
+    // The stored summary covers 8 turns of branch A; the client now sends branch B. With a count
+    // alone, the summary of A was reused and B's aged turns vanished.
+    const d = deps("SUMMARY OF B");
+    const branchA = turns(12, "A");
+    const branchB = turns(14, "B");
+    const result = await applyConversationWindow(
+      d,
+      {
+        projectId: "proj-1",
+        conversation: conversation({ summary: "SUMMARY OF A", summarizedMessageCount: 8, summaryFingerprint: conversationFingerprint(branchA.slice(0, 8)) }),
+        messages: branchB,
+      },
+      OPTS
+    );
+
+    expect(result.invalidated).toBe(true);
+    const call = d.summarize.mock.calls[0][0];
+    expect(call.previousSummary).toBeNull();
+    for (let i = 0; i < 10; i++) expect(call.transcript).toContain(`B${i} `);
+    expect(JSON.stringify(result.messages)).not.toContain("SUMMARY OF A");
+  });
+
+  it("rejects an empty summary instead of advancing past turns it never covered (ADR-110)", async () => {
+    const d = deps("  \n ");
+    const messages = turns(12);
+    const result = await applyConversationWindow(d, { projectId: "proj-1", conversation: conversation(), messages }, OPTS);
+
+    expect(result.error).toMatch(/empty summary/);
+    expect(d.updateSummary).not.toHaveBeenCalled();
+    // No summary exists, so every turn travels verbatim.
+    expect(result.messages).toEqual(messages);
+  });
+
+  it("uses a good summary for this request even when storing it fails", async () => {
+    const d = deps("FRESH");
+    d.updateSummary.mockRejectedValueOnce(new Error("write failed"));
+    const messages = turns(12);
+    const result = await applyConversationWindow(d, { projectId: "proj-1", conversation: conversation(), messages }, OPTS);
+
+    expect(result.error).toMatch(/not stored/);
+    expect(result.messages[0].content).toContain("FRESH");
+    expect(result.messages.slice(1)).toEqual(messages.slice(8));
+  });
 });

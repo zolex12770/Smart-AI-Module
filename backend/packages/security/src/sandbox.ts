@@ -204,6 +204,55 @@ export class ProcessSandbox extends BaseSandbox {
 }
 
 /**
+ * The exact `docker run` argument vector for one sandboxed command — docs/26_DECISIONS.md
+ * ADR-111.
+ *
+ * Extracted so the isolation flags are ASSERTED rather than reviewed. The status documents
+ * claimed "flag construction verified" and "unit only" for the Docker sandbox while no test
+ * constructed a DockerSandbox at all; the documented verification command passed on a machine
+ * with no Docker installed. Every flag below is now pinned by a test, and the real-container
+ * behaviour by a separate suite that fails, rather than skips, when docker is unusable.
+ */
+export function dockerRunArgs(
+  root: string,
+  image: string,
+  request: SandboxRunRequest,
+  limits: SandboxLimits
+): string[] {
+  const workdir = assertContained(root, request.workdir);
+  const envArgs = Object.entries(request.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
+  return [
+    "run",
+    "--rm",
+    "--network",
+    "none",
+    "--read-only",
+    "--tmpfs",
+    "/tmp:rw,noexec,nosuid,size=64m",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges",
+    "--pids-limit",
+    String(limits.pids),
+    "-m",
+    `${limits.memoryMb}m`,
+    "--cpus",
+    String(limits.cpus),
+    "--user",
+    "1000:1000",
+    "-v",
+    `${workdir}:/workspace:rw`,
+    "-w",
+    "/workspace",
+    ...envArgs,
+    image,
+    request.command,
+    ...request.args,
+  ];
+}
+
+/**
  * Production isolation. Every flag here is a deliberate control:
  * `--network none` (no egress at all), `--read-only` with a tmpfs `/tmp` (no host writes
  * outside the mounted workspace), `--cap-drop ALL` and `--security-opt no-new-privileges`
@@ -222,37 +271,7 @@ export class DockerSandbox extends BaseSandbox {
   }
 
   protected spawnChild(request: SandboxRunRequest, limits: SandboxLimits): ChildProcess {
-    const workdir = assertContained(this.root, request.workdir);
-    const envArgs = Object.entries(request.env ?? {}).flatMap(([k, v]) => ["-e", `${k}=${v}`]);
-    const args = [
-      "run",
-      "--rm",
-      "--network",
-      "none",
-      "--read-only",
-      "--tmpfs",
-      "/tmp:rw,noexec,nosuid,size=64m",
-      "--cap-drop",
-      "ALL",
-      "--security-opt",
-      "no-new-privileges",
-      "--pids-limit",
-      String(limits.pids),
-      "-m",
-      `${limits.memoryMb}m`,
-      "--cpus",
-      String(limits.cpus),
-      "--user",
-      "1000:1000",
-      "-v",
-      `${workdir}:/workspace:rw`,
-      "-w",
-      "/workspace",
-      ...envArgs,
-      this.image,
-      request.command,
-      ...request.args,
-    ];
+    const args = dockerRunArgs(this.root, this.image, request, limits);
     return spawn(this.dockerPath, args, {
       env: baseEnv(),
       shell: false,

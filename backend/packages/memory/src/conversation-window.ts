@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ChatMessage } from "@ai-platform/shared";
 import type { Conversation, ConversationRepository } from "@ai-platform/database";
 
@@ -19,7 +20,7 @@ import type { Conversation, ConversationRepository } from "@ai-platform/database
  *   [ one system message holding the summary of everything older ]
  *   [ the last N turns, verbatim ]
  *
- * Three details are load-bearing:
+ * Four details are load-bearing:
  *
  *  - **Leading system messages are never summarized.** Long-term memory injects its context as a
  *    system message ahead of the turns (ADR-063). Folding that into a summary would quietly
@@ -30,10 +31,15 @@ import type { Conversation, ConversationRepository } from "@ai-platform/database
  *    newly aged out. Re-summarizing the whole history every time would cost tokens proportional
  *    to the conversation on every single request.
  *
- *  - **A failed summarization degrades, it does not throw.** If the summarizer fails, the live
- *    window is returned with whatever summary was already stored. A chat request must not fail
- *    because a bookkeeping call did; the worst case is the model seeing less history, which is
- *    exactly the situation that existed before this code.
+ *  - **A failed summarization degrades, it does not throw — and it loses nothing.** If the
+ *    summarizer fails, the stored summary is used (when still valid) and every turn it does not
+ *    cover is sent verbatim (ADR-110). A chat request must not fail because a bookkeeping call did,
+ *    and the cost of that is a larger prompt, never a silently shorter history.
+ *
+ *  - **A stored summary is trusted only for the history it was built from.** Its fingerprint must
+ *    match the turns it claims to cover; an edited, branched or reloaded history rebuilds it
+ *    instead (ADR-110). The live window never begins on a tool result, so no call is separated
+ *    from the results a provider requires it to precede.
  */
 export interface ConversationWindowDeps {
   conversationRepo: Pick<ConversationRepository, "updateSummary">;
@@ -64,6 +70,11 @@ export interface ConversationWindowResult {
   summarizedMessageCount: number;
   /** Set when summarization was attempted and failed; the caller should log it. */
   error?: string;
+  /**
+   * True when a stored summary was DISCARDED because the history this request sent no longer
+   * matches the turns it was built from (ADR-110). The caller should log it.
+   */
+  invalidated?: boolean;
 }
 
 const DEFAULTS = {
@@ -86,6 +97,47 @@ const DEFAULTS = {
 const defaultEstimate = (text: string): number => Math.ceil(text.length / 4);
 
 const SUMMARY_PREFIX = "Summary of the earlier part of this conversation";
+
+/**
+ * A stable hash over a run of turns — ADR-110.
+ *
+ * Everything that makes a turn the same turn is included: role, content, and the tool-call identity
+ * a provider pairs results with. Two histories share a fingerprint only if the model would see the
+ * same conversation.
+ */
+export function conversationFingerprint(turns: readonly ChatMessage[]): string {
+  const hash = createHash("sha256");
+  for (const m of turns) {
+    hash.update(
+      JSON.stringify([
+        m.role,
+        m.content,
+        m.toolCallId ?? null,
+        m.name ?? null,
+        (m.toolCalls ?? []).map((c) => [c.id, c.name, c.arguments]),
+      ])
+    );
+    hash.update("\n");
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * One transcript line for the summarizer — ADR-110.
+ *
+ * It used to render `role: content` only, so an assistant turn that was purely tool calls became
+ * `assistant: ` and every call's name, arguments and id vanished from the summary.
+ */
+export function renderTranscriptLine(m: ChatMessage): string {
+  if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+    const calls = m.toolCalls.map((c) => `${c.name}(${JSON.stringify(c.arguments)}) [call ${c.id}]`).join("; ");
+    return `assistant: ${m.content ? m.content + " " : ""}[called ${calls}]`;
+  }
+  if (m.role === "tool") {
+    return `tool ${m.name ?? "result"} [call ${m.toolCallId ?? "unknown"}]: ${m.content}`;
+  }
+  return `${m.role}: ${m.content}`;
+}
 
 export async function applyConversationWindow(
   deps: ConversationWindowDeps,
@@ -119,34 +171,70 @@ export async function applyConversationWindow(
     return unchanged;
   }
 
-  const aged = turns.slice(0, turns.length - liveWindowMessages);
-  const live = turns.slice(turns.length - liveWindowMessages);
+  // Never start the live window on a tool result (ADR-110). A plain index cut could land between an
+  // assistant turn carrying toolCalls and its results, summarizing the call away and sending the
+  // results with no call — a request OpenAI and Anthropic both reject with a 400, and one a client
+  // retrying the same history would hit forever. The cut moves back to take the whole exchange live.
+  let split = turns.length - liveWindowMessages;
+  while (split > 0 && turns[split].role === "tool") split--;
+  if (split <= 0) return unchanged;
 
-  let summary = conversation.summary;
-  let covered = conversation.summarizedMessageCount;
+  const aged = turns.slice(0, split);
+  const live = turns.slice(split);
+
+  // Counted in TURNS, and TRUSTED ONLY IF THE PREFIX MATCHES (ADR-110). A stored count is a position
+  // in whatever array an earlier request sent. The web client keeps a failed turn's error text in its
+  // list but the server never stores it, so a reload shortens the history by one; an API client can
+  // edit or branch it. Either way `aged.slice(count)` then pointed at the wrong turns: one was
+  // silently lost, or the model got a summary of a branch that was no longer in the conversation.
+  // The fingerprint proves the covered prefix is unchanged; otherwise the summary is rebuilt.
+  const storedCount = conversation.summarizedMessageCount;
+  const storedValid =
+    Boolean(conversation.summary) &&
+    storedCount > 0 &&
+    storedCount <= aged.length &&
+    conversation.summaryFingerprint !== null &&
+    conversationFingerprint(aged.slice(0, storedCount)) === conversation.summaryFingerprint;
+  const invalidated = Boolean(conversation.summary) && !storedValid;
+
+  let summary = storedValid ? conversation.summary : null;
+  let covered = storedValid ? storedCount : 0;
   let summarized = false;
   let error: string | undefined;
 
-  // Counted in TURNS, never in prompt-array positions. `covered` used to be stored as
-  // `lead + aged.length` and read back as `aged.slice(covered - lead)`, which only cancels when
-  // `lead` is the same on both requests — and it is not: `withMemoryContext` prepends its system
-  // message ONLY when retrieval matched something, so `lead` flips between 0 and 1 from one
-  // request to the next (a client-supplied system message does the same). On a 1 -> 0 transition
-  // one aged turn fell into neither the summary nor the live window and was silently lost from
-  // the model's view; on 0 -> 1 a covered turn was summarized twice. The count is now relative to
-  // the turns alone, so the preamble's presence cannot shift it.
-  const newlyAged = aged.slice(Math.min(covered, aged.length));
+  const newlyAged = aged.slice(covered);
   if (newlyAged.length > 0) {
-    const transcript = newlyAged.map((m) => m.role + ": " + m.content).join("\n");
+    const transcript = newlyAged.map(renderTranscriptLine).join("\n");
     try {
-      summary = (await deps.summarize({ previousSummary: summary, transcript })).trim();
+      const produced = (await deps.summarize({ previousSummary: summary, transcript })).trim();
+      // An empty reply is a failure, not a summary (ADR-110). Accepting it advanced the count past
+      // turns that were then in neither the summary nor the prompt, and they were never revisited.
+      if (!produced) throw new Error("The summarizer returned an empty summary; nothing was stored.");
+      summary = produced;
       covered = aged.length;
       summarized = true;
-      await deps.conversationRepo.updateSummary(input.projectId, conversation.id, summary, covered);
+      try {
+        await deps.conversationRepo.updateSummary(
+          input.projectId,
+          conversation.id,
+          produced,
+          covered,
+          conversationFingerprint(aged)
+        );
+      } catch (err) {
+        // The summary is good and is used for THIS request; the next one re-summarizes.
+        error = "summary produced but not stored: " + (err instanceof Error ? err.message : String(err));
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
     }
   }
+
+  // Turns the summary does not cover travel verbatim. Non-empty only when summarization failed — and
+  // dropping them in that case was the original silent-loss defect (ADR-110). They cannot begin with
+  // an orphaned tool result: a stored count is always a previous split point, which is never a tool
+  // result, and the fingerprint proves this is the same history, so `aged[covered]` is not one either.
+  const uncovered = aged.slice(covered);
 
   const summaryMessage: ChatMessage[] = summary
     ? [
@@ -161,10 +249,11 @@ export async function applyConversationWindow(
     : [];
 
   return {
-    messages: [...preamble, ...summaryMessage, ...live],
+    messages: [...preamble, ...summaryMessage, ...uncovered, ...live],
     summarized,
     summary,
     summarizedMessageCount: covered,
+    ...(invalidated ? { invalidated } : {}),
     ...(error ? { error } : {}),
   };
 }

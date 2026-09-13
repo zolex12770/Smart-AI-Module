@@ -218,6 +218,13 @@ export const conversations = pgTable(
     summary: text("summary"),
     /** How many messages the summary already covers, so summarization is incremental. */
     summarizedMessageCount: integer("summarized_message_count").notNull().default(0),
+    /**
+     * SHA-256 over the turns the summary covers (ADR-110). A count alone is a POSITION in whatever
+     * array the client sent, so an edited, branched or reloaded history silently misaligned it and
+     * turns fell into neither the summary nor the live window. The fingerprint lets a request
+     * prove the prefix it is about to trust is the prefix that was summarized.
+     */
+    summaryFingerprint: text("summary_fingerprint"),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),

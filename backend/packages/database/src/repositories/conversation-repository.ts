@@ -20,6 +20,8 @@ export interface Conversation {
   summary: string | null;
   /** How many messages `summary` already covers, so summarization stays incremental. */
   summarizedMessageCount: number;
+  /** SHA-256 over the covered turns, so a request can check the prefix it trusts (ADR-110). */
+  summaryFingerprint: string | null;
   createdAt: Date;
   updatedAt: Date;
   /** Always null on anything a read returns — soft-deleted rows are excluded in SQL. */
@@ -54,7 +56,13 @@ export interface ConversationRepository {
    * Returns false when the conversation is not in this project or is already deleted, so a
    * caller can distinguish "nothing to update" from "updated" without a second read.
    */
-  updateSummary(projectId: string, id: string, summary: string, summarizedMessageCount: number): Promise<boolean>;
+  updateSummary(
+    projectId: string,
+    id: string,
+    summary: string,
+    summarizedMessageCount: number,
+    summaryFingerprint: string | null
+  ): Promise<boolean>;
   /**
    * Soft delete (schema `deleted_at`): the row stays readable to an admin for audit, and
    * `messages` rows are not orphaned by a cascade. Returns false if nothing matched.
@@ -74,6 +82,7 @@ export class PgConversationRepository implements ConversationRepository {
       title: input.title ?? null,
       summary: null,
       summarizedMessageCount: 0,
+      summaryFingerprint: null,
       createdAt: now,
       // Set on create as well as on every update (ADR-049) — a row whose `updated_at` is
       // null-or-absent until the first edit makes "recently active" queries lie.
@@ -118,11 +127,12 @@ export class PgConversationRepository implements ConversationRepository {
     projectId: string,
     id: string,
     summary: string,
-    summarizedMessageCount: number
+    summarizedMessageCount: number,
+    summaryFingerprint: string | null
   ): Promise<boolean> {
     const updated = await this.db
       .update(conversations)
-      .set({ summary, summarizedMessageCount, updatedAt: new Date() })
+      .set({ summary, summarizedMessageCount, summaryFingerprint, updatedAt: new Date() })
       .where(
         and(eq(conversations.id, id), eq(conversations.projectId, projectId), isNull(conversations.deletedAt))
       )

@@ -15,6 +15,13 @@
       "when": 1788610040150,
       "tag": "0001_lazy_hairball",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789295559019,
+      "tag": "0002_remarkable_celestials",
+      "breakpoints": true
     }
   ]
 }

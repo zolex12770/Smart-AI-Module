@@ -178,6 +178,9 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
             let usage: { inputTokens: number; outputTokens: number } | null = null;
             let usedProvider = "";
             let usedModel = "";
+            // A summary cut off at the output limit is stored as complete by nothing (ADR-110): it
+            // would become the base of every later pass, and its missing tail would be lost for good.
+            let truncated = false;
             for await (const event of ctx.router.streamChat({
               messages: [
                 { role: "system", content: CONVERSATION_SUMMARY_PROMPT },
@@ -192,6 +195,7 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 usage = event.usage;
                 usedProvider = event.provider;
                 usedModel = event.model;
+                if (event.finishReason === "length") truncated = true;
               } else if (event.type === "error") throw new Error(event.message);
             }
 
@@ -208,11 +212,16 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 units: null,
                 estimatedCostUsd: estimateLlmCostUsd(usedProvider, usedModel, usage),
                 requestId: request.id,
-                // One summarization pass per generation of the summary. The count BEFORE this
-                // pass is unique to it, so a retry conflicts rather than charging twice.
-                idempotencyKey:
-                  "llm:summary:" + conversation.id + ":" + String(conversation.summarizedMessageCount),
+                // One key per PROVIDER CALL (ADR-110). It was the conversation id plus the stored
+                // count, which two real calls share whenever they start from the same count — two
+                // tabs, or a pass whose summary failed to persist — and a conflict on this unique
+                // index silently DROPS the second call's real tokens. `summarize` runs once per
+                // request and is never retried, so a fresh key cannot double-charge anything.
+                idempotencyKey: "llm:summary:" + uuid(),
               });
+            }
+            if (truncated) {
+              throw new Error("The summary was cut off at the output limit; it was not stored.");
             }
             return text;
           },
@@ -237,6 +246,16 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
             prompt_messages: windowed.messages.length,
           },
           "conversation summarized: older turns replaced by a rolling summary"
+        );
+      }
+
+      if (windowed.invalidated) {
+        // The history this request sent no longer matches the turns the stored summary was built
+        // from — an edited, branched or reloaded conversation (ADR-110). The summary was rebuilt
+        // (or, if that failed, the turns were sent verbatim) instead of being trusted.
+        request.log.warn(
+          { request_id: request.id, conversation_id: conversation.id },
+          "stored conversation summary discarded: the history sent no longer matches it"
         );
       }
 

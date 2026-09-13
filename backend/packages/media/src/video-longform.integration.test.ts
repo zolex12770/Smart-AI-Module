@@ -19,7 +19,7 @@ import { v4 as uuid } from "uuid";
 import { LocalAssetStore } from "./asset-store.js";
 import { processVideoRender } from "./video-render.js";
 import { ffprobePathFor, measureAudioDurationSeconds } from "./subtitles.js";
-import { SapiSpeechProvider, type SpeechProvider } from "./speech.js";
+import { SapiSpeechProvider, type SpeechProvider, type SpeechRequest, type SpeechResult } from "./speech.js";
 
 /**
  * docs/26_DECISIONS.md ADR-079/080/081 — the long-form pipeline's audio and subtitle stages,
@@ -52,17 +52,67 @@ function buildSupportsComposition(binary: string): boolean {
 }
 
 const hasFfmpeg = Boolean(FFMPEG) && buildSupportsComposition(FFMPEG as string);
-const hasSpeech = SapiSpeechProvider.isAvailable();
+/**
+ * Real speech where the platform has a synthesiser; a deterministic PCM tone everywhere else —
+ * docs/26_DECISIONS.md ADR-111.
+ *
+ * This suite used to skip whenever `SapiSpeechProvider.isAvailable()` was false, which is every
+ * non-Windows machine — including the Linux CI runner, whose zero-skip gate then failed the build on
+ * every run. What the suite verifies is the COMPOSITION stage: that narration audio and subtitles are
+ * muxed into a playable MP4 with timings that match the audio actually produced. That needs real
+ * audio bytes of a known duration, not a particular voice. A generated WAV of a length derived from
+ * the text exercises the same ffprobe measurement, the same concat and the same mov_text path.
+ *
+ * It is a test fixture and says so (`isMock: true`); it is never constructed outside this file.
+ * SAPI itself is still used, and so still exercised, wherever it exists.
+ */
+function pcmWav(seconds: number, sampleRate = 22_050): Buffer {
+  const sampleCount = Math.round(seconds * sampleRate);
+  const data = Buffer.alloc(sampleCount * 2);
+  for (let i = 0; i < sampleCount; i++) {
+    data.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 220 * i) / sampleRate) * 6000), i * 2);
+  }
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + data.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(data.length, 40);
+  return Buffer.concat([header, data]);
+}
 
-if (!hasFfmpeg || !hasSpeech) {
+class PcmToneSpeechProvider implements SpeechProvider {
+  readonly name = "test-pcm-tone";
+  readonly isMock = true;
+  async listVoices(): Promise<string[]> {
+    return ["tone"];
+  }
+  async synthesize(request: SpeechRequest): Promise<SpeechResult> {
+    // Longer text, longer audio — so per-scene subtitle timings genuinely differ.
+    const seconds = Math.max(1, Math.min(8, request.text.length * 0.06));
+    return { bytes: pcmWav(seconds), mimeType: "audio/wav", ext: "wav" };
+  }
+}
+
+const speechIsReal = SapiSpeechProvider.isAvailable();
+
+if (!hasFfmpeg) {
   // eslint-disable-next-line no-console
   console.warn(
-    `\n  SKIPPING the long-form composition tests: ffmpeg(aac+mov_text)=${hasFfmpeg}, speech=${hasSpeech}.\n` +
-      "  Set FFMPEG_TEST_PATH to a general-purpose ffmpeg; speech needs a platform synthesiser.\n"
+    `\n  SKIPPING the long-form composition tests: ffmpeg(aac+mov_text)=${hasFfmpeg}.\n` +
+      "  Set FFMPEG_TEST_PATH to a general-purpose ffmpeg.\n"
   );
 }
 
-describe.skipIf(!hasFfmpeg || !hasSpeech)("long-form video: narration + subtitles (ADR-079/081)", () => {
+describe.skipIf(!hasFfmpeg)("long-form video: narration + subtitles (ADR-079/081)", () => {
   let db: PgliteDb;
   let assetsRoot: string;
   let store: LocalAssetStore;
@@ -89,7 +139,7 @@ describe.skipIf(!hasFfmpeg || !hasSpeech)("long-form video: narration + subtitle
     store = new LocalAssetStore(assetsRoot, assetRepo);
     projectRepo = new PgVideoProjectRepository(db);
     sceneRepo = new PgVideoSceneRepository(db);
-    speech = new SapiSpeechProvider();
+    speech = speechIsReal ? new SapiSpeechProvider() : new PcmToneSpeechProvider();
   });
 
   afterEach(async () => {
