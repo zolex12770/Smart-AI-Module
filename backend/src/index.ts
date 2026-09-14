@@ -1119,6 +1119,19 @@ async function main() {
     speech,
     speechAvailable: speech !== null,
     audioGenerationAvailable: speech !== null,
+    // Read off the providers actually constructed above, so this cannot drift from what runs
+    // (ADR-124). `technique` is optional on the interface; only the motion provider states one.
+    mediaProviders: {
+      image: imageProvider ? { name: imageProvider.name, isMock: imageProvider.isMock } : null,
+      video: videoProvider
+        ? {
+            name: videoProvider.name,
+            isMock: videoProvider.isMock,
+            technique: "technique" in videoProvider ? String(videoProvider.technique) : null,
+          }
+        : null,
+      speech: speech ? { name: speech.name, isMock: speech.isMock } : null,
+    },
     router: modelRouter,
     conversations: new PgConversationRepository(db),
     messages: new PgMessageRepository(db),

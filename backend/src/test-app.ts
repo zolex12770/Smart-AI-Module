@@ -192,6 +192,11 @@ export async function buildTestApp(): Promise<{
     // behaviour a deployment without a synthesiser has (ADR-114).
     speech,
     speechAvailable: speech !== null,
+    mediaProviders: {
+      image: { name: "mock", isMock: true },
+      video: { name: "mock", isMock: true, technique: null },
+      speech: speech ? { name: speech.name, isMock: speech.isMock } : null,
+    },
     audioGenerationAvailable: speech !== null,
     imageGenerationAvailable: true,
     videoGenerationAvailable: true,

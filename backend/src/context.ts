@@ -91,6 +91,23 @@ export interface AppContext {
   speechAvailable: boolean;
 
   /**
+   * WHICH media provider is in use, and whether it is a mock — docs/26_DECISIONS.md ADR-124.
+   *
+   * `imageGenerationAvailable` and its siblings answer "can this deployment do it at all",
+   * which is not the question a screen has to answer. The Videos page claimed in fixed prose
+   * that every scene was "a real, playable animated GIF" from "a mock clip provider"; once a
+   * real local provider existed that sentence was simply false, and no endpoint exposed
+   * enough for the page to say otherwise. Chat models have carried `isMock` since ADR-065 for
+   * exactly this reason — media now does too, with the video provider's own `technique` line
+   * so an honest ceiling ("motion, not a video model") reaches the person looking at it.
+   */
+  mediaProviders: {
+    image: { name: string; isMock: boolean } | null;
+    video: { name: string; isMock: boolean; technique: string | null } | null;
+    speech: { name: string; isMock: boolean } | null;
+  };
+
+  /**
    * The database handle itself, for the two consumers that are genuinely not repositories:
    * the shared rate-limit store (ADR-071) and the readiness probe. Routes must keep using
    * repositories — those are where the `project_id` predicate that IS the authorization model

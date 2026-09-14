@@ -87,6 +87,32 @@ export const createAudio = (body: { text: string; voice?: string; speed?: number
 export const cancelAudio = (id: string) =>
   request<{ ok: boolean; alreadyRequested: boolean }>(`/api/v1/audio/${id}/cancel`, { method: "POST" });
 
+// --- What is actually configured -------------------------------------------------------
+
+/**
+ * The real provider behind each media capability — docs/26_DECISIONS.md ADR-124.
+ *
+ * A screen that hard-codes "this is a mock" (or "this is real") is wrong the moment the
+ * deployment changes, and both mistakes are bad: one hides a real capability, the other
+ * presents a placeholder as a result.
+ */
+export interface MediaProviderInfo {
+  available: boolean;
+  name?: string;
+  isMock?: boolean;
+  technique?: string | null;
+}
+
+export interface ProvidersResponse {
+  providers: {
+    image: MediaProviderInfo;
+    video: MediaProviderInfo;
+    speech: MediaProviderInfo;
+  };
+}
+
+export const getProviders = () => request<ProvidersResponse>("/api/v1/providers");
+
 // --- Images ----------------------------------------------------------------------------
 
 export interface ImageGeneration {

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { createVideo, listVideos, type VideoProject } from "../lib/api";
+import { createVideo, getProviders, listVideos, type MediaProviderInfo, type VideoProject } from "../lib/api";
 import { StatusBadge } from "../lib/status-badge";
 
 export default function VideosPage() {
@@ -12,6 +12,7 @@ export default function VideosPage() {
   const [sceneClipSeconds, setSceneClipSeconds] = useState(4);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [videoProvider, setVideoProvider] = useState<MediaProviderInfo | null>(null);
 
   function refresh() {
     listVideos()
@@ -23,6 +24,14 @@ export default function VideosPage() {
     refresh();
     const interval = setInterval(refresh, 2000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Asked once: what is actually going to make these clips? The answer decides what this page
+  // is allowed to claim (ADR-124).
+  useEffect(() => {
+    getProviders()
+      .then((r) => setVideoProvider(r.providers.video))
+      .catch(() => setVideoProvider(null));
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
@@ -47,10 +56,23 @@ export default function VideosPage() {
         <div>
           <h1>Long-form video generation</h1>
           <p className="page-subtitle">
-            Scene-decomposition pipeline (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md Part 2) on a mock clip provider
-            (docs/26_DECISIONS.md ADR-030) — each scene is a real, playable animated GIF; final assembly needs
-            ffmpeg installed on the API server, and honestly reports when it isn't.
+            Scene-decomposition pipeline (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md Part 2). Final assembly needs
+            ffmpeg installed on the API server, and honestly reports when it isn&apos;t.
           </p>
+          {videoProvider && (
+            <p className="page-subtitle">
+              Clips come from <strong>{videoProvider.name ?? "no provider"}</strong>
+              {videoProvider.isMock ? (
+                <>
+                  {" "}
+                  — <strong>a mock</strong>: the output is a placeholder animation, not a generated video
+                  (docs/26_DECISIONS.md ADR-030).
+                </>
+              ) : videoProvider.technique ? (
+                <> — {videoProvider.technique}</>
+              ) : null}
+            </p>
+          )}
         </div>
       </div>
 
@@ -70,7 +92,7 @@ export default function VideosPage() {
             />
           </label>
           <label>
-            Scene length (s, max 8 for the mock provider)
+            Scene length (s, max 8)
             <input
               type="number"
               min={2}

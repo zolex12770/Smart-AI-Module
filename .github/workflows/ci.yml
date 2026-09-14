@@ -110,6 +110,58 @@ jobs:
           sudo apt-get install -y ffmpeg
           echo "FFMPEG_TEST_PATH=$(command -v ffmpeg)" >> "$GITHUB_ENV"
 
+      # Speech. Without these the two piper suites skip, and the zero-skip gate below fails —
+      # which is exactly what it is for: the gate's premise is that every gated binary is
+      # installed here, and for a long time piper was not (ADR-124).
+      - name: Install piper (speech synthesis tests)
+        run: |
+          set -euo pipefail
+          PIPER_TAG=2023.11.14-2
+          curl -sSfL -o /tmp/piper.tar.gz             "https://github.com/rhasspy/piper/releases/download/${PIPER_TAG}/piper_linux_x86_64.tar.gz"
+          mkdir -p /tmp/piper && tar -xzf /tmp/piper.tar.gz -C /tmp/piper
+          VOICES=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium
+          mkdir -p /tmp/piper-voices
+          curl -sSfL -o /tmp/piper-voices/en_US-lessac-medium.onnx "${VOICES}/en_US-lessac-medium.onnx"
+          # piper reads the sample rate and phoneme map from the sidecar; the voice will not
+          # load without it, and the failure looks like a broken binary rather than a missing file.
+          curl -sSfL -o /tmp/piper-voices/en_US-lessac-medium.onnx.json "${VOICES}/en_US-lessac-medium.onnx.json"
+          echo "PIPER_PATH=/tmp/piper/piper/piper" >> "$GITHUB_ENV"
+          echo "PIPER_VOICE=/tmp/piper-voices/en_US-lessac-medium.onnx" >> "$GITHUB_ENV"
+
+      # The diffusion weights are the one genuinely large dependency here, so they are cached
+      # on a key that changes only when the pinned model does. A cache hit costs seconds; a
+      # miss costs one download per key, not one per run.
+      - name: Cache stable-diffusion weights
+        uses: actions/cache@v4
+        with:
+          path: /tmp/sd-models
+          key: sd-turbo-fp16-v1
+
+      - name: Install stable-diffusion.cpp (local image and motion-video tests)
+        run: |
+          set -euo pipefail
+          SD_TAG=master-866-42d6c0a
+          SD_BIN=sd-master-42d6c0a-bin-Linux-Ubuntu-24.04-x86_64.zip
+          curl -sSfL -o /tmp/sdcpp.zip             "https://github.com/leejet/stable-diffusion.cpp/releases/download/${SD_TAG}/${SD_BIN}"
+          mkdir -p /tmp/sdcpp && unzip -q -o /tmp/sdcpp.zip -d /tmp/sdcpp
+          # The release zip extracts FLAT and the binary is `sd-cli`, not `sd`; the archive was
+          # listed to confirm both, because a wrong name here fails as an empty variable rather
+          # than as an error.
+          SD_CLI=$(find /tmp/sdcpp -type f -name sd-cli | head -n1)
+          test -n "$SD_CLI"
+          chmod +x "$SD_CLI"
+          # The shared objects sit beside the binary; the provider puts that directory on
+          # LD_LIBRARY_PATH itself, so nothing else needs to move.
+          mkdir -p /tmp/sd-models
+          if [ ! -f /tmp/sd-models/sd_turbo.safetensors ]; then
+            curl -sSfL -o /tmp/sd-models/sd_turbo.safetensors               "https://huggingface.co/stabilityai/sd-turbo/resolve/main/sd_turbo.safetensors"
+          fi
+          echo "IMAGE_SD_CLI_PATH=$SD_CLI" >> "$GITHUB_ENV"
+          echo "IMAGE_SD_MODEL_PATH=/tmp/sd-models/sd_turbo.safetensors" >> "$GITHUB_ENV"
+          # A hosted runner has 2 cores; asking for more threads than that makes generation
+          # slower, not faster.
+          echo "IMAGE_SD_THREADS=2" >> "$GITHUB_ENV"
+
       - name: Test (all workspaces)
         run: |
           set -euo pipefail

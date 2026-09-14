@@ -66,8 +66,11 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
             ? "Retrieval matches meaning."
             : "Retrieval matches shared vocabulary, not meaning: the deterministic fallback is active.",
         },
-        image: { available: ctx.imageGenerationAvailable },
-        video: { available: ctx.videoGenerationAvailable },
+        // `available` alone let a screen describe a real provider as a mock and vice versa;
+        // the name and the mock flag are what a page needs to tell the truth (ADR-124).
+        image: { available: ctx.imageGenerationAvailable, ...(ctx.mediaProviders.image ?? {}) },
+        video: { available: ctx.videoGenerationAvailable, ...(ctx.mediaProviders.video ?? {}) },
+        speech: { available: ctx.speechAvailable, ...(ctx.mediaProviders.speech ?? {}) },
         malwareScanner: { available: ctx.scanner !== null, name: ctx.scanner?.name ?? null },
         sandbox: { isolation: ctx.sandbox.isolation },
       },
