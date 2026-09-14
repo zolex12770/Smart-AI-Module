@@ -2018,3 +2018,14 @@ The first run also exposed a real defect: clips were square while the render tar
 
 **Date:** 2026-09-14
 **Impact:** `backend/packages/providers/video-motion` (new), `backend/src/providers.ts`, `backend/src/index.ts`, root and backend tsconfig, `backend/package.json` + 9 tests.
+
+## ADR-122: Cancellation something observes, and captions something can play
+
+**Decision:** Image and video work can be cancelled from the API and the interface, the workers settle cancelled work without calling a provider, and a narrated render's captions are stored on the project row and offered to the player as a WebVTT track.
+
+**Cancellation existed and was unreachable.** `ImageGenerationRepository.requestCancel` and `VideoProjectRepository.requestCancel` shipped with their `cancelled` statuses, documented as "the worker observes it and settles the row". No route ever called them and no worker ever read them, so the state could not occur: a user who started a long video had no way to stop it, and on a billed provider every scene of a mistaken 900-scene project would be generated and paid for. `POST /api/v1/images/:id/cancel` and `POST /api/v1/videos/:id/cancel` record the request; both workers check it before the provider call and settle the row; both screens offer the button. The route records a REQUEST rather than claiming a terminal state, because work already inside a provider call has to finish — the same shape as the audio path (ADR-114).
+
+**Captions were generated and thrown away.** Every narrated render stored an SRT and a WebVTT as real assets and returned their ids; `updateRender` accepted only a render status, asset and error, so the ids went nowhere. The bytes survived as assets nothing referenced, and the player had no track: the MP4's `mov_text` stream is muxed, which browsers do not display in a `<video>` element, and the WebVTT that exists precisely for a `<track>` was unreachable. Two columns (migration 0004) now hold them, the render persists them, and the player offers the VTT as a default captions track — with `crossOrigin="use-credentials"`, because the captions come from the same authenticated asset route as the video and the track would otherwise silently 401.
+
+**Date:** 2026-09-14
+**Impact:** `database` (two columns, migration 0004, repository), `media/src/{image-generation,video-orchestration,video-render}.ts`, `routes/v1/{images,videos}.ts`, `frontend/app/images/page.tsx`, `frontend/app/videos/[id]/page.tsx`, `frontend/app/lib/api.ts`, `docs/API.md` + 7 tests.

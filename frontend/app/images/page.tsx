@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { AspectRatio } from "@ai-platform/shared";
-import { assetUrl, createImage, listImages, type ImageGeneration } from "../lib/api";
+import { assetUrl, cancelImage, createImage, listImages, type ImageGeneration } from "../lib/api";
 import { StatusBadge } from "../lib/status-badge";
 
 const ASPECT_RATIOS: AspectRatio[] = ["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"];
@@ -95,6 +95,23 @@ export default function ImagesPage() {
               {g.prompt}
             </p>
             <StatusBadge status={g.status} />
+            {(g.status === "pending" || g.status === "processing") && (
+              <button
+                className="btn"
+                type="button"
+                onClick={async () => {
+                  // Stops work that has not reached the provider yet (ADR-122).
+                  try {
+                    await cancelImage(g.id);
+                    refresh();
+                  } catch (e) {
+                    setError(String(e));
+                  }
+                }}
+              >
+                Cancel
+              </button>
+            )}
             {g.errorMessage && <p className="error-text">{g.errorMessage}</p>}
           </div>
         ))}

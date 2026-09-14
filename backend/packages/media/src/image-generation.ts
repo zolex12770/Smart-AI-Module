@@ -43,6 +43,19 @@ export async function processImageGeneration(
   const generation = await deps.generationRepo.get(projectId, generationId);
   if (!generation) throw new Error(`Unknown image generation "${generationId}" in project "${projectId}".`);
 
+  /**
+   * Cancelled while it was queued — ADR-122. `requestCancel` and the `cancelled` status existed
+   * from the start and nothing ever observed them, so the state was unreachable and a user had no
+   * way to stop work they had started. On a billed provider that is money spent after the person
+   * asked for it to stop.
+   */
+  if (generation.cancelRequestedAt) {
+    await deps.generationRepo.updateStatus(projectId, generationId, "cancelled", {
+      errorMessage: "Cancelled before generation started.",
+    });
+    return;
+  }
+
   // `incrementAttempt` counts attempts actually started, in SQL — so a generation retried by
   // pg-boss reads as several attempts rather than as one unusually slow one.
   await deps.generationRepo.updateStatus(projectId, generationId, "processing", { incrementAttempt: true });

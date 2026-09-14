@@ -1,0 +1,4 @@
+ALTER TABLE "video_projects" ADD COLUMN "subtitle_asset_id" text;--> statement-breakpoint
+ALTER TABLE "video_projects" ADD COLUMN "subtitle_vtt_asset_id" text;--> statement-breakpoint
+ALTER TABLE "video_projects" ADD CONSTRAINT "video_projects_subtitle_asset_id_assets_id_fk" FOREIGN KEY ("subtitle_asset_id") REFERENCES "public"."assets"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "video_projects" ADD CONSTRAINT "video_projects_subtitle_vtt_asset_id_assets_id_fk" FOREIGN KEY ("subtitle_vtt_asset_id") REFERENCES "public"."assets"("id") ON DELETE set null ON UPDATE no action;

@@ -133,6 +133,10 @@ export interface VideoProject {
   status: "generating_scenes" | "assembling" | "succeeded" | "partially_succeeded" | "failed";
   renderStatus: "pending" | "processing" | "succeeded" | "skipped_no_ffmpeg" | "failed" | null;
   renderAssetId: string | null;
+  /** Captions for the finished render (ADR-122); the VTT is what a browser <track> can show. */
+  subtitleAssetId: string | null;
+  subtitleVttAssetId: string | null;
+  cancelRequestedAt: string | null;
   renderError: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -163,6 +167,10 @@ export const getVideo = (id: string) => request<{ project: VideoProject; scenes:
 export const createVideo = (body: VideoProjectRequest) =>
   request<{ project: VideoProject }>("/api/v1/videos", { method: "POST", body: JSON.stringify(body) });
 export const retryVideo = (id: string) => request<{ project: VideoProject }>(`/api/v1/videos/${id}/retry`, { method: "POST" });
+export const cancelVideo = (id: string) =>
+  request<{ ok: boolean; alreadyRequested: boolean }>(`/api/v1/videos/${id}/cancel`, { method: "POST" });
+export const cancelImage = (id: string) =>
+  request<{ ok: boolean; alreadyRequested: boolean }>(`/api/v1/images/${id}/cancel`, { method: "POST" });
 
 // --- Files / RAG -------------------------------------------------------------------------
 

@@ -106,6 +106,20 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
     return { generations: await ctx.imageGenerations.list(scopeOf(authCtx)) };
   });
 
+  /**
+   * Cooperative cancellation — ADR-122. The repository has recorded cancellations since ADR-054
+   * and no route ever called it, so the `cancelled` status was unreachable and a user could not
+   * stop work they had started. The worker settles the row; this records the request.
+   */
+  app.post<{ Params: { id: string } }>("/api/v1/images/:id/cancel", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "media:generate");
+    const projectId = scopeOf(authCtx);
+    const generation = await ctx.imageGenerations.get(projectId, request.params.id);
+    if (!generation) throw new NotFoundError(`Image generation "${request.params.id}" not found.`);
+    const recorded = await ctx.imageGenerations.requestCancel(projectId, request.params.id);
+    return { ok: true, alreadyRequested: !recorded };
+  });
+
   app.get<{ Params: { id: string } }>("/api/v1/images/:id", async (request) => {
     const authCtx = await requireProject(request, ctx.auth, "project:read");
     const generation = await ctx.imageGenerations.get(scopeOf(authCtx), request.params.id);

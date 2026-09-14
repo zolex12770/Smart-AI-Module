@@ -1,7 +1,7 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
-import { assetUrl, getVideo, retryVideo, type VideoProject, type VideoScene } from "../../lib/api";
+import { assetUrl, cancelVideo, getVideo, retryVideo, type VideoProject, type VideoScene } from "../../lib/api";
 import { StatusBadge } from "../../lib/status-badge";
 
 export default function VideoDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -10,6 +10,7 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
   const [scenes, setScenes] = useState<VideoScene[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   function refresh() {
     getVideo(id)
@@ -36,6 +37,17 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  /** Stops scenes that have not started yet (ADR-122); one already generating finishes. */
+  async function handleCancel() {
+    setCancelling(true);
+    try {
+      await cancelVideo(id);
+      refresh();
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   if (error) return <div className="page error-text">{error}</div>;
   if (!project) return <div className="page empty-state">Loading…</div>;
 
@@ -55,6 +67,12 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
               {retrying ? "Retrying…" : "Retry failed scenes"}
             </button>
           )}
+          {["generating_scenes", "assembling"].includes(project.status) && !project.cancelRequestedAt && (
+            <button className="btn" type="button" disabled={cancelling} onClick={handleCancel}>
+              {cancelling ? "Cancelling…" : "Cancel"}
+            </button>
+          )}
+          {project.cancelRequestedAt && <span className="page-subtitle">Cancellation requested</span>}
         </div>
       </div>
 
@@ -82,7 +100,24 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
       <div className="card">
         <strong>Final render</strong>
         {project.renderStatus === "succeeded" && project.renderAssetId ? (
-          <video src={assetUrl(project.renderAssetId)} controls style={{ width: "100%", marginTop: 8, borderRadius: 8 }} />
+          <video
+            src={assetUrl(project.renderAssetId)}
+            controls
+            // The captions are served by the same authenticated asset route as the video, so the
+            // track element needs the cookie too (ADR-122). Without this the <track> silently 401s.
+            crossOrigin="use-credentials"
+            style={{ width: "100%", marginTop: 8, borderRadius: 8 }}
+          >
+            {project.subtitleVttAssetId && (
+              <track
+                kind="captions"
+                label="Narration"
+                srcLang="en"
+                default
+                src={assetUrl(project.subtitleVttAssetId)}
+              />
+            )}
+          </video>
         ) : (
           <div style={{ marginTop: 8 }}>
             <StatusBadge status={project.renderStatus ?? "pending"} />

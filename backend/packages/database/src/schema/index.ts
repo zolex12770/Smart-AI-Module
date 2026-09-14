@@ -558,6 +558,13 @@ export const videoProjects = pgTable(
       enum: ["pending", "processing", "succeeded", "skipped_no_ffmpeg", "failed"],
     }),
     renderAssetId: text("render_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    /**
+     * The captions a narrated render writes (ADR-122). Both were stored as assets and then
+     * dropped on the floor: no column held the ids, so the SRT and the WebVTT survived as bytes
+     * nothing referenced and the player had no track to show.
+     */
+    subtitleAssetId: text("subtitle_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    subtitleVttAssetId: text("subtitle_vtt_asset_id").references(() => assets.id, { onDelete: "set null" }),
     renderError: text("render_error"),
     /** Guards against two settling scenes enqueuing two render jobs (ADR-053). */
     renderRequestedAt: timestamp("render_requested_at", { withTimezone: true }),

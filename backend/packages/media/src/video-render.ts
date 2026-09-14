@@ -429,6 +429,10 @@ export async function processVideoRender(
     await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {
       renderStatus: "succeeded",
       renderAssetId: assetId,
+      // Captions are stored above and were previously discarded here: the SRT and the WebVTT
+      // survived as bytes nothing referenced, and the player had no track to show (ADR-122).
+      subtitleAssetId,
+      subtitleVttAssetId,
     });
     await deps.projectRepo.updateStatus(
       scope.projectId,

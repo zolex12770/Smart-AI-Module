@@ -203,6 +203,17 @@ export async function processVideoScene(
     );
   }
 
+  /**
+   * Cancelled while queued — ADR-122. The project carries the request (`requestCancel`), and
+   * nothing used to read it: every scene of a cancelled 900-scene project still generated, and
+   * on a billed provider every one was paid for.
+   */
+  const project = await deps.projectRepo.get(scope.projectId, scope.videoProjectId);
+  if (project?.cancelRequestedAt) {
+    await deps.sceneRepo.updateStatus(scope, sceneId, "cancelled", { lastError: "Cancelled before generation started." });
+    return;
+  }
+
   await deps.sceneRepo.updateStatus(scope, sceneId, "processing");
 
   try {

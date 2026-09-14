@@ -64,6 +64,9 @@ export interface VideoProject {
   status: VideoProjectStatus;
   renderStatus: VideoRenderStatus | null;
   renderAssetId: string | null;
+  /** Captions for the finished render (ADR-122); null when it had no narration. */
+  subtitleAssetId: string | null;
+  subtitleVttAssetId: string | null;
   renderError: string | null;
   /** The render slot — see `claimRenderSlot`. Null means no render has been enqueued yet. */
   renderRequestedAt: Date | null;
@@ -109,7 +112,13 @@ export interface VideoProjectRepository {
   updateRender(
     projectId: string,
     id: string,
-    patch: { renderStatus: VideoRenderStatus; renderAssetId?: string; renderError?: string }
+    patch: {
+      renderStatus: VideoRenderStatus;
+      renderAssetId?: string;
+      renderError?: string;
+      subtitleAssetId?: string | null;
+      subtitleVttAssetId?: string | null;
+    }
   ): Promise<void>;
   /**
    * Writes the script and materializes its scenes in one transaction (ADR-053): the old
@@ -169,6 +178,8 @@ export class PgVideoProjectRepository implements VideoProjectRepository {
       status: input.status ?? "planning",
       renderStatus: null,
       renderAssetId: null,
+      subtitleAssetId: null,
+      subtitleVttAssetId: null,
       renderError: null,
       renderRequestedAt: null,
       errorMessage: null,
@@ -199,7 +210,13 @@ export class PgVideoProjectRepository implements VideoProjectRepository {
   async updateRender(
     projectId: string,
     id: string,
-    patch: { renderStatus: VideoRenderStatus; renderAssetId?: string; renderError?: string }
+    patch: {
+      renderStatus: VideoRenderStatus;
+      renderAssetId?: string;
+      renderError?: string;
+      subtitleAssetId?: string | null;
+      subtitleVttAssetId?: string | null;
+    }
   ): Promise<void> {
     await this.db
       .update(videoProjects)
@@ -208,6 +225,8 @@ export class PgVideoProjectRepository implements VideoProjectRepository {
         updatedAt: new Date(),
         ...(patch.renderAssetId !== undefined ? { renderAssetId: patch.renderAssetId } : {}),
         ...(patch.renderError !== undefined ? { renderError: patch.renderError } : {}),
+        ...(patch.subtitleAssetId !== undefined ? { subtitleAssetId: patch.subtitleAssetId } : {}),
+        ...(patch.subtitleVttAssetId !== undefined ? { subtitleVttAssetId: patch.subtitleVttAssetId } : {}),
       })
       .where(and(eq(videoProjects.id, id), eq(videoProjects.projectId, projectId)));
   }

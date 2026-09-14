@@ -115,6 +115,20 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
    * and re-enqueued scene jobs that no worker was registered to run, leaving the caller
    * polling a project that could never move.
    */
+  /**
+   * Cooperative cancellation for a whole project — ADR-122. Scenes still queued settle as
+   * `cancelled` instead of generating; a scene already inside a provider call finishes, which is
+   * why this records a request rather than claiming a terminal state.
+   */
+  app.post<{ Params: { id: string } }>("/api/v1/videos/:id/cancel", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "media:generate");
+    const projectId = scopeOf(authCtx);
+    const project = await ctx.videoProjects.get(projectId, request.params.id);
+    if (!project) throw new NotFoundError(`Video project "${request.params.id}" not found.`);
+    const recorded = await ctx.videoProjects.requestCancel(projectId, request.params.id);
+    return { ok: true, alreadyRequested: !recorded };
+  });
+
   app.post<{ Params: { id: string } }>(
     "/api/v1/videos/:id/retry",
     // The same cap as creation: a retry re-enqueues exactly the same paid scene work (ADR-119).

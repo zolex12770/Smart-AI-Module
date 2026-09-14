@@ -212,6 +212,15 @@ describe.skipIf(!hasFfmpeg)("long-form video: narration + subtitles (ADR-079/081
     expect(outcome.subtitleAssetId).toBeTruthy();
     expect(outcome.subtitleVttAssetId).toBeTruthy();
 
+    // And the ids are on the ROW — ADR-122. They used to exist only in this return value, so the
+    // captions were stored, dropped, and unreachable: nothing could ever fetch them again.
+    const stored = await projectRepo.get(PROJECT, videoProjectId);
+    expect(stored?.subtitleAssetId).toBe(outcome.subtitleAssetId);
+    expect(stored?.subtitleVttAssetId).toBe(outcome.subtitleVttAssetId);
+    // The WebVTT is what a browser <track> can actually display.
+    const vtt = await assetRepo.get(PROJECT, stored?.subtitleVttAssetId as string);
+    expect((await store.read(vtt!)).toString("utf8")).toMatch(/^WEBVTT/);
+
     const asset = await assetRepo.get(PROJECT, outcome.assetId as string);
     expect(asset).toBeTruthy();
 

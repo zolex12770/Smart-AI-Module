@@ -5,7 +5,7 @@ Regenerate with `npm run docs:api`; CI fails if this file differs from what the 
 produces, and `backend/src/routes/api-contract.test.ts` sends a real request for every row
 below to check that the documented access and rate limit are the ones the server applies.
 
-**58 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
+**60 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
 
 ## Conventions
 
@@ -147,6 +147,7 @@ and nothing is ever substituted with a fake result (ADR-050).
 | `GET` | `/api/v1/images` | session or API key · `project:read` | global (300 / 1 minute) |
 | `POST` | `/api/v1/images` | session or API key · `media:generate` | 10 / 1 minute |
 | `GET` | `/api/v1/images/:id` | session or API key · `project:read` | global (300 / 1 minute) |
+| `POST` | `/api/v1/images/:id/cancel` | session or API key · `media:generate` | global (300 / 1 minute) |
 
 ## `/api/v1/jobs`
 
@@ -218,6 +219,7 @@ and nothing is ever substituted with a fake result (ADR-050).
 | `GET` | `/api/v1/videos` | session or API key · `project:read` | global (300 / 1 minute) |
 | `POST` | `/api/v1/videos` | session or API key · `media:generate` | 5 / 1 minute |
 | `GET` | `/api/v1/videos/:id` | session or API key · `project:read` | global (300 / 1 minute) |
+| `POST` | `/api/v1/videos/:id/cancel` | session or API key · `media:generate` | global (300 / 1 minute) |
 | `POST` | `/api/v1/videos/:id/retry` | session or API key · `media:generate` | 5 / 1 minute |
 
 ## Streaming
