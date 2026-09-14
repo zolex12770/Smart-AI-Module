@@ -18,6 +18,14 @@ import type { ModelRegistry, SelectionCriteria } from "./registry.js";
 
 export interface ProviderFallback {
   provider: string;
+  /**
+   * The provider tried NEXT, or null when this was the last candidate — ADR-132.
+   *
+   * `recordProviderFallback` has always taken a `from` and a `to`, and nothing ever called it,
+   * because a report that names only the provider that failed cannot answer the question the
+   * metric exists for: which provider is carrying the traffic when the preferred one is down.
+   */
+  to: string | null;
   stage: "no_first_event" | "error_event" | "empty_stream";
   message: string;
   error: unknown;
@@ -39,9 +47,34 @@ export interface RetryPolicy {
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = { maxAttempts: 3, baseDelayMs: 500, maxDelayMs: 20_000 };
 
+/**
+ * One completed provider call, as the metrics want it — docs/26_DECISIONS.md ADR-132.
+ *
+ * `provider_requests_total` and `provider_tokens_total` were recorded in exactly ONE place: the
+ * chat route's success branch, below a `continue` that skips everything but the terminal `done`
+ * event. So the counters described chat that worked, and nothing else — not a chat that failed,
+ * not summarisation, not RAG, not a single agent step. A dashboard built on them showed a
+ * provider with a 100% success rate during an outage, because the failures were never counted.
+ *
+ * Reported from the router because the router is the one thing every model call goes through.
+ */
+export interface ProviderCallOutcome {
+  provider: string;
+  model?: string;
+  /** `cancelled` is not a failure: the caller went away, which the provider did nothing wrong in. */
+  status: "success" | "error" | "cancelled";
+  durationMs: number;
+  /** A BOUNDED label — an error class, never a message. Unbounded values ruin a metric. */
+  errorType?: "retryable" | "fatal";
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface StreamChatOptions {
   onFallback?: (fallback: ProviderFallback) => void;
   onRetry?: (retry: ProviderRetry) => void;
+  /** Called once per completed provider call, whatever its outcome (ADR-132). */
+  onCall?: (call: ProviderCallOutcome) => void;
   /** Hard requirements/preferences for provider selection. */
   criteria?: SelectionCriteria;
   signal?: AbortSignal;
@@ -124,6 +157,7 @@ export class ModelRouter {
   ): AsyncGenerator<ChatStreamEvent, void, unknown> {
     const report = (f: ProviderFallback) => (callOptions.onFallback ?? this.options.onFallback)?.(f);
     const reportRetry = (r: ProviderRetry) => (callOptions.onRetry ?? this.options.onRetry)?.(r);
+    const reportCall = (c: ProviderCallOutcome) => (callOptions.onCall ?? this.options.onCall)?.(c);
     const signal = callOptions.signal ?? this.options.signal;
 
     // An explicitly named provider is never substituted: silently swapping it would violate
@@ -131,7 +165,7 @@ export class ModelRouter {
     if (request.provider) {
       const provider = this.registry.get(request.provider);
       if (!provider) throw new ProviderError(`Unknown provider "${request.provider}".`);
-      yield* this.streamWithRetry(provider, request, reportRetry, signal);
+      yield* this.streamWithRetry(provider, request, reportRetry, reportCall, signal);
       return;
     }
 
@@ -149,11 +183,14 @@ export class ModelRouter {
     }
 
     let lastError: unknown;
-    for (const provider of candidates) {
+    for (const [index, provider] of candidates.entries()) {
+      // Named before it is needed so every `report` below can say where the traffic went.
+      const nextProvider = candidates[index + 1]?.name ?? null;
       if (signal?.aborted) throw new ProviderError("Cancelled before a provider produced output.");
       if (this.circuitOpen(provider.name)) {
         report({
           provider: provider.name,
+          to: nextProvider,
           stage: "no_first_event",
           message: "circuit open after repeated failures",
           error: new ProviderError("circuit open"),
@@ -161,7 +198,7 @@ export class ModelRouter {
         continue;
       }
 
-      const iterator = this.streamWithRetry(provider, request, reportRetry, signal)[Symbol.asyncIterator]();
+      const iterator = this.streamWithRetry(provider, request, reportRetry, reportCall, signal)[Symbol.asyncIterator]();
       let first: IteratorResult<ChatStreamEvent>;
       try {
         first = await iterator.next();
@@ -170,6 +207,7 @@ export class ModelRouter {
         this.recordFailure(provider.name);
         report({
           provider: provider.name,
+          to: nextProvider,
           stage: "no_first_event",
           message: err instanceof Error ? err.message : String(err),
           error: err,
@@ -181,13 +219,13 @@ export class ModelRouter {
         // Previously skipped WITHOUT reporting — a real hole in "a fallback is never silent".
         lastError = new ProviderError(`Provider "${provider.name}" produced no events.`);
         this.recordFailure(provider.name);
-        report({ provider: provider.name, stage: "empty_stream", message: "produced no events", error: lastError });
+        report({ provider: provider.name, to: nextProvider, stage: "empty_stream", message: "produced no events", error: lastError });
         continue;
       }
       if (first.value.type === "error") {
         lastError = new ProviderError(first.value.message);
         this.recordFailure(provider.name);
-        report({ provider: provider.name, stage: "error_event", message: first.value.message, error: lastError });
+        report({ provider: provider.name, to: nextProvider, stage: "error_event", message: first.value.message, error: lastError });
         continue;
       }
 
@@ -240,15 +278,27 @@ export class ModelRouter {
     provider: LLMProvider,
     request: ChatRequest,
     reportRetry: (r: ProviderRetry) => void,
+    reportCall: (c: ProviderCallOutcome) => void,
     signal?: AbortSignal
   ): AsyncGenerator<ChatStreamEvent, void, unknown> {
     for (let attempt = 1; attempt <= this.retryPolicy.maxAttempts; attempt++) {
+      // Per ATTEMPT, so a retried call is two measurements rather than one long one — which is
+      // what a latency histogram has to mean to be read (ADR-132).
+      const startedAt = this.now();
       const iterator = provider.streamChat(request)[Symbol.asyncIterator]();
       let first: IteratorResult<ChatStreamEvent>;
       try {
         first = await iterator.next();
       } catch (err) {
-        const retryable = classifyProviderError(err) === "retryable";
+        const classification = classifyProviderError(err);
+        const retryable = classification === "retryable";
+        reportCall({
+          provider: provider.name,
+          model: provider.model,
+          status: "error",
+          durationMs: this.now() - startedAt,
+          errorType: retryable ? "retryable" : "fatal",
+        });
         if (!retryable || attempt === this.retryPolicy.maxAttempts || signal?.aborted) throw err;
         const delay = this.backoffDelay(attempt, retryAfterMsFromError(err));
         reportRetry({
@@ -261,14 +311,48 @@ export class ModelRouter {
         continue;
       }
       if (first.done) return;
+      let settled = false;
+      // Whether the provider actually FINISHED, which is not the same as whether it reported
+      // token counts: a `done` event may carry no usage, and treating that as an abandoned
+      // stream would report a successful call as cancelled.
+      let sawDone = false;
+      let usage: { inputTokens?: number; outputTokens?: number } = {};
+      const settle = (status: ProviderCallOutcome["status"], errorType?: ProviderCallOutcome["errorType"]) => {
+        if (settled) return;
+        settled = true;
+        reportCall({
+          provider: provider.name,
+          model: provider.model,
+          status,
+          durationMs: this.now() - startedAt,
+          ...(errorType ? { errorType } : {}),
+          ...usage,
+        });
+      };
       try {
+        if (first.value.type === "done") {
+          sawDone = true;
+          usage = first.value.usage ?? {};
+        }
         yield first.value;
         while (true) {
           const next = await iterator.next();
           if (next.done) return;
+          // The terminal event carries the only token counts the provider reports.
+          if (next.value.type === "done") {
+            sawDone = true;
+            usage = next.value.usage ?? {};
+          }
           yield next.value;
         }
+      } catch (err) {
+        settle("error", classifyProviderError(err) === "retryable" ? "retryable" : "fatal");
+        throw err;
       } finally {
+        // Reached on a normal finish AND when the caller abandons the generator. A stream that
+        // produced its `done` event succeeded; one abandoned before it did was cancelled, which
+        // is not the provider failing and must not be counted as one.
+        settle(sawDone ? "success" : "cancelled");
         // The provider's own iterator, closed when this generator is abandoned or finishes —
         // ADR-119. This is the layer that actually reaches the adapter's `finally`, where the
         // upstream HTTP request is aborted; the caller above closes THIS generator in turn.

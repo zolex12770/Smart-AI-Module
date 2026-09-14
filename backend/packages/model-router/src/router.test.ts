@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatRequest, ChatStreamEvent, LLMProvider, ProviderCapabilities } from "@ai-platform/shared";
 import { ModelRegistry } from "./registry.js";
-import { ModelRouter, classifyProviderError, type ProviderFallback } from "./router.js";
+import { ModelRouter, classifyProviderError, type ProviderCallOutcome, type ProviderFallback } from "./router.js";
 
 /**
  * Real fake providers (not mocks of ModelRouter itself) exercising the actual fallback
@@ -286,5 +286,69 @@ describe("router cancellation", () => {
     await new Promise((r) => setTimeout(r, 50));
     // And it really stopped: no further work after the consumer walked away.
     expect(yielded).toBe(afterBreak);
+  });
+});
+/**
+ * Every model call is counted, not only chat that worked — docs/26_DECISIONS.md ADR-132.
+ *
+ * `provider_request_count` and `provider_tokens_total` were written in exactly one place: the chat
+ * route's success branch, below a `continue` that skips every event but the terminal `done`. So a
+ * failed chat, summarisation, RAG and every agent step were invisible, and a dashboard built on
+ * those counters showed a provider at 100% success during an outage — the failures were never
+ * counted at all. Reporting from the router covers every caller, because the router is the one
+ * thing they all go through.
+ */
+describe("provider call reporting (ADR-132)", () => {
+  const routerFor = (provider: ScriptedProvider, calls: ProviderCallOutcome[]) => {
+    const registry = new ModelRegistry();
+    registry.register(provider);
+    return new ModelRouter(registry, {
+      onCall: (c) => calls.push(c),
+      retryPolicy: { maxAttempts: 1, baseDelayMs: 0, maxDelayMs: 0 },
+    });
+  };
+
+  it("reports a successful call with its token usage", async () => {
+    const calls: ProviderCallOutcome[] = [];
+    const provider = new ScriptedProvider("good", [{ type: "token", delta: "hi" }, doneEvent("good")]);
+    for await (const _event of routerFor(provider, calls).streamChat(request)) void _event;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ provider: "good", status: "success", inputTokens: 1, outputTokens: 1 });
+    expect(calls[0]!.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("reports a FAILED call, which is the case that was never counted", async () => {
+    const calls: ProviderCallOutcome[] = [];
+    const provider = new ScriptedProvider("bad", () => {
+      throw new Error("upstream exploded");
+    });
+    await expect(
+      (async () => {
+        for await (const _event of routerFor(provider, calls).streamChat(request)) void _event;
+      })()
+    ).rejects.toThrow();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ provider: "bad", status: "error" });
+    // A bounded label, never a message: an unbounded one ruins the metric it feeds.
+    expect(["retryable", "fatal"]).toContain(calls[0]!.errorType);
+  });
+
+  it("does not count an abandoned stream as a failure", async () => {
+    // A user who closes the tab is not a provider outage, and counting it as one would make the
+    // error rate track user behaviour instead of provider health.
+    const calls: ProviderCallOutcome[] = [];
+    const provider = new ScriptedProvider("good", [
+      { type: "token", delta: "one" },
+      { type: "token", delta: "two" },
+      doneEvent("good"),
+    ]);
+    const stream = routerFor(provider, calls).streamChat(request);
+    await stream.next();
+    await stream.return(undefined);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.status).toBe("cancelled");
   });
 });

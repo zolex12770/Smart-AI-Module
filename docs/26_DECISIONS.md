@@ -2160,3 +2160,16 @@ The scope moves into SQL rather than into the call signature, which matters more
 
 **Date:** 2026-09-14
 **Impact:** `shared/src/usage.ts` (new), `backend/packages/rag/src/{ingest,retrieve}.ts`, `backend/packages/memory/src/memory-service.ts`, `backend/src/index.ts` + 4 tests.
+
+## ADR-132: Every model call is counted, not only the chat that worked
+
+**Decision:** The router reports every completed provider call — success, error or cancellation, with its token usage — and the composition root turns that into the metrics. The chat route records none of it any more.
+
+**The counters described one branch of one route.** `provider_request_count`, `provider_latency_ms` and `token_usage_total` were written in exactly one place: `chat.ts`, below a `continue` that skips every event except the terminal `done`. So they counted chat requests that succeeded, and nothing else. A chat that failed was not counted. Neither was conversation summarisation, nor the RAG answer call, nor a single step of an agent run — three more callers of the same router. The literal `"success"` was the only status ever passed, which means a dashboard built on these counters showed a provider at 100% success during an outage: the failures were not recorded as failures, they were not recorded at all. That is worse than no metric, because it looks like evidence.
+
+**Reported from the router, because the router is what they share.** Every model call in the platform goes through `streamWithRetry`, which is also where the retry loop already lives, so it knows what an attempt is: one measurement per attempt, not one long one spanning three. It follows the callback pattern the router already uses for `onFallback` and `onRetry` rather than importing the observability package — a routing layer should not depend on a metrics exporter, and the composition root is the only place that knows the price table anyway.
+
+**Cancellation is not failure.** A caller that abandons the stream — a closed tab, a stop button (ADR-123) — leaves through the same `finally` as a clean finish, and counting that as an error would make the provider error rate track user behaviour. It is reported as `cancelled`, kept out of the success/error counter, and still measured for latency. Distinguishing it needs an explicit "did the provider finish" flag rather than "did it report tokens": a `done` event may carry no usage, and inferring from usage would have logged a successful call as an abandoned one.
+
+**Date:** 2026-09-14
+**Impact:** `backend/packages/model-router/src/router.ts` (`ProviderCallOutcome`, `onCall`, `ProviderFallback.to`), `backend/src/index.ts`, `backend/src/routes/v1/chat.ts` + 3 tests.

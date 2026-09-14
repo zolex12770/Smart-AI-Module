@@ -3,9 +3,6 @@ import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-rou
 import { CONVERSATION_SUMMARY_PROMPT, applyConversationWindow } from "@ai-platform/memory";
 import {
   SpanStatusCode,
-  recordProviderCall,
-  recordProviderFallback,
-  recordTokenUsage,
   withSpan,
 } from "@ai-platform/observability";
 import {
@@ -460,32 +457,17 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 });
 
                 /**
-                 * The same facts as the usage row and the span, as METRICS (ADR-082).
+                 * The metrics used to be emitted HERE, and only here — moved to the router in
+                 * ADR-132.
                  *
-                 * Not redundant: the ledger answers "what does this project owe" exactly, and a
-                 * span answers "what happened in this request". Neither answers "is p95 latency
-                 * climbing" or "is this provider's error rate up", which is what an alert fires
-                 * on. Labels are bounded — provider and model only, never project or request id,
-                 * which would grow the series count without limit.
+                 * This block sat below a `continue` that skips every event but the terminal
+                 * `done`, so `provider_request_count` only ever counted chat that worked: a
+                 * failed chat, summarisation, RAG and every agent step were invisible, and a
+                 * dashboard read 100% success during an outage. The router is the one thing all
+                 * of them pass through, so it reports them all — including this one, which is
+                 * why nothing is recorded here any more. The span below stays: it answers "what
+                 * happened in THIS request", which a counter cannot.
                  */
-                recordProviderCall({
-                  provider: event.provider,
-                  model: event.model,
-                  status: "success",
-                  durationMs: Date.now() - startedAt,
-                });
-                recordTokenUsage({
-                  provider: event.provider,
-                  model: event.model,
-                  inputTokens: event.usage.inputTokens,
-                  outputTokens: event.usage.outputTokens,
-                  estimatedCostUsd: estimateLlmCostUsd(event.provider, event.model, event.usage),
-                });
-                for (const from of fellBackFrom) {
-                  // Every provider the router skipped, counted. A rising fallback count is the
-                  // earliest signal that an adapter or an upstream is degraded (ADR-044).
-                  recordProviderFallback({ from, to: event.provider });
-                }
                 span.setAttributes({
                   "gen_ai.system": event.provider,
                   "gen_ai.request.model": event.model,

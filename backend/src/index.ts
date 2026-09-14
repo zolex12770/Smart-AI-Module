@@ -57,6 +57,9 @@ import {
   recordDeadLetter,
   recordJobProcessed,
   recordMediaJob,
+  recordProviderCall,
+  recordProviderFallback,
+  recordTokenUsage,
   withSpan,
   type Logger,
 } from "@ai-platform/observability";
@@ -1049,11 +1052,46 @@ async function main() {
   // (today: the agent engine's model_call nodes), which would otherwise report a failed real
   // provider only as an unstructured `console.warn` on stderr.
   const modelRouter = new ModelRouter(registry, {
-    onFallback: (fallback) =>
+    onFallback: (fallback) => {
       logger.warn(
         { provider: fallback.provider, stage: fallback.stage, error: fallback.message, status: "fallback" },
         "provider call failed, falling back to the next provider"
-      ),
+      );
+      recordProviderFallback({ from: fallback.provider, to: fallback.to ?? "unknown" });
+    },
+    /**
+     * Every model call, whatever its outcome — docs/26_DECISIONS.md ADR-132.
+     *
+     * These counters used to be written in one place: the chat route's success branch. So they
+     * described chat that worked and nothing else — a failed chat, summarisation, RAG and every
+     * agent step were all invisible, and a dashboard read 100% success during an outage because
+     * the failures were never counted at all. The router is the one thing all of them pass
+     * through.
+     */
+    onCall: (call) => {
+      recordProviderCall({
+        provider: call.provider,
+        model: call.model ?? "unknown",
+        // `cancelled` is not an outcome the metric has a bucket for, and it is not a failure:
+        // recording it as `success` would inflate the success rate, so it is left out entirely
+        // and the latency histogram keeps it.
+        status: call.status === "error" ? "error" : "success",
+        durationMs: call.durationMs,
+        ...(call.errorType ? { errorType: call.errorType } : {}),
+      });
+      if (call.inputTokens !== undefined || call.outputTokens !== undefined) {
+        const model = call.model ?? "unknown";
+        const usage = { inputTokens: call.inputTokens ?? 0, outputTokens: call.outputTokens ?? 0 };
+        recordTokenUsage({
+          provider: call.provider,
+          model,
+          ...usage,
+          // Priced here rather than in the router: the price table is a deployment concern, and
+          // an unpriced model records no cost at all rather than a fabricated zero.
+          estimatedCostUsd: estimateLlmCostUsd(call.provider, model, usage),
+        });
+      }
+    },
   });
 
   const cookieSecure = config.COOKIE_SECURE ? config.COOKIE_SECURE === "true" : config.NODE_ENV === "production";
