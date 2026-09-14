@@ -352,10 +352,37 @@ export class AuthService {
     const row = rows[0];
     const now = this.now();
 
-    // Always do the same work whether or not the account exists: verifying against a decoy
-    // hash keeps the timing of "unknown email" close to "wrong password".
-    const encoded = row?.passwordHash ?? DECOY_HASH;
+    /**
+     * Locked is decided BEFORE the password is looked at — docs/26_DECISIONS.md ADR-125.
+     *
+     * The order used to be the other way round, and it made the lockout a password oracle: a
+     * locked account still verified every guess, answered a wrong one with "Invalid email or
+     * password." and a RIGHT one with "This account is temporarily locked…". An attacker who
+     * tripped the lock could then read the correct password straight off the difference, which
+     * is the opposite of what a lockout is for.
+     */
+    const locked = Boolean(row?.lockedUntil && row.lockedUntil > now);
+
+    // Always do the same work whether or not the account exists, and whether or not it is
+    // locked: verifying against a decoy hash keeps the timing of "unknown email" and "locked"
+    // close to "wrong password". Skipping the verification for a locked account would replace
+    // the message oracle with a timing one.
+    const encoded = locked ? DECOY_HASH : (row?.passwordHash ?? DECOY_HASH);
     const passwordOk = await verifyPassword(password, encoded);
+
+    if (locked) {
+      await this.recordAudit({
+        userId: row?.id ?? null,
+        action: "auth.login",
+        outcome: "denied",
+        method: "session",
+        // The REASON is recorded, because an operator reading the audit trail needs to tell a
+        // locked account from a wrong password. The CALLER is told neither.
+        detail: { reason: "locked" },
+        ...meta,
+      });
+      throw new UnauthorizedError(INVALID_CREDENTIALS);
+    }
 
     if (!row || !passwordOk || row.status !== "active") {
       if (row) {
@@ -377,19 +404,7 @@ export class AuthService {
         detail: { email: normalized, reason: !row ? "unknown_email" : !passwordOk ? "bad_password" : row.status },
         ...meta,
       });
-      throw new UnauthorizedError("Invalid email or password.");
-    }
-
-    if (row.lockedUntil && row.lockedUntil > now) {
-      await this.recordAudit({
-        userId: row.id,
-        action: "auth.login",
-        outcome: "denied",
-        method: "session",
-        detail: { reason: "locked" },
-        ...meta,
-      });
-      throw new UnauthorizedError("This account is temporarily locked after too many failed attempts.");
+      throw new UnauthorizedError(INVALID_CREDENTIALS);
     }
 
     // Opportunistically upgrade a hash created under weaker parameters.
@@ -832,6 +847,13 @@ function toAuthenticatedUser(row: typeof users.$inferSelect): AuthenticatedUser 
  * A real scrypt hash of a random value, used to equalise work on the unknown-email path.
  * Generated once at module load so login timing does not depend on account existence.
  */
+/**
+ * The ONE thing a failed login is allowed to say (ADR-125). Every denial — unknown email, wrong
+ * password, disabled account, locked account — uses this exact string, so the response cannot be
+ * used to learn which of those it was.
+ */
+const INVALID_CREDENTIALS = "Invalid email or password.";
+
 const DECOY_HASH =
   "scrypt$4096$8$1$AAAAAAAAAAAAAAAAAAAAAA==$" +
   "Ki2N0oQhWkYlqvVQrHkbT0M9m2vCkQ8QO2K8YvOaZ6t8sZQe1H0oQm4wYb1Nl5rD8f0K3xX7cJ0oP5vT9wQ2Zg==";

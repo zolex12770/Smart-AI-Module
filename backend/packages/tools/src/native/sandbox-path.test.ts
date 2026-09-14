@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -32,6 +32,70 @@ describe("resolveSandboxedPath", () => {
   it("rejects a '..' traversal that escapes the root", () => {
     expect(() => resolveSandboxedPath(root, "../outside.txt")).toThrow(/resolves outside/);
     expect(() => resolveSandboxedPath(root, "sub/../../outside.txt")).toThrow(/resolves outside/);
+  });
+
+  /**
+   * The dangling-symlink escape — docs/26_DECISIONS.md ADR-125.
+   *
+   * `realpathSync` throws ENOENT both for a name that is not there and for a symlink whose
+   * target is not there. The resolver treated the second as the first: it filed the link under
+   * "does not exist", re-appended the link's own basename to the realpath'd parent, and got a
+   * composite safely inside the root. The containment check passed, the caller was handed the
+   * lexical path, and the OS followed the link out of the sandbox on the very next `fs` call.
+   *
+   * Writing through such a link is the dangerous direction, and it needs the target NOT to
+   * exist — which is exactly the case the old code mishandled. An agent holding the write tools
+   * can create the link itself, so this was a self-service escape rather than a hypothetical.
+   */
+  describe("dangling symlinks (ADR-125)", () => {
+    /** Directory symlinks need no elevation on Windows when created as a junction. */
+    const linkDir = (target: string, path: string) => symlinkSync(target, path, "junction");
+
+    it("rejects a path through a dangling DIRECTORY link that points outside the root", () => {
+      const outside = mkdtempSync(join(tmpdir(), "sandbox-path-outside-"));
+      try {
+        // The link exists; what it points at does not yet. That is the whole trick.
+        const missingOutside = join(outside, "not-created-yet");
+        linkDir(missingOutside, join(root, "escape"));
+
+        expect(() => resolveSandboxedPath(root, "escape/owned.txt")).toThrow(/resolves outside/);
+        expect(() => resolveSandboxedPath(root, "escape")).toThrow(/resolves outside/);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects a link chain that only leaves the root on the second hop", () => {
+      const outside = mkdtempSync(join(tmpdir(), "sandbox-path-outside-"));
+      try {
+        linkDir(join(outside, "still-missing"), join(root, "second"));
+        linkDir(join(root, "second"), join(root, "first"));
+
+        expect(() => resolveSandboxedPath(root, "first/owned.txt")).toThrow(/resolves outside/);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
+
+    it("still allows a dangling link that points INSIDE the root", () => {
+      // Creating a file through a symlink is ordinary. The check is about where a path leads,
+      // not whether it exists yet, so refusing this would break legitimate work.
+      linkDir(join(root, "real-dir"), join(root, "alias"));
+      expect(resolveSandboxedPath(root, "alias/new-file.txt")).toBe(join(root, "alias", "new-file.txt"));
+    });
+
+    it("refuses a circular link instead of following it forever", () => {
+      // A security check that hangs is a denial of service inside the sandbox.
+      linkDir(join(root, "b"), join(root, "a"));
+      linkDir(join(root, "a"), join(root, "b"));
+      expect(() => resolveSandboxedPath(root, "a/file.txt")).toThrow(/too many symbolic links|resolves outside/);
+    });
+
+    it("still resolves a NON-dangling link inside the root, unchanged", () => {
+      writeFileSync(join(root, "target.txt"), "hello");
+      linkDir(root, join(root, "self"));
+      expect(resolveSandboxedPath(root, "self/target.txt")).toBe(join(root, "self", "target.txt"));
+    });
   });
 
   it("rejects an absolute path override outside the root", () => {

@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 
 /**
@@ -64,18 +64,41 @@ export function resolveSandboxedPath(root: string, requestedPath: string, resolu
  * `realpathSync` on the deepest ancestor of `target` that exists, with the remaining components
  * appended unresolved.
  *
- * A component that does not exist cannot be a symlink, so nothing is missed by leaving the tail
- * lexical — and `..` has already been collapsed by `path.resolve` before this runs.
+ * A component that does not exist cannot be a symlink — but a DANGLING one is not that case, and
+ * assuming it was is how this leaked (ADR-125). `realpathSync` throws ENOENT on a link whose
+ * target is missing exactly as it does on a name that was never there, so the old catch filed the
+ * link under "does not exist", re-appended its own basename to the resolved parent, and produced
+ * a composite comfortably inside the root. Containment passed; the OS then followed the link
+ * wherever it actually pointed. An agent can create such a link with the write tools it already
+ * holds, so this was a self-service escape.
+ *
+ * A dangling link is now followed by hand — which is what `realpathSync` would have done had the
+ * target existed — and containment is checked against where it leads. A link pointing at a file
+ * that does not exist YET but sits inside the root stays legal, because creating a file through a
+ * symlink is ordinary and the check is about destination, not existence.
  */
 function realpathOfDeepestExisting(target: string): string {
   let existing = target;
   const missing: string[] = [];
+  let hops = 0;
 
   for (;;) {
     try {
       const real = realpathSync(existing);
       return missing.length === 0 ? real : resolve(real, ...missing.reverse());
     } catch {
+      const link = readLinkOrUndefined(existing);
+      if (link !== undefined) {
+        // A symlink chain can be circular, and following one forever is a hang inside a
+        // security check. The OS gives up too (ELOOP); so does this, by rejecting.
+        if (++hops > MAX_SYMLINK_HOPS) {
+          throw new Error(`Path "${target}" resolves through too many symbolic links and was rejected.`);
+        }
+        // Relative link targets resolve against the link's OWN directory, not the cwd.
+        existing = resolve(dirname(existing), link);
+        continue;
+      }
+
       const parent = dirname(existing);
       if (parent === existing) {
         // Walked to the filesystem root without finding anything that exists. Nothing can be a
@@ -85,6 +108,25 @@ function realpathOfDeepestExisting(target: string): string {
       missing.push(existing.slice(parent.length + 1));
       existing = parent;
     }
+  }
+}
+
+/** Linux gives up at 40; the sandbox has no legitimate need for a chain remotely that long. */
+const MAX_SYMLINK_HOPS = 40;
+
+/**
+ * The link's target if `path` is a symbolic link, otherwise undefined.
+ *
+ * `lstatSync` is what distinguishes "this name is a link whose target is missing" from "this name
+ * is not there at all" — `realpathSync` reports both as ENOENT, and the difference is the whole
+ * defect this guards.
+ */
+function readLinkOrUndefined(path: string): string | undefined {
+  try {
+    if (!lstatSync(path).isSymbolicLink()) return undefined;
+    return readlinkSync(path);
+  } catch {
+    return undefined;
   }
 }
 

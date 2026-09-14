@@ -123,7 +123,42 @@ describe("AuthService", () => {
       for (let i = 0; i < 3; i++) {
         await locking.login("bob@example.com", "nope-nope-nope").catch(() => undefined);
       }
-      await expect(locking.login("bob@example.com", "a-sufficiently-long-password")).rejects.toThrow(/locked/i);
+      await expect(locking.login("bob@example.com", "a-sufficiently-long-password")).rejects.toThrow(UnauthorizedError);
+    });
+
+    it("a locked account answers a right password exactly as it answers a wrong one", async () => {
+      /**
+       * The lockout was a password oracle — docs/26_DECISIONS.md ADR-125.
+       *
+       * `login` verified the password BEFORE consulting `lockedUntil`, so a locked account
+       * replied "Invalid email or password." to a wrong guess and "This account is temporarily
+       * locked…" to a right one. An attacker who had tripped the lock could read the correct
+       * password straight off the difference — the lockout handing over the very thing it
+       * exists to protect. This asserts the property, not the wording: the two responses must
+       * be indistinguishable.
+       */
+      const locking = new AuthService(db, { scryptParams: TEST_SCRYPT_PARAMS, maxFailedLogins: 3 });
+      await locking.signup({
+        email: "bob@example.com",
+        password: "a-sufficiently-long-password",
+        displayName: "Bob",
+      });
+      for (let i = 0; i < 3; i++) {
+        await locking.login("bob@example.com", "nope-nope-nope").catch(() => undefined);
+      }
+
+      const rightWhileLocked = await locking.login("bob@example.com", "a-sufficiently-long-password").catch((e) => e);
+      const wrongWhileLocked = await locking.login("bob@example.com", "still-not-the-password").catch((e) => e);
+
+      expect(rightWhileLocked).toBeInstanceOf(UnauthorizedError);
+      expect(wrongWhileLocked).toBeInstanceOf(UnauthorizedError);
+      expect(rightWhileLocked.message).toBe(wrongWhileLocked.message);
+      // And identical to what an account that was never locked says, so the lock itself does
+      // not leak either: "this address exists and is locked" is a fact worth not giving away.
+      const unknownEmail = await locking.login("nobody@example.com", "a-sufficiently-long-password").catch((e) => e);
+      expect(rightWhileLocked.message).toBe(unknownEmail.message);
+      // Nothing in the message names the lock.
+      expect(rightWhileLocked.message).not.toMatch(/lock/i);
     });
 
     it("revokes a session on logout so the token stops working immediately", async () => {
@@ -319,7 +354,13 @@ describe("AuthService", () => {
         expect(await auth.verifyUserPassword(user.id, "wrong-password-entirely")).toBe(false);
       }
       await expect(auth.verifyUserPassword(user.id, PASSWORD)).rejects.toThrow(/temporarily locked/);
-      await expect(auth.login("alice@example.com", PASSWORD)).rejects.toThrow(/temporarily locked/);
+      // `login` refuses too, but says only "Invalid email or password." — an unauthenticated
+      // caller learns nothing about the lock (ADR-125). Re-authentication is different: the
+      // caller has already proved who they are, so naming the lock tells them nothing they
+      // could not already see.
+      const loginError = await auth.login("alice@example.com", PASSWORD).catch((e) => e);
+      expect(loginError).toBeInstanceOf(UnauthorizedError);
+      expect(loginError.message).not.toMatch(/lock/i);
     });
 
     it("clears the failure count after a correct password", async () => {

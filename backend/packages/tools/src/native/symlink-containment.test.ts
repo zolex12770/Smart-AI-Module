@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -25,6 +25,24 @@ import { resolveSandboxedPath } from "./sandbox-path.js";
  * would pass against the broken version, since the bug was precisely that only strings were
  * compared.
  */
+/**
+ * Can this platform create a FILE symlink? Probed at collection time so the cases that need one
+ * are reported as SKIPPED rather than passing with no assertions — an assertion-free green is the
+ * same "cannot fail" defect these suites exist to close. Linux (and CI) creates them freely.
+ */
+const FILE_SYMLINKS_SUPPORTED = (() => {
+  const dir = mkdtempSync(join(tmpdir(), "symlink-probe-"));
+  try {
+    writeFileSync(join(dir, "target"), "x");
+    symlinkSync(join(dir, "target"), join(dir, "link"), "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+})();
+
 describe("sandbox containment resolves symlinks (ADR-088)", () => {
   let root: string;
   let outside: string;
@@ -110,6 +128,57 @@ describe("sandbox containment resolves symlinks (ADR-088)", () => {
       ok: false as const,
       error: String(e),
     }));
+    expect(JSON.stringify(outcome)).not.toContain("TOP SECRET HOST FILE CONTENTS");
+  });
+
+  /**
+   * The same escape, through a link whose target does not exist yet — ADR-125.
+   *
+   * ADR-088 closed the case where the link points at something real. A DANGLING link stayed
+   * open, because `realpathSync` reports "the link's target is missing" and "this name was never
+   * here" with the same ENOENT, and the resolver read the first as the second. Writing is both
+   * the dangerous direction and the case where the target does not exist, so the gap lined up
+   * exactly with the operation that matters: `fs.write_file` through such a link CREATES the
+   * host file.
+   *
+   * This needs a real FILE symlink. A junction cannot stand in: pointed at a missing directory
+   * the write fails for the ordinary reason that its parent is absent, so the test would pass
+   * against the unfixed resolver and prove nothing. Reported as a skip where file symlinks need
+   * elevation, and run for real in CI, where Linux creates them without ceremony.
+   */
+  it.skipIf(!FILE_SYMLINKS_SUPPORTED)(
+    "refuses to WRITE through a DANGLING FILE link that points outside the workspace",
+    async () => {
+      const plantedAt = join(outside, "planted-by-the-agent.txt");
+      // The link exists; its target does not. An agent can create exactly this with the write
+      // tools it already holds.
+      symlinkSync(plantedAt, join(root, "dangling.txt"), "file");
+      expect(existsSync(plantedAt)).toBe(false);
+
+      const [writeTool] = createFilesystemTools(root).filter((t) => t.definition.id === "fs.write_file");
+      const outcome = await writeTool
+        .handler({ path: "dangling.txt", content: "PLANTED ON THE HOST" }, ctx)
+        .catch((e: unknown) => ({ ok: false as const, error: String(e) }));
+
+      // Whether it throws or returns ok:false, the unacceptable outcome is a file on the host.
+      expect(existsSync(plantedAt)).toBe(false);
+      expect(JSON.stringify(outcome)).not.toContain("PLANTED ON THE HOST");
+    }
+  );
+
+  it.skipIf(!FILE_SYMLINKS_SUPPORTED)("refuses to READ through a dangling FILE link", async () => {
+    const target = join(outside, "host-secret.txt"); // exists, from beforeEach
+    const link = join(root, "read-me.txt");
+    // Created while the target is absent, then the target appears: containment must depend on
+    // where the link LEADS, not on what existed when it was made.
+    symlinkSync(join(outside, "not-yet.txt"), link, "file");
+    writeFileSync(join(outside, "not-yet.txt"), "TOP SECRET HOST FILE CONTENTS");
+    expect(existsSync(target)).toBe(true);
+
+    const [readTool] = createFilesystemTools(root).filter((t) => t.definition.id === "fs.read_file");
+    const outcome = await readTool
+      .handler({ path: "read-me.txt" }, ctx)
+      .catch((e: unknown) => ({ ok: false as const, error: String(e) }));
     expect(JSON.stringify(outcome)).not.toContain("TOP SECRET HOST FILE CONTENTS");
   });
 
