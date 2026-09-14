@@ -47,7 +47,7 @@ import {
   type AssetStore,
   type SpeechProvider,
 } from "@ai-platform/media";
-import { estimateLlmCostUsd, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
+import { estimateLlmCostUsd, estimatePromptTokens, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import {
   createLogger,
   initMetrics,
@@ -65,7 +65,9 @@ import { createRagTools, processDocumentIngestion, processDocumentScan } from "@
 import { ClamAvScanner, type MalwareScanner } from "@ai-platform/scanning";
 import { AuthService, createSandbox, type ExecutionSandbox } from "@ai-platform/security";
 import {
+  QuotaExceededError,
   signupRequestSchema,
+  type EmbeddingMeter,
   type EmbeddingProvider,
 } from "@ai-platform/shared";
 import {
@@ -353,8 +355,8 @@ async function main() {
   // ADR-063 — the retrieval/injection/extraction layer over the memory store. Its relevance
   // threshold is derived from the embedding model, so it adapts when a real semantic model
   // replaces the deterministic fallback rather than needing to be retuned by hand.
-  const memory = new MemoryService(memoryItems, embeddings);
-
+  //
+  // (Constructed after `usage` and `quota` below, because it now carries the embedding meter.)
   const usage = new PgUsageRecordRepository(db);
   const quota = new QuotaManager(usage, {
     dailyTokenLimit: config.DAILY_TOKEN_LIMIT,
@@ -364,6 +366,48 @@ async function main() {
     monthlySpeechCharacterLimit: config.MONTHLY_SPEECH_CHARACTER_LIMIT,
     monthlyVideoSecondsLimit: config.MONTHLY_VIDEO_SECONDS_LIMIT,
   });
+
+  /**
+   * The one place embedding spend is priced and recorded — docs/26_DECISIONS.md ADR-131.
+   *
+   * `rag` and `memory` take this as an interface so neither has to know about the usage schema,
+   * HTTP errors, or the token estimator (which lives in the model router, a package a retrieval
+   * layer has no other reason to depend on). Estimation happens here so the counting rule has a
+   * single home.
+   *
+   * The deterministic fallback embedder is local arithmetic and costs nothing, so it is neither
+   * gated nor recorded — writing rows for it would make the ledger describe spend that did not
+   * happen, which is the same dishonesty as omitting spend that did.
+   */
+  const embeddingMeter: EmbeddingMeter = {
+    async check(projectId, texts) {
+      if (embeddings.isDeterministicFallback) return;
+      const tokens = texts.reduce((total, text) => total + estimatePromptTokens(text), 0);
+      const result = await quota.checkEmbeddingTokens(projectId, tokens);
+      if (!result.allowed) throw new QuotaExceededError(result.reason ?? "Embedding quota exceeded.");
+    },
+    async record(projectId, texts, options) {
+      if (embeddings.isDeterministicFallback) return;
+      const tokens = texts.reduce((total, text) => total + estimatePromptTokens(text), 0);
+      await usage.create({
+        id: uuid(),
+        projectId,
+        userId: options?.userId ?? null,
+        kind: "embedding",
+        provider: embeddings.providerName,
+        model: embeddings.modelTag,
+        inputTokens: tokens,
+        outputTokens: null,
+        units: texts.length,
+        estimatedCostUsd: null,
+        requestId: options?.requestId ?? null,
+        idempotencyKey: options?.idempotencyKey ?? null,
+      });
+    },
+  };
+
+  // ADR-063 — the retrieval/injection/extraction layer over the memory store (see above).
+  const memory = new MemoryService(memoryItems, embeddings, { embeddingMeter });
 
   // docs/13 §12 / ADR-042 — upload malware scanning. Presence of CLAMD_HOST is what turns the
   // scan step on for the upload route; the boot-time ping is a warning, not a gate, because
@@ -407,7 +451,10 @@ async function main() {
         ? config.WEB_FETCH_ALLOWLIST.split(",").map((h) => h.trim()).filter(Boolean)
         : undefined,
     }),
-    ...createRagTools({ chunkRepo: documentChunks, documentRepo: documents, embeddings }),
+    // Metered: this is the path an AGENT takes, and an agent can search in a loop (ADR-131).
+    // The RAG route meters its own question separately and therefore passes no meter, so one
+    // question is never charged twice.
+    ...createRagTools({ chunkRepo: documentChunks, documentRepo: documents, embeddings, embeddingMeter }),
   ]) {
     toolRegistry.register(definition, handler);
   }
@@ -684,6 +731,8 @@ async function main() {
             documentRepo: documents,
             chunkRepo: documentChunks,
             embeddings,
+            // The largest embedding spend in the platform, previously unmetered (ADR-131).
+            embeddingMeter,
             sandboxRoot,
             assetRepo: assets,
             assetStore,

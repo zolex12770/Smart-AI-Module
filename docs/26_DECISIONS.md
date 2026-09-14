@@ -2145,3 +2145,18 @@ The scope moves into SQL rather than into the call signature, which matters more
 
 **Date:** 2026-09-14
 **Impact:** `backend/packages/jobs/src/queue.ts` (`getDeadLettered` added), `backend/src/routes/v1/platform.ts` + 5 tests across `dead-letter.test.ts` and `spend-guards.test.ts`.
+
+## ADR-131: Embedding spend is asked about before it happens, and written down after
+
+**Decision:** Document ingestion, the agent's `rag.search_documents` tool and memory's three embedding paths all go through an `EmbeddingMeter` that consults the budget first and records a usage row second.
+
+**One of four paths was metered.** ADR-119 gated and recorded the question asked at `POST /api/v1/rag/query`, and left the others exactly as they were. The largest by a wide margin is document ingestion — an entire document's chunks in one batch, re-run from the first chunk on every retry — which passed through no budget and wrote nothing to the ledger. So `usage` could honestly report "embedding: 1 unit, 12 tokens" for a question while an ingestion had just spent tens of thousands, and a project refused a single RAG query for being over its embedding limit could still ingest a hundred-page PDF. The agent's search tool was the same shape with a worse profile: a task can search in a loop, and every iteration embedded for free.
+
+**An interface, so retrieval does not learn about billing.** `rag` and `memory` take `EmbeddingMeter` rather than the quota manager, because neither has any business knowing about the usage schema or HTTP error types. It takes the TEXTS rather than a token count for a related reason: the estimator lives in the model router, and a retrieval package importing an LLM package to count characters is the kind of dependency that is never removed later. Counting happens once, in the single implementation the composition root builds, which is also the only place that knows the deterministic fallback embedder is local arithmetic and must be neither gated nor recorded — writing rows for it would make the ledger describe spend that did not happen, which is the same dishonesty as omitting spend that did.
+
+**Memory refuses quietly, on purpose.** The rule around memory is already that a chat turn which cannot embed proceeds without recall rather than failing. A turn that is over its embedding budget is that case: the user gets an answer with no memory rather than an error about a budget they did not know memory was spending. Ingestion is the opposite — it throws, because an ingestion that silently skipped embedding would leave a document that looks ready and can never be found.
+
+**The check is before the call, and that is what the test asserts.** With a meter that refuses, the embedding provider is not called at all — not called and then discarded. The ingestion charge is keyed on the document AND its ingest generation, so a retry of the same version does not double-charge while a genuine re-ingest after a new upload does.
+
+**Date:** 2026-09-14
+**Impact:** `shared/src/usage.ts` (new), `backend/packages/rag/src/{ingest,retrieve}.ts`, `backend/packages/memory/src/memory-service.ts`, `backend/src/index.ts` + 4 tests.

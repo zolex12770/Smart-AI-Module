@@ -1,6 +1,6 @@
 import type { MemoryItem, MemoryItemMatch, MemoryItemRepository, MemoryScope } from "@ai-platform/database";
 import type { EmbeddingService } from "@ai-platform/embeddings";
-import type { ChatMessage } from "@ai-platform/shared";
+import type { ChatMessage, EmbeddingMeter } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 
 /**
@@ -29,6 +29,11 @@ import { v4 as uuid } from "uuid";
  */
 
 export interface MemoryServiceOptions {
+  /**
+   * Budget and ledger for memory's own embedding calls (ADR-131). Optional: a test about recall
+   * should not have to build a ledger, and an absent meter means "not metered here".
+   */
+  embeddingMeter?: EmbeddingMeter;
   /**
    * Cosine distance above which a match is discarded. Omit it and the service derives a
    * default from the embedding model, which is the only honest way to set it: the useful
@@ -76,11 +81,14 @@ export class MemoryService {
   private readonly maxCharacters: number;
   private readonly now: () => Date;
 
+  private readonly meter: EmbeddingMeter | undefined;
+
   constructor(
     private readonly repo: MemoryItemRepository,
     private readonly embeddings: EmbeddingService,
     options: MemoryServiceOptions = {}
   ) {
+    this.meter = options.embeddingMeter;
     // See MemoryServiceOptions.maxDistance: tight for a semantic model, looser for the
     // lexical fallback, because the two do not share a distance scale.
     this.maxDistance = options.maxDistance ?? (embeddings.isDeterministicFallback ? 0.85 : 0.55);
@@ -101,7 +109,7 @@ export class MemoryService {
     provenance?: Record<string, unknown> | null;
   }): Promise<MemoryItem> {
     const content = input.content.trim();
-    const embedded = await this.embedQuietly(content);
+    const embedded = await this.embedQuietly(input.projectId, content);
     return this.repo.create({
       id: uuid(),
       projectId: input.projectId,
@@ -129,7 +137,7 @@ export class MemoryService {
     const seen = new Set<string>();
     const out: RetrievedMemory[] = [];
 
-    const embedded = await this.embedQuietly(request.query);
+    const embedded = await this.embedQuietly(request.projectId, request.query);
     if (embedded) {
       const matches: MemoryItemMatch[] = await this.repo.searchSemantic({
         projectId: request.projectId,
@@ -275,7 +283,7 @@ export class MemoryService {
   }
 
   private async findSimilar(projectId: string, userId: string, content: string): Promise<MemoryItem | null> {
-    const embedded = await this.embedQuietly(content);
+    const embedded = await this.embedQuietly(projectId, content);
     if (!embedded) return null;
     const matches = await this.repo.searchSemantic({
       projectId,
@@ -298,10 +306,25 @@ export class MemoryService {
    * should proceed without memory rather than fail; the item is still stored, and remains
    * reachable by recency until it is re-embedded.
    */
-  private async embedQuietly(text: string): Promise<{ vector: number[]; model: string } | null> {
+  /**
+   * Metered, and quiet about everything else — docs/26_DECISIONS.md ADR-131.
+   *
+   * Memory embeds on three paths: storing a fact, recalling on a chat turn, and the near-duplicate
+   * check before storing. All three are small, and all three were free and invisible: a chat with
+   * memory on embedded twice per turn, for as many turns as the user liked, against a budget that
+   * recorded none of it.
+   *
+   * A REFUSAL still returns null rather than throwing, deliberately. The surrounding rule here is
+   * that a chat turn which cannot embed proceeds without memory instead of failing, and a turn
+   * that is over its embedding budget is exactly that case: the user gets an answer with no recall
+   * rather than an error about a budget they did not know memory was spending.
+   */
+  private async embedQuietly(projectId: string, text: string): Promise<{ vector: number[]; model: string } | null> {
     if (!text.trim()) return null;
     try {
+      await this.meter?.check(projectId, [text]);
       const embedded = await this.embeddings.embedOne(text);
+      await this.meter?.record(projectId, [text]);
       return { vector: embedded.vector, model: embedded.model };
     } catch {
       return null;

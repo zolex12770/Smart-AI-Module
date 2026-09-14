@@ -12,6 +12,7 @@ import type {
 } from "@ai-platform/database";
 import { projectWorkspace, resolveSandboxedPath } from "@ai-platform/tools";
 import type { EmbeddingService } from "@ai-platform/embeddings";
+import type { EmbeddingMeter } from "@ai-platform/shared";
 import { chunkText } from "./chunking.js";
 import { extractDocxText } from "./parsers/docx.js";
 import { extractPdfText } from "./parsers/pdf.js";
@@ -47,6 +48,18 @@ export interface IngestDeps {
    * that were produced by two different models.
    */
   embeddings: EmbeddingService;
+  /**
+   * Budget and ledger for the embedding call below — docs/26_DECISIONS.md ADR-131.
+   *
+   * Ingestion is the largest embedding spend in the platform: an entire document's chunks in one
+   * batch, and re-run from the first chunk on every retry. It passed through no budget and wrote
+   * no usage row, so a project could be refused a single RAG question for being over its
+   * embedding limit while ingesting a hundred-page PDF without anything noticing.
+   *
+   * Optional so a test that is about chunking does not have to construct a ledger; the worker
+   * that runs this in production always passes one.
+   */
+  embeddingMeter?: EmbeddingMeter;
   /**
    * The DEPLOYMENT sandbox root -- the directory that holds one workspace per project. A
    * document's `sourcePath` is resolved inside its own project's workspace beneath this, never
@@ -185,7 +198,21 @@ export async function processDocumentIngestion(deps: IngestDeps, document: Docum
     // zero-padding (ADR-048). Without the tag a later model switch would leave these rows
     // being compared against vectors from a different space — a distance with no meaning,
     // silently degrading every ranking instead of failing loudly.
+    /**
+     * Asked before, recorded after — ADR-131. The estimate prices the whole batch, because that
+     * is what is about to be sent; the row afterwards records the same figure, since no embedding
+     * provider in use reports a token count of its own.
+     */
+    await deps.embeddingMeter?.check(document.projectId, chunks);
+
     const embedded = await deps.embeddings.embed(chunks);
+
+    await deps.embeddingMeter?.record(document.projectId, chunks, {
+      userId: document.uploadedByUserId ?? null,
+      // Keyed on the document AND its ingest generation: a retry of the same version must not
+      // double-charge, but a genuine re-ingest after a new upload is new spend.
+      idempotencyKey: `embedding:ingest:${document.id}:${document.version}`,
+    });
     const rows: NewDocumentChunk[] = chunks.map((content, i) => ({
       id: uuid(),
       chunkIndex: i,

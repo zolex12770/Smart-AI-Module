@@ -1,5 +1,6 @@
 import type { Document, DocumentChunkRepository, DocumentRepository } from "@ai-platform/database";
 import type { EmbeddingService } from "@ai-platform/embeddings";
+import type { EmbeddingMeter } from "@ai-platform/shared";
 
 /**
  * Cosine-distance ceiling for RAG retrieval, and the fix for the audit's sharpest finding:
@@ -21,6 +22,15 @@ export const DEFAULT_RAG_MAX_DISTANCE = 0.6;
 
 export interface RetrieveDeps {
   chunkRepo: DocumentChunkRepository;
+  /**
+   * Budget and ledger for the query embedding — docs/26_DECISIONS.md ADR-131.
+   *
+   * The RAG ROUTE meters its own question (ADR-119), but this function is also reached by the
+   * agent's `rag.search_documents` tool, which went through neither check nor ledger: a task that
+   * searched in a loop embedded as often as it liked. Optional so the route, which has already
+   * metered, can pass nothing and avoid charging twice for one question.
+   */
+  embeddingMeter?: EmbeddingMeter;
   /**
    * Needed to answer "which document is this chunk from?" — a citation that cannot be
    * resolved to a source is not a citation (docs/09_RAG_ARCHITECTURE.md §6). It is also the
@@ -81,7 +91,9 @@ export async function searchDocuments(
   // return nothing anyway — but for a reason no one reading the code would guess. Say it here.
   if (options.query.trim() === "") return [];
 
+  await deps.embeddingMeter?.check(options.projectId, [options.query]);
   const embedded = await deps.embeddings.embedOne(options.query);
+  await deps.embeddingMeter?.record(options.projectId, [options.query]);
   const matches = await deps.chunkRepo.search({
     projectId: options.projectId,
     queryEmbedding: embedded.vector,
