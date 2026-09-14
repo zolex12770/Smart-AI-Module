@@ -284,10 +284,42 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       if (!parsed.success) throw new ValidationError(parsed.error.message);
       const projectId = scopeOf(authCtx);
 
+      /**
+       * Retrieval embeds the question, and that is a model call like any other — ADR-119.
+       *
+       * It used to happen with no quota check and no ledger row: a project out of budget could
+       * still drive an embedding endpoint on every query, and nothing recorded that it had. The
+       * check comes first, and the row is written after the call that actually happened.
+       */
+      const questionTokens = estimatePromptTokens(parsed.data.question);
+      const embeddingQuota = await ctx.quota.checkEmbeddingTokens(projectId, questionTokens);
+      if (!embeddingQuota.allowed) {
+        throw new QuotaExceededError(embeddingQuota.reason ?? "Embedding quota exceeded.");
+      }
+
       const results = await searchDocuments(
         { chunkRepo: ctx.documentChunks, documentRepo: ctx.documents, embeddings: ctx.embeddings },
         { projectId, query: parsed.data.question, topK: parsed.data.topK ?? 5 }
       );
+
+      if (!ctx.embeddings.isDeterministicFallback) {
+        // Only a real embedder costs anything; the lexical fallback is local arithmetic.
+        await ctx.usage.create({
+          id: uuid(),
+          projectId,
+          userId: authCtx.user.id,
+          kind: "embedding",
+          provider: ctx.embeddings.providerName,
+          model: ctx.embeddings.modelTag,
+          inputTokens: questionTokens,
+          outputTokens: null,
+          units: 1,
+          estimatedCostUsd: null,
+          requestId: request.id,
+          // One query, one embedding charge — a retried request conflicts rather than doubling.
+          idempotencyKey: `embedding:rag-query:${request.id}`,
+        });
+      }
       const citations = buildCitations(results);
       const sources = results.map((r, i) => ({
         marker: `[${i + 1}]`,
@@ -395,7 +427,12 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
             idempotencyKey: `llm:rag-query:${request.id}`,
           });
         } else if (event.type === "error") {
-          throw new ServiceUnavailableError(event.message);
+          // The provider's own words can carry its URL, model names and account details, so the
+          // caller gets a stable sentence and the request id; the detail goes to the log (ADR-119).
+          request.log.error({ request_id: request.id, project_id: projectId, err: event.message }, "RAG answer failed");
+          throw new ServiceUnavailableError(
+            "The model provider could not answer this question. The request id in this response identifies it in the server log."
+          );
         }
       }
       const verdict = checkGrounding({ answer, citations, retrievedCount: results.length });

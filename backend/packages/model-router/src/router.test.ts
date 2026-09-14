@@ -231,3 +231,60 @@ describe("classifyProviderError — empty responses (ADR-094)", () => {
     expect(classifyProviderError(new Error("Request failed (404): no such model"))).toBe("fatal");
   });
 });
+
+/**
+ * Abandoning the stream closes the provider's — docs/26_DECISIONS.md ADR-119.
+ *
+ * The chat route's `for await` ends when the browser disconnects, and a cancelled agent node does
+ * the same. Before this, the provider's generator kept running: its `finally`, which aborts the
+ * upstream request, was never reached, so a provider went on generating — and billing — into a
+ * stream nobody was reading.
+ */
+describe("router cancellation", () => {
+  it("closes the provider's iterator when the consumer stops reading", async () => {
+    let closed = false;
+    let yielded = 0;
+    const provider = {
+      name: "endless",
+      isMock: false,
+      model: "endless-1",
+      capabilities: (): ProviderCapabilities => ({
+        streaming: true,
+        toolCalling: false,
+        structuredOutput: false,
+        vision: false,
+        contextWindow: null,
+      }),
+      async *streamChat() {
+        try {
+          for (;;) {
+            yielded++;
+            yield { type: "token", delta: "x" } as const;
+            await new Promise((r) => setTimeout(r, 1));
+          }
+        } finally {
+          // What the provider adapters use to abort their HTTP request.
+          closed = true;
+        }
+      },
+    };
+    const registry = new ModelRegistry();
+    registry.register(provider as never, { asDefault: true });
+    const router = new ModelRouter(registry);
+
+    // Read two events, then abandon the stream exactly as a disconnected client does.
+    const stream = router.streamChat({ messages: [{ role: "user", content: "hello" }] });
+    let received = 0;
+    for await (const event of stream) {
+      if (event.type === "token") received++;
+      if (received === 2) break;
+    }
+
+    expect(received).toBe(2);
+    expect(closed).toBe(true);
+    const afterBreak = yielded;
+    await new Promise((r) => setTimeout(r, 50));
+    // And it really stopped: no further work after the consumer walked away.
+    expect(yielded).toBe(afterBreak);
+  });
+});

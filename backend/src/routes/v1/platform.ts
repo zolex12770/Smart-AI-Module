@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { NotFoundError, ServiceUnavailableError, ValidationError, type Permission } from "@ai-platform/shared";
+import { NotFoundError, QuotaExceededError, ServiceUnavailableError, ValidationError, type Permission } from "@ai-platform/shared";
 import { z } from "zod";
 import { scrapeMetrics } from "@ai-platform/observability";
 import type { AppContext } from "../../context.js";
@@ -208,8 +208,20 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
    */
   app.post<{ Params: { queue: string; id: string } }>(
     "/api/v1/jobs/dead-letter/:queue/:id/replay",
+    // Replay enqueues real, paid work; without a cap it is a one-click way to spend a budget
+    // faster than the route that created the work in the first place (ADR-119).
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request) => {
       const authCtx = await requireProject(request, ctx.auth, "project:write");
+
+      // A replayed image generation is a new image generation, and the daily budget applies.
+      if (request.params.queue.startsWith("image.generate")) {
+        const quotaCheck = await ctx.quota.checkImageGeneration(authCtx.projectId!);
+        if (!quotaCheck.allowed) {
+          throw new QuotaExceededError(quotaCheck.reason ?? "Image generation quota exceeded.");
+        }
+      }
+
       const replayedId = await ctx.jobQueue.replayDeadLettered(
         authCtx.projectId!,
         request.params.queue,

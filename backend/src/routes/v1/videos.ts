@@ -115,7 +115,11 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
    * and re-enqueued scene jobs that no worker was registered to run, leaving the caller
    * polling a project that could never move.
    */
-  app.post<{ Params: { id: string } }>("/api/v1/videos/:id/retry", async (request, reply) => {
+  app.post<{ Params: { id: string } }>(
+    "/api/v1/videos/:id/retry",
+    // The same cap as creation: a retry re-enqueues exactly the same paid scene work (ADR-119).
+    { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
+    async (request, reply) => {
     const authCtx = await requireProject(request, ctx.auth, "media:generate");
     const projectId = scopeOf(authCtx);
     if (!ctx.videoGenerationAvailable) throw new CapabilityUnavailableError(VIDEO_UNAVAILABLE);
@@ -125,6 +129,19 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
     const project = await ctx.videoProjects.get(projectId, request.params.id);
     if (!project) throw new NotFoundError(`Video project "${request.params.id}" not found.`);
 
+    /**
+     * A retry spends what a creation spends — ADR-119. The create route checks the project's
+     * video-seconds budget and this one did not, so a project over its limit could keep
+     * regenerating scenes through the retry button indefinitely.
+     */
+    const pendingSeconds = (await ctx.videoScenes.listByVideoProject({ projectId, videoProjectId: project.id }))
+      .filter((scene) => scene.status !== "succeeded")
+      .reduce((total, scene) => total + (scene.durationSeconds ?? 0), 0);
+    if (pendingSeconds > 0) {
+      const quotaCheck = await ctx.quota.checkVideoSeconds(projectId, pendingSeconds);
+      if (!quotaCheck.allowed) throw new QuotaExceededError(quotaCheck.reason ?? "Video quota exceeded.");
+    }
+
     const scope: VideoProjectScope = { projectId, videoProjectId: project.id };
     await orchestrateVideoProject(
       { projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue },
@@ -132,5 +149,6 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
       request.id
     );
     reply.status(202).send({ project: await ctx.videoProjects.get(projectId, project.id) });
-  });
+    }
+  );
 }

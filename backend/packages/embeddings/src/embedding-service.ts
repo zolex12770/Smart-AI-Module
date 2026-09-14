@@ -38,6 +38,11 @@ export class EmbeddingService {
     return this.provider.isDeterministicFallback;
   }
 
+  /** Who produced the vectors — what a usage row records as its provider (ADR-119). */
+  get providerName(): string {
+    return this.provider.name;
+  }
+
   /** The tag stored alongside each vector and used to filter retrieval. */
   get modelTag(): string {
     return `${this.provider.name}:${this.provider.model}`;

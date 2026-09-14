@@ -1971,3 +1971,18 @@ Three properties keep detection from becoming a surprise:
 
 **Date:** 2026-09-14
 **Impact:** `backend/src/local-runtime.ts` (new), `backend/src/providers.ts`, `backend/src/index.ts`, `.env.example` + 11 tests.
+
+## ADR-119: Nothing spends without a gate, a record, or a way to stop
+
+**Decision:** Four holes closed, each of which let a project spend past its budget, spend unrecorded, or keep spending after nobody was listening.
+
+**A cancelled stream kept the provider generating.** `ModelRouter.streamChat` drove the provider's iterator by hand (`[Symbol.asyncIterator]()`) at two levels, and neither closed it. When a consumer abandons the stream — the chat route's `for await` ends the moment a browser disconnects, and a cancelled agent node does the same — JavaScript calls `return()` on the router's generator, but that was never forwarded, so the adapter's own `finally`, which aborts the upstream HTTP request, never ran. The provider went on generating, and billing, into a stream nobody was reading. Both layers now close what they opened; the test abandons a stream mid-flight and asserts the provider's `finally` ran and that it stopped producing.
+
+**Retrieval embedded for free, and off the books.** `POST /api/v1/rag/query` embeds the question on every call. There was no quota check and no ledger row, so a project with an exhausted budget could still drive an embedding endpoint, and no one could see what retrieval cost. The budget is checked before the call and the row written after it — and only for a real embedder, because the lexical fallback is local arithmetic and charging for it would be fiction. `PgUsageRecordRepository.sumEmbeddingTokensSince` now exists, without which a configured embedding limit made `checkEmbeddingTokens` fail closed and refuse every query — correct, and useless.
+
+**Two routes re-enqueued paid work with no gate.** `POST /api/v1/videos/:id/retry` re-runs exactly the scene generation the create route gates, and had neither the quota check nor the per-route limit that route has. `POST /api/v1/jobs/dead-letter/:queue/:id/replay` enqueues real work from one click, with nothing bounding it. Both now carry a rate limit, the retry checks the video-seconds budget for the scenes it would regenerate, and a replayed image generation is checked against the daily image budget.
+
+**A provider's error text reached the caller.** `ServiceUnavailableError(event.message)` handed a tenant whatever the upstream said — which can name its host, model and account. The caller gets a stable sentence and the request id; the detail goes to the log.
+
+**Date:** 2026-09-14
+**Impact:** `model-router/src/router.ts`, `database/src/repositories/usage-record-repository.ts`, `embeddings/src/embedding-service.ts`, `routes/v1/{rag,videos,platform}.ts`, `docs/API.md` + 8 tests.

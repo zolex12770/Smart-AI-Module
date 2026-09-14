@@ -119,6 +119,17 @@ export class PgUsageRecordRepository implements UsageRecordRepository {
     return this.sumColumnSince(projectId, "video", usageRecords.units, since);
   }
 
+  /**
+   * Embedding tokens, so a configured embedding budget can actually be enforced — ADR-119.
+   *
+   * Without this aggregate `QuotaManager.checkEmbeddingTokens` fails CLOSED, which is the right
+   * default for a limit it cannot measure but means an operator who sets one refuses every
+   * retrieval. Embedding rows carry their tokens in `input_tokens` (there is no output).
+   */
+  async sumEmbeddingTokensSince(projectId: string, since: Date): Promise<number> {
+    return this.sumColumnSince(projectId, "embedding", usageRecords.inputTokens, since);
+  }
+
   /** Characters synthesised, recorded as `units` on speech rows (ADR-114). */
   async sumSpeechCharactersSince(projectId: string, since: Date): Promise<number> {
     return this.sumColumnSince(projectId, "speech", usageRecords.units, since);

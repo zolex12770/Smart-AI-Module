@@ -193,22 +193,37 @@ export class ModelRouter {
 
       // Committed: this provider produced a real first event.
       this.recordSuccess(provider.name);
-      yield first.value;
-      while (true) {
-        let next: IteratorResult<ChatStreamEvent>;
-        try {
-          next = await iterator.next();
-        } catch (err) {
-          yield {
-            type: "error",
-            message: `The model provider failed partway through responding: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          };
-          return;
+      try {
+        yield first.value;
+        while (true) {
+          let next: IteratorResult<ChatStreamEvent>;
+          try {
+            next = await iterator.next();
+          } catch (err) {
+            yield {
+              type: "error",
+              message: `The model provider failed partway through responding: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            };
+            return;
+          }
+          if (next.done) return;
+          yield next.value;
         }
-        if (next.done) return;
-        yield next.value;
+      } finally {
+        /**
+         * Close the provider's own iterator — ADR-119.
+         *
+         * A consumer abandons this generator whenever a caller stops reading: the chat route's
+         * `for await` ends when the browser disconnects, and a cancelled agent node does the same.
+         * JavaScript then calls `return()` on THIS generator, but the provider's iterator was
+         * obtained by hand (`[Symbol.asyncIterator]()`) and delegation never forwarded that call,
+         * so the provider generator's own `finally` — the one that aborts the upstream HTTP
+         * request — never ran. The provider kept generating, and kept billing, into a stream
+         * nobody was reading. `return()` on a generator that already finished is a no-op.
+         */
+        await iterator.return?.(undefined);
       }
     }
 
@@ -246,11 +261,18 @@ export class ModelRouter {
         continue;
       }
       if (first.done) return;
-      yield first.value;
-      while (true) {
-        const next = await iterator.next();
-        if (next.done) return;
-        yield next.value;
+      try {
+        yield first.value;
+        while (true) {
+          const next = await iterator.next();
+          if (next.done) return;
+          yield next.value;
+        }
+      } finally {
+        // The provider's own iterator, closed when this generator is abandoned or finishes —
+        // ADR-119. This is the layer that actually reaches the adapter's `finally`, where the
+        // upstream HTTP request is aborted; the caller above closes THIS generator in turn.
+        await iterator.return?.(undefined);
       }
     }
   }
