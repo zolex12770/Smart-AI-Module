@@ -184,7 +184,7 @@ and nothing is ever substituted with a fake result (ADR-050).
 | Method | Path | Auth / permission | Rate limit |
 |---|---|---|---|
 | `GET` | `/api/v1/projects` | session or API key · authentication only | global (300 / 1 minute) |
-| `POST` | `/api/v1/projects` | session or API key · authentication only | global (300 / 1 minute) |
+| `POST` | `/api/v1/projects` | session or API key · authentication only | 20 / 10 minutes per user |
 | `POST` | `/api/v1/projects/:projectId/members` | session or API key · `project:admin` | global (300 / 1 minute) |
 
 ## `/api/v1/providers`

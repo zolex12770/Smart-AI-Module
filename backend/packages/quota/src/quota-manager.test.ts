@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -18,6 +19,19 @@ import { QuotaManager, type QuotaUsageLedger } from "./quota-manager.js";
  * against real SQL aggregation (SUM/COUNT with a real WHERE created_at >= X clause) — and,
  * since ADR-049, a real WHERE project_id = X clause as well.
  */
+/** A second project inside an organization that already exists — the bypass, in one call. */
+async function seedSiblingProject(db: PgliteDb, organizationId: string, name: string): Promise<string> {
+  const now = new Date();
+  const id = uuid();
+  await db.insert(projects).values({ id, organizationId, name, createdAt: now, updatedAt: now });
+  return id;
+}
+
+async function organizationOf(db: PgliteDb, projectId: string): Promise<string> {
+  const [row] = await db.select({ organizationId: projects.organizationId }).from(projects).where(eq(projects.id, projectId));
+  return row!.organizationId;
+}
+
 async function seedProject(db: PgliteDb, name: string): Promise<string> {
   const now = new Date();
   const organizationId = uuid();
@@ -45,9 +59,9 @@ async function seedProject(db: PgliteDb, name: string): Promise<string> {
  */
 function ledgerWithoutEmbeddingTotals(usage: PgUsageRecordRepository): QuotaUsageLedger {
   return {
-    sumLlmTokensSince: (projectId, since) => usage.sumLlmTokensSince(projectId, since),
-    countImagesSince: (projectId, since) => usage.countImagesSince(projectId, since),
-    sumVideoSecondsSince: (projectId, since) => usage.sumVideoSecondsSince(projectId, since),
+    sumLlmTokensForTenantSince: (projectId, since) => usage.sumLlmTokensForTenantSince(projectId, since),
+    countImagesForTenantSince: (projectId, since) => usage.countImagesForTenantSince(projectId, since),
+    sumVideoSecondsForTenantSince: (projectId, since) => usage.sumVideoSecondsForTenantSince(projectId, since),
   };
 }
 
@@ -197,6 +211,75 @@ describe("QuotaManager (real PGlite Postgres + PgUsageRecordRepository)", () => 
     expect(await manager.checkLlmTokens(projectId, 100)).toEqual({ allowed: true });
   });
 
+  /**
+   * A ceiling a user can raise by pressing a button — docs/26_DECISIONS.md ADR-126.
+   *
+   * Every limit was enforced per project, and any authenticated user can create projects. So the
+   * whole quota system could be defeated without exploiting anything: make a second project and
+   * spend the same budget again, a third and spend it a third time. These fix the scope at the
+   * tenant, which is the thing an operator is actually budgeting.
+   */
+  describe("limits are a ceiling for the TENANT, not for each project separately", () => {
+    it("counts a sibling project's spend against the same daily token budget", async () => {
+      const organizationId = await organizationOf(db, projectId);
+      const sibling = await seedSiblingProject(db, organizationId, "second-project");
+
+      // The first project spends the whole budget.
+      await record({ kind: "llm", projectId, provider: "mock", inputTokens: 900, outputTokens: 100, requestId: "t1" });
+      const manager = new QuotaManager(usage, { dailyTokenLimit: 1000 });
+
+      // Before ADR-126 the brand-new project started from zero and bought the budget again.
+      const result = await manager.checkLlmTokens(sibling, 1);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toMatch(/daily token limit/i);
+    });
+
+    it("counts a sibling project's images, video-seconds and speech the same way", async () => {
+      const organizationId = await organizationOf(db, projectId);
+      const sibling = await seedSiblingProject(db, organizationId, "second-project");
+
+      await record({ kind: "image", projectId, provider: "mock", units: 1, requestId: "i1" });
+      await record({ kind: "image", projectId, provider: "mock", units: 1, requestId: "i2" });
+      await record({ kind: "video", projectId, provider: "mock", units: 50, requestId: "v1" });
+      await usage.create({
+        id: uuid(),
+        projectId,
+        userId: null,
+        kind: "speech",
+        provider: "piper",
+        model: null,
+        inputTokens: null,
+        outputTokens: null,
+        units: 900,
+        estimatedCostUsd: null,
+        requestId: "s1",
+        idempotencyKey: null,
+        createdAt: new Date(),
+      });
+
+      const manager = new QuotaManager(usage, {
+        dailyImageLimit: 2,
+        monthlyVideoSecondsLimit: 60,
+        dailySpeechCharacterLimit: 1000,
+      });
+
+      expect((await manager.checkImageGeneration(sibling)).allowed).toBe(false);
+      expect((await manager.checkVideoSeconds(sibling, 20)).allowed).toBe(false);
+      expect((await manager.checkSpeechCharacters(sibling, 200)).allowed).toBe(false);
+    });
+
+    it("still isolates a DIFFERENT tenant completely", async () => {
+      // Scoping to the organization must not turn into scoping to the whole deployment: one
+      // customer's spend can never be charged against another's.
+      const other = await seedProject(db, "other-tenant");
+      await record({ kind: "llm", projectId, provider: "mock", inputTokens: 900, outputTokens: 100, requestId: "t1" });
+      const manager = new QuotaManager(usage, { dailyTokenLimit: 1000 });
+
+      expect((await manager.checkLlmTokens(other, 500)).allowed).toBe(true);
+      expect((await manager.checkLlmTokens(projectId, 500)).allowed).toBe(false);
+    });
+  });
+
   it("refuses embedding work, with a reason naming the gap, when a limit is configured that the ledger cannot measure", async () => {
     // Fail-closed: an operator who configured a ceiling asked for one, and quietly allowing
     // everything because the aggregate is missing is precisely FR-063's "silent overage".
@@ -204,7 +287,7 @@ describe("QuotaManager (real PGlite Postgres + PgUsageRecordRepository)", () => 
 
     const result = await manager.checkEmbeddingTokens(projectId, 1);
     expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/sumEmbeddingTokensSince/);
+    expect(result.reason).toMatch(/sumEmbeddingTokensForTenantSince/);
   });
 
   /**

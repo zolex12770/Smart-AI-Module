@@ -1,22 +1,26 @@
 /**
  * The slice of the usage ledger the quota manager reads. `UsageRecordRepository`
  * (backend/packages/database) satisfies it structurally, so nothing needs to adapt anything — but
- * declaring it here keeps the dependency to "four aggregates", not the whole repository.
+ * declaring it here keeps the dependency to five aggregates, not the whole repository.
  *
- * `sumEmbeddingTokensSince` is optional because that aggregate does not exist on the
- * repository yet: embedding spend *is* recorded (`usage_records.kind = 'embedding'`,
- * ADR-049) but nothing sums it. Marking it required would make the package unimplementable;
- * pretending embeddings were unmeterable would drop the kind entirely. Optional states the
- * situation exactly, and `checkEmbeddingTokens` below refuses rather than guesses when an
- * operator configures a limit this ledger cannot measure.
+ * EVERY AGGREGATE IS SCOPED TO THE TENANT, NOT THE PROJECT — docs/26_DECISIONS.md ADR-126.
+ *
+ * They were per-project, and any authenticated user can create projects, so every configured
+ * ceiling could be multiplied by making another one. The `projectId` argument still ADDRESSES
+ * the work (it is what a route and a job worker both have), but what it selects is the spend of
+ * every project belonging to the same organization.
+ *
+ * The two optional members stay optional because a `QuotaUsageLedger` is an interface anyone may
+ * implement, and `checkEmbeddingTokens` refuses rather than guesses when an operator configures a
+ * limit the ledger in front of it cannot measure. `PgUsageRecordRepository` implements both.
  */
 export interface QuotaUsageLedger {
-  sumLlmTokensSince(projectId: string, since: Date): Promise<number>;
-  countImagesSince(projectId: string, since: Date): Promise<number>;
-  sumVideoSecondsSince(projectId: string, since: Date): Promise<number>;
-  sumEmbeddingTokensSince?(projectId: string, since: Date): Promise<number>;
+  sumLlmTokensForTenantSince(projectId: string, since: Date): Promise<number>;
+  countImagesForTenantSince(projectId: string, since: Date): Promise<number>;
+  sumVideoSecondsForTenantSince(projectId: string, since: Date): Promise<number>;
+  sumEmbeddingTokensForTenantSince?(projectId: string, since: Date): Promise<number>;
   /** Characters synthesised, the unit speech providers bill in (ADR-114). */
-  sumSpeechCharactersSince?(projectId: string, since: Date): Promise<number>;
+  sumSpeechCharactersForTenantSince?(projectId: string, since: Date): Promise<number>;
 }
 
 /**
@@ -83,6 +87,11 @@ function startOfMonth(now: Date): Date {
  * `projectId` is threaded in from the caller's authenticated scope on every check (ADR-049).
  * There is no unscoped variant on purpose: a quota check that forgot the project would
  * silently budget the whole platform as one tenant.
+ *
+ * What it SELECTS, since ADR-126, is the whole tenant that owns that project. Per-project
+ * ceilings were trivially defeated — a user who can create a project can create ten, and ten
+ * projects bought ten times every limit. The argument is still the project, because that is what
+ * every caller has; the budget it draws against is the organization's.
  */
 export class QuotaManager {
   constructor(
@@ -98,7 +107,7 @@ export class QuotaManager {
       label: "token",
       dailyLimit: this.limits.dailyTokenLimit,
       monthlyLimit: this.limits.monthlyTokenLimit,
-      sumSince: (id, since) => this.usage.sumLlmTokensSince(id, since),
+      sumSince: (id, since) => this.usage.sumLlmTokensForTenantSince(id, since),
     });
   }
 
@@ -116,13 +125,13 @@ export class QuotaManager {
     const { dailyEmbeddingTokenLimit: daily, monthlyEmbeddingTokenLimit: monthly } = this.limits;
     if (daily === undefined && monthly === undefined) return { allowed: true };
 
-    const sumSince = this.usage.sumEmbeddingTokensSince?.bind(this.usage);
+    const sumSince = this.usage.sumEmbeddingTokensForTenantSince?.bind(this.usage);
     if (!sumSince) {
       return {
         allowed: false,
         reason:
           "An embedding token limit is configured, but this usage ledger cannot total " +
-          "embedding usage (no sumEmbeddingTokensSince aggregate), so the limit cannot be " +
+          "embedding usage (no sumEmbeddingTokensForTenantSince aggregate), so the limit cannot be " +
           "enforced. Remove the limit or use a ledger that reports embedding usage.",
       };
     }
@@ -139,7 +148,7 @@ export class QuotaManager {
 
   async checkImageGeneration(projectId: string): Promise<QuotaCheckResult> {
     if (this.limits.dailyImageLimit === undefined) return { allowed: true };
-    const used = await this.usage.countImagesSince(projectId, startOfDay(this.now()));
+    const used = await this.usage.countImagesForTenantSince(projectId, startOfDay(this.now()));
     if (used + 1 > this.limits.dailyImageLimit) {
       return { allowed: false, reason: `Daily image generation limit of ${this.limits.dailyImageLimit} reached (${used} generated today).` };
     }
@@ -148,7 +157,7 @@ export class QuotaManager {
 
   async checkVideoSeconds(projectId: string, requestedSeconds: number): Promise<QuotaCheckResult> {
     if (this.limits.monthlyVideoSecondsLimit === undefined) return { allowed: true };
-    const used = await this.usage.sumVideoSecondsSince(projectId, startOfMonth(this.now()));
+    const used = await this.usage.sumVideoSecondsForTenantSince(projectId, startOfMonth(this.now()));
     if (used + requestedSeconds > this.limits.monthlyVideoSecondsLimit) {
       return {
         allowed: false,
@@ -166,19 +175,20 @@ export class QuotaManager {
   async checkSpeechCharacters(projectId: string, characters: number): Promise<QuotaCheckResult> {
     const { dailySpeechCharacterLimit: daily, monthlySpeechCharacterLimit: monthly } = this.limits;
     if (daily === undefined && monthly === undefined) return { allowed: true };
-    if (!this.usage.sumSpeechCharactersSince) {
+    const sumSince = this.usage.sumSpeechCharactersForTenantSince?.bind(this.usage);
+    if (!sumSince) {
       // Refuse rather than guess, exactly as the embedding budget does: a limit an operator
       // configured and this ledger cannot measure must not silently pass.
       return { allowed: false, reason: "A speech character limit is configured but this ledger cannot measure speech usage." };
     }
     if (daily !== undefined) {
-      const used = await this.usage.sumSpeechCharactersSince(projectId, startOfDay(this.now()));
+      const used = await sumSince(projectId, startOfDay(this.now()));
       if (used + characters > daily) {
         return { allowed: false, reason: `Daily speech limit of ${daily} characters would be exceeded (${used} synthesised today).` };
       }
     }
     if (monthly !== undefined) {
-      const used = await this.usage.sumSpeechCharactersSince(projectId, startOfMonth(this.now()));
+      const used = await sumSince(projectId, startOfMonth(this.now()));
       if (used + characters > monthly) {
         return { allowed: false, reason: `Monthly speech limit of ${monthly} characters would be exceeded (${used} synthesised this month).` };
       }

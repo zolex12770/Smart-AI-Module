@@ -1,6 +1,6 @@
-import { and, count, eq, gte, sum } from "drizzle-orm";
+import { and, count, eq, gte, inArray, sum } from "drizzle-orm";
 import type { DrizzleDb } from "../client.js";
-import { usageRecords } from "../schema/index.js";
+import { projects, usageRecords } from "../schema/index.js";
 
 /** `embedding` and `tool` joined the ledger in ADR-049: both spend, so both are recorded. */
 export type UsageKind = "llm" | "embedding" | "image" | "video" | "speech" | "tool";
@@ -137,6 +137,73 @@ export class PgUsageRecordRepository implements UsageRecordRepository {
 
   async sumLlmCostUsdSince(projectId: string, since: Date): Promise<number> {
     return this.sumColumnSince(projectId, "llm", usageRecords.estimatedCostUsd, since);
+  }
+
+  /**
+   * The same aggregates, totalled across every project of the OWNING ORGANIZATION — ADR-126.
+   *
+   * Per-project ceilings were the whole enforcement story, and any authenticated user can create
+   * projects, so every configured limit could be multiplied by simply making another one: N
+   * projects bought N times the daily tokens, images, video-seconds and speech. A ceiling that a
+   * user can raise by pressing a button is not a ceiling.
+   *
+   * The scope moves into SQL rather than into the call signature deliberately. Twelve callers
+   * pass a project id, and one of them is a job worker that has no organization id to hand — a
+   * `projectId` parameter that resolves to its tenant keeps every one of them correct without
+   * threading a second identifier through the workers.
+   */
+  private tenantProjects(projectId: string) {
+    return inArray(
+      usageRecords.projectId,
+      this.db
+        .select({ id: projects.id })
+        .from(projects)
+        .where(
+          inArray(
+            projects.organizationId,
+            this.db.select({ organizationId: projects.organizationId }).from(projects).where(eq(projects.id, projectId))
+          )
+        )
+    );
+  }
+
+  async sumLlmTokensForTenantSince(projectId: string, since: Date): Promise<number> {
+    const input = await this.sumTenantColumnSince(projectId, "llm", usageRecords.inputTokens, since);
+    const output = await this.sumTenantColumnSince(projectId, "llm", usageRecords.outputTokens, since);
+    return input + output;
+  }
+
+  async countImagesForTenantSince(projectId: string, since: Date): Promise<number> {
+    const [row] = await this.db
+      .select({ total: count() })
+      .from(usageRecords)
+      .where(and(this.tenantProjects(projectId), eq(usageRecords.kind, "image"), gte(usageRecords.createdAt, since)));
+    return row?.total ?? 0;
+  }
+
+  async sumVideoSecondsForTenantSince(projectId: string, since: Date): Promise<number> {
+    return this.sumTenantColumnSince(projectId, "video", usageRecords.units, since);
+  }
+
+  async sumEmbeddingTokensForTenantSince(projectId: string, since: Date): Promise<number> {
+    return this.sumTenantColumnSince(projectId, "embedding", usageRecords.inputTokens, since);
+  }
+
+  async sumSpeechCharactersForTenantSince(projectId: string, since: Date): Promise<number> {
+    return this.sumTenantColumnSince(projectId, "speech", usageRecords.units, since);
+  }
+
+  private async sumTenantColumnSince(
+    projectId: string,
+    kind: UsageKind,
+    column: Parameters<typeof sum>[0],
+    since: Date
+  ): Promise<number> {
+    const [row] = await this.db
+      .select({ total: sum(column) })
+      .from(usageRecords)
+      .where(and(this.tenantProjects(projectId), eq(usageRecords.kind, kind), gte(usageRecords.createdAt, since)));
+    return row?.total ? Number(row.total) : 0;
   }
 
   private async sumColumnSince(

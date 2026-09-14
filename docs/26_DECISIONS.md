@@ -2074,3 +2074,18 @@ The first run also exposed a real defect: clips were square while the render tar
 
 **Date:** 2026-09-14
 **Impact:** `backend/packages/security/src/auth-service.ts`, `backend/packages/tools/src/native/sandbox-path.ts` + tests in `auth-service.test.ts`, `sandbox-path.test.ts`, `symlink-containment.test.ts`.
+
+## ADR-126: A spend ceiling the customer cannot raise by pressing a button
+
+**Decision:** Every quota aggregate is scoped to the organization that owns the project, not to the project. An organization holds at most 100 projects, and creating them is rate-limited per user.
+
+**The quota system could be defeated without exploiting anything.** ADR-049 made every limit per-project and said so proudly: "one project's spend can never be charged against another's". But any authenticated user can create a project, and a new project starts from zero — so `DAILY_TOKEN_LIMIT=100000` meant a hundred thousand tokens per project, and a user who wanted two hundred thousand pressed New Project. The same held for images, video-seconds, embedding tokens and speech characters. No credential, no race, no missing check: the ceiling was simply attached to a thing the person under it could create more of.
+
+The scope moves into SQL rather than into the call signature, which matters more than it looks. Twelve callers pass a project id, and one of them is a job worker holding nothing else — threading an organization id through the workers would have meant twelve chances to pass the wrong one, in exactly the places a mistake is invisible. `projectId` still ADDRESSES the work; what it selects is every project of the same organization. A different tenant is still completely isolated, which is the property ADR-049 was actually reaching for, and there is a test that fails if organization scope is ever mistaken for deployment scope.
+
+**And a cap on the projects themselves.** With budgets drawn against the tenant there is nothing to gain by making more projects, but an unbounded create loop is still a way to fill a database with rows nothing reads, so `createProject` counts inside the transaction that inserts (two concurrent creates cannot both read "one under the limit") and `POST /api/v1/projects` is rate-limited per authenticated user, not per address — the same reasoning as account deletion in ADR-108, where a client-supplied `X-Forwarded-For` once made an address-keyed limit meaningless.
+
+**Checked by removing the fix.** With the aggregate put back to per-project scope, the two bypass tests fail and the cross-tenant isolation test still passes — which is the pair of outcomes that says the new tests measure the thing they claim to.
+
+**Date:** 2026-09-14
+**Impact:** `backend/packages/database/src/repositories/usage-record-repository.ts`, `backend/packages/quota/src/quota-manager.ts`, `backend/packages/security/src/auth-service.ts`, `backend/src/routes/v1/auth.ts`, `docs/API.md` + tests in `quota-manager.test.ts` and `project-limits.test.ts` (new).

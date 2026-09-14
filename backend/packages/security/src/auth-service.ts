@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNull, sql } from "drizzle-orm";
 import {
   apiKeys,
   auditLog,
@@ -37,6 +37,14 @@ export interface AuthServiceOptions {
   /** Failed logins before a temporary lockout. */
   maxFailedLogins?: number;
   lockoutMs?: number;
+  /**
+   * How many projects one organization may hold — docs/26_DECISIONS.md ADR-126.
+   *
+   * Spend ceilings are enforced per TENANT now, so projects no longer multiply a budget. This is
+   * the other half: an unbounded create loop is still a way to fill a database, and nothing in
+   * the product needs thousands of projects in one organization.
+   */
+  maxProjectsPerOrganization?: number;
   scryptParams?: ScryptParams;
   now?: () => Date;
 }
@@ -70,6 +78,7 @@ export class AuthService {
   private readonly sessionTtlMs: number;
   private readonly maxFailedLogins: number;
   private readonly lockoutMs: number;
+  private readonly maxProjectsPerOrganization: number;
   private readonly scryptParams: ScryptParams | undefined;
   private readonly now: () => Date;
 
@@ -80,6 +89,7 @@ export class AuthService {
     this.sessionTtlMs = options.sessionTtlMs ?? 30 * 24 * 60 * 60 * 1000;
     this.maxFailedLogins = options.maxFailedLogins ?? 10;
     this.lockoutMs = options.lockoutMs ?? 15 * 60 * 1000;
+    this.maxProjectsPerOrganization = options.maxProjectsPerOrganization ?? 100;
     this.scryptParams = options.scryptParams;
     this.now = options.now ?? (() => new Date());
   }
@@ -653,9 +663,26 @@ export class AuthService {
       throw new NotFoundError(`Organization "${organizationId}" not found.`);
     }
 
+    /**
+     * A ceiling on projects, checked inside the transaction that creates one — ADR-126.
+     *
+     * Quotas draw against the tenant now, so a second project buys no extra budget. What it can
+     * still do is fill the database: creating projects was unbounded and cheap. The count and the
+     * insert share a transaction so two concurrent creates cannot both read "one under the
+     * limit" and both proceed.
+     */
     const now = this.now();
     const id = uuid();
     await this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ total: count() })
+        .from(projects)
+        .where(eq(projects.organizationId, organizationId));
+      if ((existing?.total ?? 0) >= this.maxProjectsPerOrganization) {
+        throw new ValidationError(
+          `This organization already has the maximum of ${this.maxProjectsPerOrganization} projects.`
+        );
+      }
       await tx.insert(projects).values({ id, organizationId, name, description: description ?? null, createdAt: now, updatedAt: now });
       await tx.insert(projectMembers).values({ id: uuid(), projectId: id, userId: user.id, role: "admin", createdAt: now });
     });

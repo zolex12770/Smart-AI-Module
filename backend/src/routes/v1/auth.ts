@@ -115,14 +115,36 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     return { projects: await ctx.auth.listProjectsForUser(user.id) };
   });
 
-  app.post("/api/v1/projects", async (request, reply) => {
+  /**
+   * Rate-limited per USER — docs/26_DECISIONS.md ADR-126.
+   *
+   * Creating projects was unbounded and cheap, and every spend ceiling was per project, so a
+   * loop here bought as much budget as it liked. The ceilings draw against the tenant now
+   * (ADR-126) and `createProject` caps how many an organization may hold; this stops the loop
+   * itself, so neither the database nor the audit log can be filled at request speed. Keyed on
+   * the authenticated user rather than the address, for the reason set out on account deletion.
+   */
+  app.post(
+    "/api/v1/projects",
+    {
+      config: {
+        rateLimit: {
+          max: 20,
+          timeWindow: "10 minutes",
+          hook: "preHandler",
+          keyGenerator: (req: FastifyRequest) => req.auth?.user.id ?? req.ip,
+        },
+      },
+    },
+    async (request, reply) => {
     const user = requireUser(request);
     const parsed = createProjectRequestSchema.safeParse(request.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
     const organizationId = await ctx.auth.primaryOrganizationId(user.id);
     const project = await ctx.auth.createProject(user, organizationId, parsed.data.name, parsed.data.description);
     reply.status(201).send({ project });
-  });
+  }
+  );
 
   app.post("/api/v1/projects/:projectId/members", async (request, reply) => {
     const authCtx = await requireProject(request, ctx.auth, "project:admin");
