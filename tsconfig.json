@@ -1,29 +1,80 @@
 {
   "files": [],
   "references": [
-    { "path": "./shared" },
-    { "path": "./backend/packages/providers/llm-mock" },
-    { "path": "./backend/packages/providers/llm-anthropic" },
-    { "path": "./backend/packages/providers/llm-openai" },
-    { "path": "./backend/packages/providers/llm-google" },
-    { "path": "./backend/packages/providers/llm-local" },
-    { "path": "./backend/packages/model-router" },
-    { "path": "./backend/packages/database" },
-    { "path": "./backend/packages/tools" },
-    { "path": "./backend/packages/mcp" },
-    { "path": "./backend/packages/embeddings" },
-    { "path": "./backend/packages/memory" },
-    { "path": "./backend/packages/rag" },
-    { "path": "./backend/packages/jobs" },
-    { "path": "./backend/packages/observability" },
-    { "path": "./backend/packages/media" },
-    { "path": "./backend/packages/providers/image-mock" },
-    { "path": "./backend/packages/providers/image-openai" },
-    { "path": "./backend/packages/providers/video-mock" },
-    { "path": "./backend/packages/providers/video-replicate" },
-    { "path": "./backend/packages/agent-core" },
-    { "path": "./backend/packages/quota" },
-    { "path": "./backend/packages/scanning" },
-    { "path": "./backend/packages/security" }
+    {
+      "path": "./shared"
+    },
+    {
+      "path": "./backend/packages/providers/llm-mock"
+    },
+    {
+      "path": "./backend/packages/providers/llm-anthropic"
+    },
+    {
+      "path": "./backend/packages/providers/llm-openai"
+    },
+    {
+      "path": "./backend/packages/providers/llm-google"
+    },
+    {
+      "path": "./backend/packages/providers/llm-local"
+    },
+    {
+      "path": "./backend/packages/model-router"
+    },
+    {
+      "path": "./backend/packages/database"
+    },
+    {
+      "path": "./backend/packages/tools"
+    },
+    {
+      "path": "./backend/packages/mcp"
+    },
+    {
+      "path": "./backend/packages/embeddings"
+    },
+    {
+      "path": "./backend/packages/memory"
+    },
+    {
+      "path": "./backend/packages/rag"
+    },
+    {
+      "path": "./backend/packages/jobs"
+    },
+    {
+      "path": "./backend/packages/observability"
+    },
+    {
+      "path": "./backend/packages/media"
+    },
+    {
+      "path": "./backend/packages/providers/image-mock"
+    },
+    {
+      "path": "./backend/packages/providers/image-openai"
+    },
+    {
+      "path": "./backend/packages/providers/image-sdcpp"
+    },
+    {
+      "path": "./backend/packages/providers/video-mock"
+    },
+    {
+      "path": "./backend/packages/providers/video-replicate"
+    },
+    {
+      "path": "./backend/packages/agent-core"
+    },
+    {
+      "path": "./backend/packages/quota"
+    },
+    {
+      "path": "./backend/packages/scanning"
+    },
+    {
+      "path": "./backend/packages/security"
+    }
   ]
 }

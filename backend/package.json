@@ -18,6 +18,7 @@
     "@ai-platform/embeddings": "*",
     "@ai-platform/image-mock": "*",
     "@ai-platform/image-openai": "^0.1.0",
+    "@ai-platform/image-sdcpp": "*",
     "@ai-platform/jobs": "*",
     "@ai-platform/llm-anthropic": "*",
     "@ai-platform/llm-google": "*",

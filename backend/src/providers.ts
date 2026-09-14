@@ -1,4 +1,5 @@
 import { MockImageProvider } from "@ai-platform/image-mock";
+import { SdCppImageProvider } from "@ai-platform/image-sdcpp";
 import { OpenAICompatibleImageProvider } from "@ai-platform/image-openai";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
@@ -49,7 +50,27 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
           supportsSeed: config.IMAGE_SUPPORTS_SEED,
         })
       : null;
-  return realImageProvider ?? (config.NODE_ENV !== "production" ? new MockImageProvider() : null);
+  if (realImageProvider) return realImageProvider;
+
+  /**
+   * A local diffusion model, when one is configured — ADR-120. This is a REAL provider: it runs
+   * stable-diffusion.cpp on the CPU and returns a real PNG, so a deployment with no image
+   * credentials still generates images rather than placeholder SVGs. It is preferred over the
+   * mock everywhere, including production, because it is not a mock.
+   */
+  if (SdCppImageProvider.isAvailable(config.IMAGE_SD_CLI_PATH, config.IMAGE_SD_MODEL_PATH)) {
+    return new SdCppImageProvider({
+      binaryPath: config.IMAGE_SD_CLI_PATH as string,
+      modelPath: config.IMAGE_SD_MODEL_PATH as string,
+      steps: config.IMAGE_SD_STEPS,
+      cfgScale: config.IMAGE_SD_CFG_SCALE,
+      size: config.IMAGE_SD_SIZE,
+      threads: config.IMAGE_SD_THREADS,
+      timeoutMs: config.IMAGE_SD_TIMEOUT_MS,
+    });
+  }
+
+  return config.NODE_ENV !== "production" ? new MockImageProvider() : null;
 }
 
 /** The video provider for this deployment, or null when there is none — ADR-101, as above. */

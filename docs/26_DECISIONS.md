@@ -1986,3 +1986,20 @@ Three properties keep detection from becoming a surprise:
 
 **Date:** 2026-09-14
 **Impact:** `model-router/src/router.ts`, `database/src/repositories/usage-record-repository.ts`, `embeddings/src/embedding-service.ts`, `routes/v1/{rag,videos,platform}.ts`, `docs/API.md` + 8 tests.
+
+## ADR-120: Images are generated locally, by a real diffusion model
+
+**Decision:** A `SdCppImageProvider` that runs stable-diffusion.cpp on the CPU — one binary, one weights file, no server — is preferred over the mock whenever `IMAGE_SD_CLI_PATH` and `IMAGE_SD_MODEL_PATH` are set, in every environment.
+
+**What a local user got before.** With no image credentials the platform returned `MockImageProvider`'s placeholder: a real SVG, honestly labelled "MOCK IMAGE", of the words rather than the thing. That was the right answer to "we have no provider" and the wrong answer to "can this platform generate an image", because a real one needed a hosted account. The other real adapter speaks the OpenAI images wire format and needs either that account or a separate server — and, as an audit measured, could not have driven a local CPU backend anyway: it hard-codes 1024-pixel sizes, sends no step or guidance controls, and gives up at 180 s, while SD-Turbo at 512 px wants exactly one step and about 45 s.
+
+stable-diffusion.cpp removes the account and the server. The provider spawns the binary with an argv array and `shell: false` (the prompt is model-authored text and a shell is a parser — ADR-032), a minimal environment (a renderer has no business seeing provider keys — ADR-077), and a deadline with a kill. It requests dimensions that are multiples of 64, because that is what diffusion models accept, and spends more sampling steps only when a higher quality was asked for. Output that is not a PNG is a failure, never a substituted placeholder (ADR-050).
+
+It is preferred over the mock in production too, because it is not a mock.
+
+**Verified end to end, through the API and the queue:** `POST /api/v1/images` with "a red lighthouse on a cliff at dawn, oil painting" returned 202; the job ran on `stable-diffusion.cpp` and succeeded in **42.2 s**; `GET /api/v1/assets/:id` served **607,047 bytes** of `image/png` that decode as a real **512×512** picture of a cliff at dawn. The provider's own suite additionally generates a 256×256 image from the real model and reads its size back out of the PNG's IHDR chunk.
+
+**What it is not.** A 4-core CPU is not a GPU: 512 px takes tens of seconds, and SD-Turbo's licence is non-commercial, which `.env.example` says next to the download link. A deployment that wants speed or other licensing points `IMAGE_BASE_URL` at a real server instead.
+
+**Date:** 2026-09-14
+**Impact:** `backend/packages/providers/image-sdcpp` (new), `backend/src/{config,providers}.ts`, `.env.example`, root and backend tsconfig, `backend/package.json` + 10 tests.

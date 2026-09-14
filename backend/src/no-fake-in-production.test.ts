@@ -24,9 +24,28 @@ import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "
  * checked, because a test that only proves "no mock in production" would also pass if the
  * factories returned nothing at all.
  */
+/**
+ * A configuration with every provider-selecting setting CLEARED, so each test states the one it is
+ * about. `loadConfig()` reads the real environment, and a developer who has exported
+ * IMAGE_SD_CLI_PATH (or any provider variable) would otherwise change what these tests assert —
+ * which is how this suite started failing the moment a local image model became selectable.
+ */
+const PROVIDER_SETTINGS = [
+  "IMAGE_BASE_URL",
+  "IMAGE_MODEL",
+  "IMAGE_SD_CLI_PATH",
+  "IMAGE_SD_MODEL_PATH",
+  "VIDEO_PROVIDER",
+  "VIDEO_API_TOKEN",
+  "VIDEO_MODEL_VERSION",
+  "LLM_BASE_URL",
+  "LLM_MODEL",
+] as const;
+
 const base = (): AppConfig => {
-  const config = loadConfig();
-  return { ...config };
+  const config = { ...loadConfig() } as Record<string, unknown>;
+  for (const key of PROVIDER_SETTINGS) config[key] = undefined;
+  return config as AppConfig;
 };
 
 const productionConfig = (over: Partial<AppConfig> = {}): AppConfig =>
@@ -95,5 +114,33 @@ describe("image and video providers", () => {
       IMAGE_MODEL: "img-test",
     } as Partial<AppConfig>);
     expect(selectImageProvider(withImage)?.isMock).toBe(false);
+  });
+
+  /**
+   * A LOCAL diffusion model is a real provider, so the production rule is "no fake", not "no
+   * provider" — ADR-120. These state that distinction, which is exactly what the earlier
+   * assertions could not express.
+   */
+  it("uses a configured local diffusion model in production, because it is not a mock", () => {
+    const withLocal = productionConfig({
+      IMAGE_SD_CLI_PATH: process.execPath,
+      IMAGE_SD_MODEL_PATH: process.execPath,
+    } as Partial<AppConfig>);
+    const provider = selectImageProvider(withLocal);
+    expect(provider).not.toBeNull();
+    expect(provider?.isMock).toBe(false);
+    expect(provider?.name).toBe("stable-diffusion.cpp");
+  });
+
+  it("prefers a local diffusion model over the mock outside production", () => {
+    const withLocal = developmentConfig({
+      IMAGE_SD_CLI_PATH: process.execPath,
+      IMAGE_SD_MODEL_PATH: process.execPath,
+    } as Partial<AppConfig>);
+    expect(selectImageProvider(withLocal)?.isMock).toBe(false);
+  });
+
+  it("still falls back to the mock outside production when no local model is configured", () => {
+    expect(selectImageProvider(developmentConfig())?.isMock).toBe(true);
   });
 });

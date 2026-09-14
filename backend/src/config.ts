@@ -170,6 +170,16 @@ const envSchema = z.object({
   IMAGE_API_KEY: optionalString,
   IMAGE_SUPPORTS_NEGATIVE_PROMPT: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   IMAGE_SUPPORTS_SEED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  // stable-diffusion.cpp: one binary plus one weights file, on the CPU, with no server (ADR-120).
+  // This is what makes image generation REAL on a machine with no image credentials.
+  IMAGE_SD_CLI_PATH: optionalString,
+  IMAGE_SD_MODEL_PATH: optionalString,
+  // SD-Turbo is distilled to one step at guidance 1.0; a standard model wants ~20 and 7.0.
+  IMAGE_SD_STEPS: z.coerce.number().int().min(1).max(150).default(1),
+  IMAGE_SD_CFG_SCALE: z.coerce.number().min(0).max(30).default(1),
+  IMAGE_SD_SIZE: z.coerce.number().int().min(64).max(2048).default(512),
+  IMAGE_SD_THREADS: z.coerce.number().int().min(1).max(64).optional(),
+  IMAGE_SD_TIMEOUT_MS: z.coerce.number().int().min(10_000).max(3_600_000).default(600_000),
 
   // --- Narration for long-form video (ADR-079) -------------------------------------------
   // `openai` speaks `/v1/audio/speech` — OpenAI itself, or a self-hosted server that copies the
