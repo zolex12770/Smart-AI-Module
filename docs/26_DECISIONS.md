@@ -2132,3 +2132,16 @@ The scope moves into SQL rather than into the call signature, which matters more
 
 **Date:** 2026-09-14
 **Impact:** `backend/src/{local-runtime,providers,index,config}.ts`, `backend/packages/providers/image-openai/src/index.ts`, `.env.example` + 9 tests, including a probe against a process that genuinely never exits.
+
+## ADR-130: Replay re-runs a dead letter, and pays for what it re-runs
+
+**Decision:** `replayDeadLettered` accepts only a `.dlq` queue and only a job still waiting on it, and the replay route prices speech and video replays the way their own create routes price them.
+
+**"Replay a dead letter" replayed anything, from anywhere.** The queue name arrived from the URL and was used unchecked, and `sourceQueueNameFor` returns a name that is not a `.dlq` unchanged — so a LIVE queue was its own source. `POST /api/v1/jobs/dead-letter/image.generate/<id>/replay` therefore re-sent a job to the queue it had already completed on, and nothing stopped it happening again: `boss.cancel` is a no-op on a job that is already `completed`, so the thing being "consumed" was never consumed. One finished job was an unbounded generator of paid work, through a route whose own comment says it enqueues real spend. Both halves of the fix are needed — the name check stops a live queue being addressed at all, and the `state in ('created','retry')` predicate (already used by the LISTING, which is how the gap is visible) stops a dead letter being replayed twice.
+
+**And only images were priced.** The route checked `checkImageGeneration` and nothing else, so replaying a speech job or a video scene went through no budget at all — the dead-letter screen was a way around the ceiling that the create routes enforce. The size of the spend is not in the job payload (it names the generation, not its length), so the referenced row is read and priced on what will really be re-run: the text that will be synthesised again, the seconds of scene that will be generated again. `video.render` and `document.scan` are deliberately not gated — they spend CPU on work already generated, not a provider call.
+
+**Checked by removing the guards.** With the queue-name check and the state predicate taken out, the two new queue tests fail: the live-queue replay succeeds and the second replay of one dead letter succeeds. That is the behaviour that shipped.
+
+**Date:** 2026-09-14
+**Impact:** `backend/packages/jobs/src/queue.ts` (`getDeadLettered` added), `backend/src/routes/v1/platform.ts` + 5 tests across `dead-letter.test.ts` and `spend-guards.test.ts`.

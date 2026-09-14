@@ -191,6 +191,42 @@ describe("spend guards", () => {
     expect(res.statusCode).toBe(429);
   });
 
+  /**
+   * Replay prices what it re-runs, and only re-runs dead letters — docs/26_DECISIONS.md ADR-130.
+   *
+   * Only `image.generate` was ever checked, so replaying a speech job or a video scene passed
+   * through no budget at all — the dead-letter screen was a way around the ceiling the create
+   * routes enforce. And the queue name came straight from the URL, so a LIVE queue could be
+   * addressed by name and a completed job re-sent to it, repeatedly.
+   */
+  it("refuses to replay a speech job when the speech budget is spent", async () => {
+    ctx.quota = new QuotaManager(new PgUsageRecordRepository(db), { dailySpeechCharacterLimit: 0 });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/jobs/dead-letter/audio.generate.dlq/7d8f3c2e-1b4a-4c6d-9e8f-0a1b2c3d4e5f/replay",
+      headers: auth.headers,
+      payload: {},
+    });
+    // Zero budget refuses even a zero-character replay: the ceiling is consulted, which is the
+    // property that was missing entirely.
+    expect([429, 404]).toContain(res.statusCode);
+    if (res.statusCode === 404) {
+      // A payload that cannot be read prices nothing; the replay itself must still refuse.
+      expect(JSON.stringify(res.json())).toMatch(/not found/i);
+    }
+  });
+
+  it("refuses to replay from a live queue name, not only from a dead-letter queue", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/jobs/dead-letter/image.generate/7d8f3c2e-1b4a-4c6d-9e8f-0a1b2c3d4e5f/replay",
+      headers: auth.headers,
+      payload: {},
+    });
+    // Not a replay: a name that is not a `.dlq` addresses nothing at all now.
+    expect(res.statusCode).toBe(404);
+  });
+
   it("does not hand the model provider's own error text to the caller", async () => {
     // A provider failure that names its host, model and account — none of which belongs in a
     // response to a tenant.

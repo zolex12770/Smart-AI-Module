@@ -420,6 +420,29 @@ export class JobQueue {
   }
 
   /**
+   * One dead letter's payload, for a caller that must price the work before re-running it —
+   * docs/26_DECISIONS.md ADR-130.
+   *
+   * The replay route re-checks quota, and what a replay costs is written in the payload (which
+   * audio generation, which scene). Same scoping and the same state predicate as the listing, so
+   * a caller cannot use this to read another project's payloads or to price a job that is no
+   * longer replayable.
+   */
+  async getDeadLettered(
+    projectId: string,
+    deadLetterQueue: string,
+    jobId: string
+  ): Promise<Record<string, unknown> | null> {
+    if (!isDeadLetterQueue(deadLetterQueue)) return null;
+    const [row] = await this.query<{ data: Record<string, unknown> }>(
+      `select data from pgboss.job where name = $1 and id = $2 and data->>'projectId' = $3
+         and state in ('created', 'retry')`,
+      [deadLetterQueue, jobId, projectId]
+    );
+    return row?.data ?? null;
+  }
+
+  /**
    * Re-enqueues one dead-lettered job onto the queue it came from — ADR-072.
    *
    * A DLQ nothing can be replayed from is a graveyard, not a recovery tool. The common case is
@@ -435,8 +458,26 @@ export class JobQueue {
    * project is reported exactly like one that does not exist.
    */
   async replayDeadLettered(projectId: string, deadLetterQueue: string, jobId: string): Promise<string | null> {
+    /**
+     * Only a DEAD-LETTER queue, and only a job still waiting on it — docs/26_DECISIONS.md ADR-130.
+     *
+     * The queue name arrived straight from the URL and was used unchecked, so "replay a dead
+     * letter" also replayed anything on a LIVE queue. `sourceQueueNameFor` returns a name that is
+     * not a `.dlq` unchanged, which made `image.generate` its own source: a completed image
+     * generation could be re-sent to the live queue, and re-sent again, and again — `boss.cancel`
+     * is a no-op on a job that is already `completed`, so nothing ever stopped it. One finished
+     * job became an unbounded generator of paid work, through the route whose own comment says it
+     * enqueues real spend.
+     *
+     * Both halves are needed. The name check stops a live queue being addressed at all; the state
+     * predicate stops a dead letter that has already been replayed (and cancelled) from being
+     * replayed a second time.
+     */
+    if (!isDeadLetterQueue(deadLetterQueue)) return null;
+
     const [row] = await this.query<{ data: Record<string, unknown> }>(
-      `select data from pgboss.job where name = $1 and id = $2 and data->>'projectId' = $3`,
+      `select data from pgboss.job where name = $1 and id = $2 and data->>'projectId' = $3
+         and state in ('created', 'retry')`,
       [deadLetterQueue, jobId, projectId]
     );
     if (!row) return null;

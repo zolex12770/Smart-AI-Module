@@ -217,19 +217,53 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
     async (request) => {
       const authCtx = await requireProject(request, ctx.auth, "project:write");
 
-      // A replayed image generation is a new image generation, and the daily budget applies.
-      if (request.params.queue.startsWith("image.generate")) {
-        const quotaCheck = await ctx.quota.checkImageGeneration(authCtx.projectId!);
+      /**
+       * Every replay is priced, not only the image one — docs/26_DECISIONS.md ADR-130.
+       *
+       * A replay runs the original paid work again, so it spends exactly what the route that
+       * created that work spends. Only `image.generate` was checked; replaying a speech job or a
+       * video scene went through no budget at all, which made the dead-letter screen a way to
+       * spend past a ceiling that the create routes enforce. The SIZE of the spend is not in the
+       * job payload — it names the generation, not its length — so the referenced row is read and
+       * priced the way its own route prices it.
+       */
+      const projectId = authCtx.projectId!;
+      const queueName = request.params.queue;
+      const payload = await ctx.jobQueue.getDeadLettered(projectId, queueName, request.params.id);
+      // A payload that cannot be read is a dead letter that does not exist for this caller; the
+      // replay below reports that, and pricing nothing is correct in the meantime.
+      const sourceQueue = queueName.replace(/\.dlq$/, "");
+
+      if (sourceQueue === "image.generate") {
+        const quotaCheck = await ctx.quota.checkImageGeneration(projectId);
         if (!quotaCheck.allowed) {
           throw new QuotaExceededError(quotaCheck.reason ?? "Image generation quota exceeded.");
         }
+      } else if (sourceQueue === "audio.generate" && payload) {
+        const generationId = typeof payload.generationId === "string" ? payload.generationId : null;
+        const generation = generationId ? await ctx.audioGenerations.get(projectId, generationId) : null;
+        // Priced on the text that will really be synthesised again, not on an estimate.
+        const characters = generation?.text.length ?? 0;
+        const quotaCheck = await ctx.quota.checkSpeechCharacters(projectId, characters);
+        if (!quotaCheck.allowed) {
+          throw new QuotaExceededError(quotaCheck.reason ?? "Speech quota exceeded.");
+        }
+      } else if (sourceQueue === "video.generate_scene" && payload) {
+        const sceneId = typeof payload.sceneId === "string" ? payload.sceneId : null;
+        const videoProjectId = typeof payload.videoProjectId === "string" ? payload.videoProjectId : null;
+        const scene =
+          sceneId && videoProjectId ? await ctx.videoScenes.get({ projectId, videoProjectId }, sceneId) : null;
+        const seconds = scene?.durationSeconds ?? 0;
+        const quotaCheck = await ctx.quota.checkVideoSeconds(projectId, seconds);
+        if (!quotaCheck.allowed) {
+          throw new QuotaExceededError(quotaCheck.reason ?? "Video quota exceeded.");
+        }
       }
+      // `video.render` and `document.scan` call no paid provider — they spend CPU on work already
+      // generated — so they are deliberately not gated here. `document.ingest` spends embedding
+      // tokens and is metered at the worker (ADR-131).
 
-      const replayedId = await ctx.jobQueue.replayDeadLettered(
-        authCtx.projectId!,
-        request.params.queue,
-        request.params.id
-      );
+      const replayedId = await ctx.jobQueue.replayDeadLettered(projectId, queueName, request.params.id);
       // Another project's dead letter is indistinguishable from one that does not exist.
       if (!replayedId) {
         throw new NotFoundError(`Dead-lettered job "${request.params.id}" not found in "${request.params.queue}".`);

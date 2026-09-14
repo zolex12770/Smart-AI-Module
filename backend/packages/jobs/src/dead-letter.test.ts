@@ -155,6 +155,67 @@ describe("dead-letter queues and read-only job listing", () => {
     expect(await queue.listDeadLetteredForProject("p1")).toHaveLength(1);
   }, 40_000);
 
+  /**
+   * Replay is for DEAD LETTERS, not for anything on any queue — docs/26_DECISIONS.md ADR-130.
+   *
+   * The queue name came from the URL and was used unchecked. `sourceQueueNameFor` returns a name
+   * that is not a `.dlq` unchanged, so a LIVE queue was its own source: a completed job could be
+   * re-sent to the queue it had already run on, and re-sent again — `cancel` is a no-op on a
+   * completed job, so nothing ever consumed the thing being replayed. One finished job became an
+   * unbounded generator of paid work through a route whose own comment says it enqueues spend.
+   */
+  it("refuses to replay from a queue that is not a dead-letter queue", async () => {
+    const ran: string[] = [];
+    await queue.ensureQueueWithDeadLetter("live-work", { retryLimit: 0, expireInSeconds: 10 });
+    await queue.registerWorker<{ projectId: string; n: string }>("live-work", async (payload) => {
+      ran.push(payload.n);
+    });
+
+    const jobId = await queue.enqueue("live-work", { projectId: "p1", n: "first" });
+    await waitFor(async () => ran.length === 1, 20_000);
+
+    // The exact attack: address the LIVE queue by name and hand it the id of the job that just
+    // completed on it.
+    expect(await queue.replayDeadLettered("p1", "live-work", jobId)).toBeNull();
+    expect(await queue.getDeadLettered("p1", "live-work", jobId)).toBeNull();
+
+    // Nothing ran a second time.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(ran).toEqual(["first"]);
+  }, 40_000);
+
+  it("refuses to replay the same dead letter twice", async () => {
+    const attempts: string[] = [];
+    await queue.ensureQueueWithDeadLetter("once-only", { retryLimit: 0, expireInSeconds: 5 });
+    await queue.registerWorker<{ projectId: string }>("once-only", async () => {
+      attempts.push("attempt");
+      throw new Error("always fails");
+    });
+
+    await queue.enqueue("once-only", { projectId: "p1" });
+    await waitFor(async () => (await queue.listDeadLetteredForProject("p1")).length > 0, 20_000);
+    const [dead] = await queue.listDeadLetteredForProject("p1");
+
+    expect(await queue.replayDeadLettered("p1", dead.deadLetterQueue, dead.id)).toBeTruthy();
+    // The dead letter was cancelled by the first replay; a second attempt on the same id must
+    // find nothing rather than enqueue the work again.
+    expect(await queue.replayDeadLettered("p1", dead.deadLetterQueue, dead.id)).toBeNull();
+  }, 40_000);
+
+  it("hands back a dead letter's payload for pricing, scoped to its project", async () => {
+    await queue.ensureQueueWithDeadLetter("priced", { retryLimit: 0, expireInSeconds: 5 });
+    await queue.registerWorker<{ projectId: string; generationId: string }>("priced", async () => {
+      throw new Error("nope");
+    });
+    await queue.enqueue("priced", { projectId: "p1", generationId: "gen-42" });
+    await waitFor(async () => (await queue.listDeadLetteredForProject("p1")).length > 0, 20_000);
+    const [dead] = await queue.listDeadLetteredForProject("p1");
+
+    expect(await queue.getDeadLettered("p1", dead.deadLetterQueue, dead.id)).toMatchObject({ generationId: "gen-42" });
+    // Another tenant sees nothing, exactly as with replay.
+    expect(await queue.getDeadLettered("p2", dead.deadLetterQueue, dead.id)).toBeNull();
+  }, 40_000);
+
   describe("listForProject no longer claims the jobs it reports", () => {
     it("leaves a pending job pending", async () => {
       await queue.ensureQueueWithDeadLetter("readonly", { retryLimit: 1, expireInSeconds: 30 });
