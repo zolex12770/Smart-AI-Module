@@ -9,6 +9,8 @@ const NAV_LINKS = [
   { href: "/tasks", label: "Tasks" },
   { href: "/images", label: "Images" },
   { href: "/videos", label: "Videos" },
+  // ADR-114: speech used to exist only inside the video pipeline, with no way to ask for it.
+  { href: "/audio", label: "Audio" },
   { href: "/files", label: "Files" },
   // ADR-084: the ingestion half of RAG had no way to be queried from the UI at all.
   { href: "/ask", label: "Ask" },

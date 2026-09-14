@@ -66,6 +66,27 @@ export const rejectNode = (taskId: string, nodeId: string) =>
 export const cancelTask = (taskId: string) =>
   request<{ ok: true }>(`/api/v1/agent/tasks/${taskId}/cancel`, { method: "POST" });
 
+// --- Audio (ADR-114) ---------------------------------------------------------------------
+
+export interface AudioGeneration {
+  id: string;
+  text: string;
+  status: "pending" | "processing" | "succeeded" | "failed" | "cancelled";
+  providerName: string | null;
+  voiceName: string | null;
+  /** Measured from the produced file with ffprobe; null when it could not be measured. */
+  durationSeconds: number | null;
+  resultAssetId: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export const listAudio = () => request<{ generations: AudioGeneration[] }>("/api/v1/audio");
+export const createAudio = (body: { text: string; voice?: string; speed?: number }) =>
+  request<{ generation: AudioGeneration }>("/api/v1/audio", { method: "POST", body: JSON.stringify(body) });
+export const cancelAudio = (id: string) =>
+  request<{ ok: boolean; alreadyRequested: boolean }>(`/api/v1/audio/${id}/cancel`, { method: "POST" });
+
 // --- Images ----------------------------------------------------------------------------
 
 export interface ImageGeneration {

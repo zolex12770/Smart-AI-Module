@@ -81,6 +81,7 @@ import { sql } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import { loadConfig, type AppConfig, resolveListenHost } from "./config.js";
+import { detectLocalRuntime } from "./local-runtime.js";
 import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 import type { AppContext } from "./context.js";
 import { roleRuns, type RoleResponsibilities } from "./role.js";
@@ -207,7 +208,9 @@ async function main() {
   await bootstrapFirstAdmin(config, authService, runs, logger);
 
   const registry = new ModelRegistry();
-  registerLlmProviders(config, registry, logger);
+  // A model runtime already running on this machine, when nothing was configured (ADR-118).
+  const detectedRuntime = await detectLocalRuntime(config, logger);
+  registerLlmProviders(config, registry, logger, detectedRuntime);
   const chatProviderCount = registry.list().length;
 
   /**
@@ -303,6 +306,12 @@ async function main() {
   // capitals and surfaced to callers as `semanticEmbeddingsAvailable`. Pointing
   // EMBEDDING_BASE_URL at the same self-hosted runtime that serves chat gives real semantic
   // retrieval with no hosted provider at all.
+  // A detected runtime's embedding model is used only when none was configured (ADR-118): the
+  // lexical fallback finds chunks that share vocabulary, and a real embedder was already running.
+  const detectedEmbedding =
+    !config.EMBEDDING_BASE_URL && detectedRuntime?.embeddingModel
+      ? { baseUrl: detectedRuntime.baseUrl, model: detectedRuntime.embeddingModel }
+      : null;
   const embeddingProvider: EmbeddingProvider =
     config.EMBEDDING_BASE_URL && config.EMBEDDING_MODEL
       ? new LocalEmbeddingProvider({
@@ -314,7 +323,13 @@ async function main() {
           dimensions: config.EMBEDDING_DIMENSIONS ?? 768,
           apiKey: config.EMBEDDING_API_KEY,
         })
-      : new HashEmbeddingProvider();
+      : detectedEmbedding
+        ? new LocalEmbeddingProvider({
+            baseUrl: detectedEmbedding.baseUrl,
+            model: detectedEmbedding.model,
+            dimensions: config.EMBEDDING_DIMENSIONS ?? 768,
+          })
+        : new HashEmbeddingProvider();
   const embeddings = new EmbeddingService(embeddingProvider);
   const semanticEmbeddingsAvailable = !embeddingProvider.isDeterministicFallback;
   logger.info(

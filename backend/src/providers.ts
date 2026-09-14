@@ -64,7 +64,16 @@ export function selectVideoProvider(config: AppConfig): VideoProvider | null {
   return realVideoProvider ?? (config.NODE_ENV !== "production" ? new MockVideoProvider() : null);
 }
 
-export function registerLlmProviders(config: AppConfig, registry: ModelRegistry, logger: Logger): void {
+export function registerLlmProviders(
+  config: AppConfig,
+  registry: ModelRegistry,
+  logger: Logger,
+  /**
+   * A model runtime found running on this machine (ADR-118). Used only when nothing was
+   * configured explicitly, and never in production — `detectLocalRuntime` enforces both.
+   */
+  detected?: { baseUrl: string; chatModel: string } | null
+): void {
   // 1. Self-hosted runtime — Ollama, vLLM, llama.cpp's server, LM Studio, or any
   //    OpenAI-compatible gateway. No third-party account involved.
   if (config.LLM_BASE_URL && config.LLM_MODEL) {
@@ -75,6 +84,20 @@ export function registerLlmProviders(config: AppConfig, registry: ModelRegistry,
         apiKey: config.LLM_API_KEY,
         contextWindow: config.LLM_CONTEXT_WINDOW,
         supportsTools: config.LLM_SUPPORTS_TOOLS,
+      }),
+      { asDefault: true }
+    );
+  } else if (detected) {
+    // A runtime already serving on this machine (ADR-118). Without this, a first run with no
+    // `.env` answered every chat from the MOCK while a real model sat on 127.0.0.1:11434.
+    registry.register(
+      new LocalOpenAICompatibleProvider({
+        baseUrl: detected.baseUrl,
+        model: detected.chatModel,
+        contextWindow: config.LLM_CONTEXT_WINDOW,
+        // Ollama serves tool-calling for the models this prefers; a model that cannot will say so
+        // through the adapter's own error rather than being silently downgraded here.
+        supportsTools: true,
       }),
       { asDefault: true }
     );

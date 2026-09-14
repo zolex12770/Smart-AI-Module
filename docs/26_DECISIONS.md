@@ -1954,3 +1954,20 @@ The argument guards in `terminal.run_command` (no flag-shaped arguments, every a
 
 **Date:** 2026-09-14
 **Impact:** `security/src/sandbox.ts` + 9 tests.
+
+## ADR-118: The platform adopts the model runtime already running on the machine
+
+**Decision:** With no `LLM_BASE_URL`/`LLM_MODEL` and outside production, the API probes Ollama's default endpoint at boot and registers what it finds as the default chat model — and its embedding model, when no embedder was configured. It says so in the boot log.
+
+**What a first run used to be.** With no `.env`, the platform registered the MOCK language model and the lexical hash embedder, while Ollama sat on 127.0.0.1:11434 with `qwen2.5:7b` and `nomic-embed-text` loaded. So a new user's first chat was answered by a stub, retrieval ranked by shared vocabulary rather than meaning, and nothing on the screen said which. The variables that would have fixed it were not in `.env.example` either — they are now, with every one of the 70 settings tagged REQUIRED / OPTIONAL / LOCAL / PROD / CREDENTIAL / SECRET.
+
+Three properties keep detection from becoming a surprise:
+
+- **Explicit configuration always wins.** If a runtime was named, nothing is probed.
+- **Production never probes.** What answers real users is an explicit decision; silently adopting whatever listens on a port is how a staging model ends up serving traffic. `NODE_ENV=production` skips it.
+- **It is announced.** The boot log names the runtime, the chat model, the embedding model, and the variables that override them. A failure — nothing listening, a timeout, only embedding models pulled — is logged as "nothing to adopt" and leaves the platform exactly where it was.
+
+**Verified live, with no `.env` at all:** the boot log reads `local model runtime detected … chat_model qwen2.5:7b … embedding_model nomic-embed-text:latest`, `/api/v1/models` reports `local/qwen2.5:7b` as the default with `isMock: false`, `embeddings: a real semantic model is configured`, and `POST /api/v1/chat` answered "The capital of France is Paris." in 11.8 s with real token usage from `provider: local`. The mock was still registered, as a non-default fallback, exactly as ADR-013 requires outside production.
+
+**Date:** 2026-09-14
+**Impact:** `backend/src/local-runtime.ts` (new), `backend/src/providers.ts`, `backend/src/index.ts`, `.env.example` + 11 tests.
