@@ -293,6 +293,27 @@ export const createApiKey = (name: string, expiresInDays?: number) =>
   });
 export const revokeApiKey = (id: string) => request<{ ok: true }>(`/api/v1/api-keys/${id}`, { method: "DELETE" });
 
+// --- account security ------------------------------------------------------------------
+
+/** A live session, described well enough to RECOGNISE but never to use — ADR-127. */
+export interface SessionSummary {
+  id: string;
+  createdAt: string;
+  lastUsedAt: string;
+  expiresAt: string;
+  userAgent: string | null;
+  ipAddress: string | null;
+}
+
+export const listSessions = () => request<{ sessions: SessionSummary[] }>("/api/v1/auth/sessions");
+export const revokeSession = (id: string) =>
+  request<{ ok: true }>(`/api/v1/auth/sessions/${id}`, { method: "DELETE" });
+export const changePassword = (currentPassword: string, newPassword: string) =>
+  request<{ ok: true; revokedSessions: number; signedOut: true }>("/api/v1/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+
 // --- Memory --------------------------------------------------------------------------------
 
 export const listMemory = () => request<{ items: MemoryItem[] }>("/api/v1/memory");

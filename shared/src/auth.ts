@@ -153,6 +153,20 @@ export const deleteAccountRequestSchema = z.object({
 });
 export type DeleteAccountRequest = z.infer<typeof deleteAccountRequestSchema>;
 
+/**
+ * Changing one's own password — docs/26_DECISIONS.md ADR-127.
+ *
+ * The current password is required even though the caller holds a session, exactly as account
+ * deletion requires it: a stolen cookie must not be enough to take the account for good. The new
+ * one goes through the same `passwordSchema` as signup, so a weak password cannot be reached by a
+ * route that skipped the rule.
+ */
+export const changePasswordRequestSchema = z.object({
+  currentPassword: z.string().min(1).max(256),
+  newPassword: passwordSchema,
+});
+export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
+
 export const loginRequestSchema = z.object({
   email: emailSchema,
   password: z.string().min(1).max(256),

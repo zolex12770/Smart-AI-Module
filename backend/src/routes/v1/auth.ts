@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
+  NotFoundError,
   PermissionError,
   UnauthorizedError,
   ValidationError,
   addProjectMemberRequestSchema,
+  changePasswordRequestSchema,
   createApiKeyRequestSchema,
   deleteAccountRequestSchema,
   createProjectRequestSchema,
@@ -106,6 +108,71 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     const user = requireUser(request);
     const projects = await ctx.auth.listProjectsForUser(user.id);
     return { user, projects, method: request.auth?.method };
+  });
+
+  /**
+   * Changing your own password, and seeing who else is signed in — docs/26_DECISIONS.md ADR-127.
+   *
+   * `revokeAllSessions` shipped with the docstring "used on password change and by an admin" and
+   * neither caller existed: there was no way to change a password, no way to see a session, and
+   * no way to end one. A user whose laptop was stolen could do nothing at all.
+   *
+   * Session credential only, like account deletion (ADR-108): an API key is a project-scoped
+   * automation credential and must not be able to take over the account that owns it. Rate
+   * limited per authenticated user, because this is a place where a stolen session could
+   * otherwise be used to guess the password more cheaply than the front door.
+   */
+  app.post(
+    "/api/v1/auth/password",
+    {
+      config: {
+        rateLimit: {
+          max: 5,
+          timeWindow: "15 minutes",
+          hook: "preHandler",
+          keyGenerator: (req: FastifyRequest) => req.auth?.user.id ?? req.ip,
+        },
+      },
+    },
+    async (request, reply) => {
+      const user = requireUser(request);
+      if (request.auth?.method !== "session") {
+        throw new PermissionError("Changing a password requires a signed-in session, not an API key.");
+      }
+      const parsed = changePasswordRequestSchema.safeParse(request.body);
+      if (!parsed.success) throw new ValidationError(parsed.error.message);
+
+      const result = await ctx.auth.changePassword(user.id, parsed.data.currentPassword, parsed.data.newPassword, {
+        ipAddress: request.ip,
+        requestId: request.id,
+      });
+
+      // The caller's own session is among the revoked ones, deliberately: a password change that
+      // left one live token behind would be useless against the case it exists for. The cookies
+      // go too, so the browser does not keep presenting a credential the server has already
+      // thrown away.
+      reply.clearCookie(SESSION_COOKIE, { path: "/" });
+      reply.clearCookie(CSRF_COOKIE, { path: "/" });
+      reply.send({ ok: true, revokedSessions: result.revokedSessions, signedOut: true });
+    }
+  );
+
+  app.get("/api/v1/auth/sessions", async (request) => {
+    const user = requireUser(request);
+    return { sessions: await ctx.auth.listSessions(user.id) };
+  });
+
+  app.delete("/api/v1/auth/sessions/:sessionId", async (request, reply) => {
+    const user = requireUser(request);
+    const { sessionId } = request.params as { sessionId: string };
+    // Scoped to the caller inside the update, so another user's session id matches nothing and
+    // is reported as absent rather than refused — the two are indistinguishable on purpose.
+    const revoked = await ctx.auth.revokeSession(user.id, sessionId, {
+      ipAddress: request.ip,
+      requestId: request.id,
+    });
+    if (!revoked) throw new NotFoundError(`Session "${sessionId}" not found.`);
+    reply.send({ ok: true });
   });
 
   // --- projects -------------------------------------------------------------------------

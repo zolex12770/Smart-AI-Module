@@ -2089,3 +2089,18 @@ The scope moves into SQL rather than into the call signature, which matters more
 
 **Date:** 2026-09-14
 **Impact:** `backend/packages/database/src/repositories/usage-record-repository.ts`, `backend/packages/quota/src/quota-manager.ts`, `backend/packages/security/src/auth-service.ts`, `backend/src/routes/v1/auth.ts`, `docs/API.md` + tests in `quota-manager.test.ts` and `project-limits.test.ts` (new).
+
+## ADR-127: A password a user can change, and sessions a user can end
+
+**Decision:** `POST /api/v1/auth/password` changes the caller's own password behind their current password and revokes every session; `GET /api/v1/auth/sessions` and `DELETE /api/v1/auth/sessions/:id` let a user see and end them. There is deliberately no password RESET.
+
+**The function existed and nothing called it.** `revokeAllSessions` shipped with the docstring "used on password change and by an admin", and neither caller was ever written. So a user who believed their password was known — a shared laptop, a phished form, a session left open in a library — had exactly one remedy available to them: delete the account. There was no way to change a password, no way to see that a second browser was signed in, and no way to end it. The docstring described a product the code did not have, which is the kind of claim that survives a review precisely because it reads like a fact.
+
+**The caller's own session is revoked too, on purpose.** A password change that carefully preserved the session that requested it would be almost useless against the case it exists for: the server cannot tell which live token belongs to the honest browser, so keeping one means possibly keeping the attacker's. Every session goes, the cookies are cleared, and the person signs in again with the password they just chose. The current password is required even though the caller already holds a session, for the reason account deletion requires it (ADR-102): a stolen cookie must not be enough to take the account permanently. The check runs through `verifyUserPassword`, so it inherits the lockout and the failure counting — this cannot become a cheaper place to guess than the front door — and a wrong guess answers with the same "Invalid email or password." the login uses (ADR-125).
+
+**Session revocation is scoped inside the statement that revokes.** `revokeSession` filters on the user id in the same `UPDATE` rather than reading the row, checking ownership and then writing: another user's session id matches nothing, so there is no window between the check and the write and no separate authorisation step that a later edit could forget. The route reports it as 404 — "not yours" and "does not exist" are deliberately the same answer. The listing returns what identifies a session to a human (browser, address, last used) and never the token or its hash.
+
+**No password reset, and that is a decision.** A "forgot password" flow is a way to take over an account knowing only an email address, so it is exactly as strong as the channel delivering the token. There is no mail transport, no domain and no sender reputation here, and a reset that logged the token or returned it in the response would be an authentication bypass dressed as a feature. Written down in docs/27_RISKS_AND_LIMITATIONS.md rather than half-built.
+
+**Date:** 2026-09-14
+**Impact:** `backend/packages/security/src/auth-service.ts`, `backend/src/routes/v1/auth.ts`, `shared/src/auth.ts`, `frontend/app/lib/api.ts`, `frontend/app/settings/page.tsx`, `docs/{API,27_RISKS_AND_LIMITATIONS}.md` + 8 route tests and an E2E journey that changes a password in a browser and signs back in with the new one.

@@ -3,11 +3,15 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  changePassword,
   createApiKey,
   listApiKeys,
+  listSessions,
   revokeApiKey,
+  revokeSession,
   type ApiKeyCreated,
   type ApiKeySummary,
+  type SessionSummary,
 } from "../lib/api";
 import { createProject } from "../lib/auth-client";
 import { RequireSession, useSession } from "../lib/session-context";
@@ -64,6 +68,10 @@ function SettingsView() {
         </div>
       </div>
 
+      <PasswordCard onSignedOut={() => void signOut()} />
+
+      <SessionsCard />
+
       <ProjectsCard
         projects={projects}
         projectId={projectId}
@@ -88,6 +96,120 @@ function SettingsView() {
         </p>
       </div>
     </section>
+  );
+}
+
+/**
+ * Changing your own password — docs/26_DECISIONS.md ADR-127.
+ *
+ * There was no way to do this at all: `revokeAllSessions` existed with a docstring naming a
+ * password change that no route implemented. A user who thought their password was known had
+ * nothing to do about it but delete the account.
+ */
+function PasswordCard({ onSignedOut }: { onSignedOut: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await changePassword(currentPassword, newPassword);
+      // The server revoked every session, this one included — that is the point of the feature,
+      // so the screen follows it rather than pretending the browser is still signed in.
+      onSignedOut();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <strong>Password</strong>
+      <p className="page-subtitle">
+        Changing it signs out every session, including this one — which is what makes it worth
+        doing if you think someone else has your password.
+      </p>
+      <form onSubmit={submit} style={{ marginTop: 12 }}>
+        <div className="form-row">
+          <label style={{ flex: 1, minWidth: 200 }}>
+            Current password
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+            />
+          </label>
+          <label style={{ flex: 1, minWidth: 200 }}>
+            New password (at least 12 characters)
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+          </label>
+        </div>
+        <button type="submit" className="btn" disabled={busy || !currentPassword || newPassword.length < 12}>
+          {busy ? "Changing…" : "Change password"}
+        </button>
+      </form>
+      {error && <p className="error-text">{error}</p>}
+    </div>
+  );
+}
+
+/** Live sessions, so a compromise is something a user can SEE and end — ADR-127. */
+function SessionsCard() {
+  const [sessions, setSessions] = useState<SessionSummary[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    listSessions()
+      .then((r) => setSessions(r.sessions))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  async function end(id: string) {
+    try {
+      await revokeSession(id);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  return (
+    <div className="card">
+      <strong>Signed-in sessions</strong>
+      <p className="page-subtitle">
+        Every browser currently holding a session for this account. Ending one takes effect
+        immediately.
+      </p>
+      {error && <p className="error-text">{error}</p>}
+      {sessions === null && !error && <p className="empty-state">Loading…</p>}
+      {sessions?.length === 0 && <p className="empty-state">No other sessions.</p>}
+      {sessions?.map((s) => (
+        <div key={s.id} className="row" style={{ justifyContent: "space-between", marginTop: 8 }}>
+          <span>
+            {s.userAgent ?? "Unknown browser"}
+            {s.ipAddress ? ` — ${s.ipAddress}` : ""}
+            <span className="page-subtitle"> last used {new Date(s.lastUsedAt).toLocaleString()}</span>
+          </span>
+          <button type="button" className="btn btn-secondary" onClick={() => void end(s.id)}>
+            End session
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 

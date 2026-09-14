@@ -59,3 +59,11 @@ This section comes from the third audit of this phase's own diff (`78a0e13..74c7
 - Foundation model training/fine-tuning.
 - Public multi-tenant self-serve billing.
 - Any real image/video/cloud spend without explicit, separate user authorization at that specific step.
+- **Password RESET ("forgot password") — deliberately absent, not overlooked (ADR-127).** A reset
+  flow is a way to take over an account using only an email address, so it is exactly as strong as
+  the channel that delivers the token. This deployment has no mail transport, no domain and no
+  sender reputation, and a reset endpoint that logged a token to the console or returned it in the
+  response would be an authentication bypass wearing the costume of a feature. What EXISTS instead:
+  a signed-in user can change their own password (`POST /api/v1/auth/password`, current password
+  required), see their live sessions and end any of them. A user who is locked out entirely needs
+  an operator, and that is the honest state of it rather than a half-built flow.

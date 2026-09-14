@@ -482,7 +482,106 @@ export class AuthService {
     }
   }
 
-  /** Revokes every session for a user — used on password change and by an admin. */
+  /**
+   * Changing one's own password — docs/26_DECISIONS.md ADR-127.
+   *
+   * The current password is required even though the caller already holds a session, for the
+   * same reason account deletion requires it (ADR-102): a stolen cookie must not be enough to
+   * take the account permanently. `verifyUserPassword` is what does that check, so this inherits
+   * its lockout and its failure counting — guesses here are as limited as guesses at the door.
+   *
+   * Every session is revoked afterwards, INCLUDING the caller's own. That is the point of
+   * changing a password after a suspected compromise: whoever else is holding a token loses it,
+   * and there is no way to keep the current session without also keeping theirs, since the server
+   * cannot tell which one is the honest browser.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+    meta: RequestMeta = {}
+  ): Promise<{ revokedSessions: number }> {
+    const ok = await this.verifyUserPassword(userId, currentPassword, meta);
+    if (!ok) {
+      // Same string the login denial uses: this endpoint must not become a place to test
+      // passwords more cheaply than the front door.
+      throw new UnauthorizedError(INVALID_CREDENTIALS);
+    }
+    if (currentPassword === newPassword) {
+      throw new ValidationError("The new password must be different from the current one.");
+    }
+
+    const passwordHash = await hashPassword(newPassword, this.scryptParams);
+    const now = this.now();
+    await this.db
+      .update(users)
+      .set({ passwordHash, failedLoginCount: 0, lockedUntil: null, updatedAt: now })
+      .where(eq(users.id, userId));
+
+    const revokedSessions = await this.revokeAllSessions(userId);
+    await this.recordAudit({
+      userId,
+      action: "auth.password_change",
+      outcome: "success",
+      method: "session",
+      detail: { revokedSessions },
+      ...meta,
+    });
+    return { revokedSessions };
+  }
+
+  /**
+   * The caller's own live sessions, so a compromise is something they can SEE — ADR-127.
+   *
+   * No token and no token hash is returned: this is for recognising a session ("a browser in
+   * another city, still active"), not for using one.
+   */
+  async listSessions(userId: string): Promise<
+    Array<{ id: string; createdAt: Date; lastUsedAt: Date; expiresAt: Date; userAgent: string | null; ipAddress: string | null }>
+  > {
+    const now = this.now();
+    return this.db
+      .select({
+        id: sessions.id,
+        createdAt: sessions.createdAt,
+        lastUsedAt: sessions.lastUsedAt,
+        expiresAt: sessions.expiresAt,
+        userAgent: sessions.userAgent,
+        ipAddress: sessions.ipAddress,
+      })
+      .from(sessions)
+      .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt), gt(sessions.expiresAt, now)))
+      .orderBy(desc(sessions.lastUsedAt));
+  }
+
+  /**
+   * Revokes one of the caller's own sessions — ADR-127.
+   *
+   * Scoped to the user in the same statement that revokes, not checked first and revoked after:
+   * a session id belonging to somebody else simply matches nothing, so there is no window and no
+   * separate authorisation step to forget.
+   */
+  async revokeSession(userId: string, sessionId: string, meta: RequestMeta = {}): Promise<boolean> {
+    const rows = await this.db
+      .update(sessions)
+      .set({ revokedAt: this.now() })
+      .where(and(eq(sessions.id, sessionId), eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+      .returning({ id: sessions.id });
+    if (rows.length > 0) {
+      await this.recordAudit({
+        userId,
+        action: "auth.session_revoke",
+        outcome: "success",
+        method: "session",
+        resourceType: "session",
+        resourceId: sessionId,
+        ...meta,
+      });
+    }
+    return rows.length > 0;
+  }
+
+  /** Revokes every session for a user. Called by `changePassword` (ADR-127) and account deletion. */
   async revokeAllSessions(userId: string): Promise<number> {
     const rows = await this.db
       .update(sessions)
