@@ -35,6 +35,7 @@ import { LocalEmbeddingProvider } from "@ai-platform/llm-local";
 import { McpManager, parseMcpServerConfigs } from "@ai-platform/mcp";
 import {
   CloudStorageAssetStore,
+  DEFAULT_FFMPEG_TIMEOUT_MS,
   LocalAssetStore,
   OpenAiSpeechProvider,
   PiperSpeechProvider,
@@ -445,7 +446,24 @@ async function main() {
     retryBackoff: true,
     expireInSeconds: 120,
   });
-  await jobQueue.ensureQueueWithDeadLetter("image.generate", { retryLimit: 1, expireInSeconds: 60 });
+  /**
+   * Derived from the image provider's OWN deadline, never a fixed 60 — ADR-128.
+   *
+   * 60s was the mock's number and it survived every real provider that followed. An
+   * OpenAI-compatible endpoint is given 180s and the local diffusion model up to
+   * IMAGE_SD_TIMEOUT_MS (600s by default, and on a CPU it uses most of it): every real
+   * generation therefore outran its claim window, pg-boss concluded the worker had died, and a
+   * second worker generated the same image — CPU spent twice on this machine, money spent twice
+   * on a billed endpoint. The usage row's idempotency key deduplicated the BILLING RECORD, which
+   * made the double spend invisible rather than preventing it.
+   *
+   * The same reasoning as video.generate_scene below: the provider must always give up first.
+   */
+  const imageProviderDeadlineMs = Math.max(config.IMAGE_SD_TIMEOUT_MS, 180_000);
+  await jobQueue.ensureQueueWithDeadLetter("image.generate", {
+    retryLimit: 1,
+    expireInSeconds: Math.ceil(imageProviderDeadlineMs / 1000) + 120,
+  });
   // Speech is fast (piper synthesises several seconds of audio per second of CPU) but a long
   // text is minutes of work, so the claim window is wider than an image's (ADR-114).
   await jobQueue.ensureQueueWithDeadLetter("audio.generate", { retryLimit: 1, expireInSeconds: 300 });
@@ -458,7 +476,14 @@ async function main() {
   // its retries ran out. It sits above the provider's own 10-minute deadline so the provider
   // always gives up first, with room left for the download and the cancel.
   await jobQueue.ensureQueueWithDeadLetter("video.generate_scene", { retryLimit: 1, expireInSeconds: 900 });
-  await jobQueue.ensureQueueWithDeadLetter("video.render", { retryLimit: 1, expireInSeconds: 300 });
+  // Above the render's own ffmpeg deadline (ADR-128), for the same reason: a render that ran
+  // past 300s was re-claimed while its ffmpeg was still writing, so two of them composed the
+  // same project at once. ffmpeg is now killed at DEFAULT_FFMPEG_TIMEOUT_MS; this sits above it
+  // with room for the upload and the database write that follow.
+  await jobQueue.ensureQueueWithDeadLetter("video.render", {
+    retryLimit: 1,
+    expireInSeconds: Math.ceil(DEFAULT_FFMPEG_TIMEOUT_MS / 1000) + 300,
+  });
 
   // `queue_depth` (docs/20_OBSERVABILITY.md §2.1) — the gauge that answers "are the workers
   // keeping up", and the other metric that was built, exported and then never wired to

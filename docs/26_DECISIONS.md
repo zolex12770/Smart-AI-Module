@@ -2104,3 +2104,16 @@ The scope moves into SQL rather than into the call signature, which matters more
 
 **Date:** 2026-09-14
 **Impact:** `backend/packages/security/src/auth-service.ts`, `backend/src/routes/v1/auth.ts`, `shared/src/auth.ts`, `frontend/app/lib/api.ts`, `frontend/app/settings/page.tsx`, `docs/{API,27_RISKS_AND_LIMITATIONS}.md` + 8 route tests and an E2E journey that changes a password in a browser and signs back in with the new one.
+
+## ADR-128: Claim windows that match the work, and an ffmpeg that can be stopped
+
+**Decision:** `image.generate`'s claim window is derived from the image provider's own deadline, `video.render`'s from the render's, every ffmpeg invocation has a deadline and is killed when it passes it, and a job that reached a terminal state is never redone.
+
+**The queue was re-claiming work that was merely slow.** `expireInSeconds` is how long pg-boss lets a job sit `active` before deciding the worker died and letting another one claim it — and a slow worker is indistinguishable from a dead one. `image.generate` allowed 60 seconds, which was the mock's number and survived every real provider that followed it: a hosted endpoint is given 180 seconds and the local diffusion model up to 600, and on this CPU it uses most of them. So every real generation outran its window and was generated a second time. ADR-085 had already written this exact analysis for `video.generate_scene` twelve lines above, and images were simply never revisited. The usage row's idempotency key made it worse to find than to have: it deduplicated the BILLING RECORD, so the second charge was invisible in the ledger while the provider had still been called and paid twice.
+
+**And ffmpeg could not be stopped at all.** `runFfmpeg` had no deadline. ffmpeg does not reliably exit — a malformed input, an unsatisfiable filter graph or a stalled read leaves it running with no progress and no error — and the promise then never settled, losing the worker for the lifetime of the process. Meanwhile pg-boss handed the same render to another worker after 300 seconds, so the practical result of a hang was two ffmpeg processes composing the same project, not one stuck job. Every invocation is bounded now, SIGTERM then SIGKILL so a process that ignores the polite signal is still stopped, and the timeout is bound once at the top of the render rather than passed at each of the nine call sites — a step added later cannot forget it.
+
+**A guard, because a window is not a guarantee.** Widening the window removes the routine case but not a genuinely dead worker or a restart mid-generation, so `processImageGeneration` returns immediately for a generation already `succeeded` or `cancelled`. Removing that guard makes the re-claim test fail, which is how the test is known to measure it.
+
+**Date:** 2026-09-14
+**Impact:** `backend/src/index.ts`, `backend/packages/media/src/{image-generation,video-render}.ts` + 6 tests, including a real child process that never exits.

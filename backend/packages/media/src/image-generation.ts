@@ -56,6 +56,19 @@ export async function processImageGeneration(
     return;
   }
 
+  /**
+   * Already finished — docs/26_DECISIONS.md ADR-128.
+   *
+   * pg-boss re-claims a job whose `expireInSeconds` elapses, on the assumption that the worker
+   * died. A worker that is merely SLOW is indistinguishable from a dead one, so a generation that
+   * outran the claim window was handed to a second worker and the provider was called — and paid
+   * — twice for one request. The window is wider than the provider's own deadline now, but a
+   * re-claim can still happen (a genuinely dead worker, a restart mid-generation), and this is
+   * the cheap guard that makes the second one harmless: work that already reached a terminal
+   * state is never redone.
+   */
+  if (generation.status === "succeeded" || generation.status === "cancelled") return;
+
   // `incrementAttempt` counts attempts actually started, in SQL — so a generation retried by
   // pg-boss reads as several attempts rather than as one unusually slow one.
   await deps.generationRepo.updateStatus(projectId, generationId, "processing", { incrementAttempt: true });

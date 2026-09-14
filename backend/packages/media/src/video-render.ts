@@ -70,7 +70,20 @@ export interface VideoRenderDeps {
   assetStore: AssetStore;
   /** Defaults to `"ffmpeg"` (resolved via PATH). Overridable so tests/deployments can pin a path. */
   ffmpegPath?: string;
+  /**
+   * Wall-clock ceiling for any ONE ffmpeg invocation (ADR-128). Must stay comfortably under the
+   * queue's `expireInSeconds`, or pg-boss re-claims the render before ffmpeg has been killed and
+   * two of them write the same project.
+   */
+  ffmpegTimeoutMs?: number;
 }
+
+/**
+ * 15 minutes for a single ffmpeg step. Long enough for a long-form concat and mux on a slow CPU
+ * (a six-second two-scene render measures under a minute on this machine), short enough to sit
+ * well below `video.render`'s claim window.
+ */
+export const DEFAULT_FFMPEG_TIMEOUT_MS = 900_000;
 
 /**
  * What the composed render produced besides the video — ADR-081.
@@ -114,6 +127,8 @@ export async function processVideoRender(
   scope: VideoProjectScope
 ): Promise<VideoRenderOutcome> {
   const ffmpegPath = deps.ffmpegPath ?? "ffmpeg";
+  // Bound once so no step can be added later that forgets the deadline (ADR-128).
+  const ffmpeg = (args: string[]) => runFfmpeg(ffmpegPath, args, deps.ffmpegTimeoutMs ?? DEFAULT_FFMPEG_TIMEOUT_MS);
   const project = await deps.projectRepo.get(scope.projectId, scope.videoProjectId);
   if (!project) {
     throw new Error(
@@ -182,7 +197,7 @@ export async function processVideoRender(
       const inPath = join(workDir, `clip_${stem}.${extensionForMimeType(asset.mimeType)}`);
       await writeFile(inPath, await deps.assetStore.read(asset));
       const outPath = join(workDir, `scene_${stem}.mp4`);
-      await runFfmpeg(ffmpegPath, [
+      await ffmpeg([
         "-y",
         "-i",
         inPath,
@@ -239,7 +254,7 @@ export async function processVideoRender(
         continue;
       }
       const paddedPath = join(workDir, `slot_${String(slot.sceneIndex).padStart(4, "0")}.mp4`);
-      await runFfmpeg(ffmpegPath, [
+      await ffmpeg([
         "-y",
         "-i",
         slot.clipPath,
@@ -260,7 +275,7 @@ export async function processVideoRender(
     await writeFile(concatListPath, timedPaths.map(concatEntry).join("\n"), "utf8");
 
     const silentPath = join(workDir, "silent.mp4");
-    await runFfmpeg(ffmpegPath, ["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", silentPath]);
+    await ffmpeg(["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", silentPath]);
 
     const subtitleInputs: SubtitleSceneInput[] = slots.map((slot) => ({
       sceneIndex: slot.sceneIndex,
@@ -297,7 +312,7 @@ export async function processVideoRender(
         if (slot.narrationPath) {
           // `apad` supplies unlimited trailing silence and `-t` cuts it at the slot, which also
           // trims a narration that measured a hair longer than the slot it was given.
-          await runFfmpeg(ffmpegPath, [
+          await ffmpeg([
             "-y",
             "-i",
             slot.narrationPath,
@@ -311,7 +326,7 @@ export async function processVideoRender(
         } else {
           // A scene nobody speaks over still occupies its slot. Dropping it from the audio track
           // is precisely the bug this rewrite exists to fix: every later line would start early.
-          await runFfmpeg(ffmpegPath, [
+          await ffmpeg([
             "-y",
             "-f",
             "lavfi",
@@ -332,7 +347,7 @@ export async function processVideoRender(
       // Re-encoded rather than stream-copied: every segment was just written with identical PCM
       // parameters, and letting the WAV muxer rewrite the header keeps the declared length of the
       // concatenated file honest.
-      await runFfmpeg(ffmpegPath, [
+      await ffmpeg([
         "-y",
         "-f",
         "concat",
@@ -345,7 +360,7 @@ export async function processVideoRender(
       ]);
 
       const withAudioPath = join(workDir, "with-audio.mp4");
-      await runFfmpeg(ffmpegPath, [
+      await ffmpeg([
         "-y",
         "-i",
         silentPath,
@@ -382,7 +397,7 @@ export async function processVideoRender(
       // captions with it, while a browser `<track>` needs a separate WebVTT file it can fetch.
       const withSubsPath = join(workDir, "with-subs.mp4");
       try {
-        await runFfmpeg(ffmpegPath, [
+        await ffmpeg([
           "-y",
           "-i",
           finalPath,
@@ -507,13 +522,55 @@ export function isFfmpegAvailable(ffmpegPath: string): Promise<boolean> {
   });
 }
 
-function runFfmpeg(ffmpegPath: string, args: string[]): Promise<void> {
+/**
+ * Every ffmpeg invocation is bounded — docs/26_DECISIONS.md ADR-128.
+ *
+ * There was no deadline of any kind here. ffmpeg does not always exit: a malformed input, an
+ * unsatisfiable filter graph or a stalled read can leave it running with no progress and no
+ * error, and this promise would simply never settle. The worker thread that awaited it was then
+ * lost for the lifetime of the process, while pg-boss decided after `expireInSeconds` that the
+ * worker had died and handed the SAME render to another one — so the practical outcome of a hang
+ * was two ffmpeg processes writing the same project, not one stuck job.
+ *
+ * SIGTERM first so ffmpeg can close the file it is writing, then SIGKILL: a process that ignores
+ * the polite signal is exactly the process this exists for.
+ */
+const FFMPEG_KILL_GRACE_MS = 5_000;
+
+/**
+ * The deadline behaviour, reachable from a test (ADR-128).
+ *
+ * Exported as a named seam rather than exercised through `processVideoRender`, because proving
+ * "a process that never exits is killed" needs a process that never exits — and driving one
+ * through the whole render would mean building a project, scenes and assets to reach the first
+ * ffmpeg call. The seam is the function itself, not a stand-in for it.
+ */
+export const runFfmpegForTest = (ffmpegPath: string, args: string[], timeoutMs: number): Promise<void> =>
+  runFfmpeg(ffmpegPath, args, timeoutMs);
+
+function runFfmpeg(ffmpegPath: string, args: string[], timeoutMs = DEFAULT_FFMPEG_TIMEOUT_MS): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { shell: false });
     let stderr = "";
+    let timedOut = false;
+
+    const escalate = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), FFMPEG_KILL_GRACE_MS).unref();
+    }, timeoutMs);
+
     child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.on("error", reject);
+    child.on("error", (err) => {
+      clearTimeout(escalate);
+      reject(err);
+    });
     child.on("close", (code) => {
+      clearTimeout(escalate);
+      if (timedOut) {
+        reject(new Error(`ffmpeg exceeded its ${Math.round(timeoutMs / 1000)}s deadline and was killed.`));
+        return;
+      }
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg exited with code ${code}: ${stderr.slice(-2000)}`));
     });
