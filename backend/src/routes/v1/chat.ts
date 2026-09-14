@@ -283,6 +283,11 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
         Connection: "keep-alive",
         "X-Conversation-Id": conversation.id,
         "Access-Control-Allow-Origin": ctx.corsOrigin,
+        // The browser sends this request with `credentials: "include"` (the session cookie), and
+        // the CORS rules then REQUIRE this header on the response — without it every streamed
+        // answer is blocked by the browser after the server sent it perfectly (ADR-123).
+        // @fastify/cors adds it to ordinary responses; a hijacked one bypasses that hook.
+        "Access-Control-Allow-Credentials": "true",
         "Access-Control-Expose-Headers": "X-Conversation-Id",
       });
       reply.hijack();

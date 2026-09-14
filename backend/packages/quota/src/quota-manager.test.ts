@@ -34,19 +34,20 @@ async function seedProject(db: PgliteDb, name: string): Promise<string> {
  * the same real Postgres, not a stubbed counter: the point is to prove the enforcement path,
  * so the numbers it enforces on have to come from the database.
  */
-function ledgerWithEmbeddingTotals(db: PgliteDb, usage: PgUsageRecordRepository): QuotaUsageLedger {
+/**
+ * A ledger that genuinely cannot total embedding tokens.
+ *
+ * `PgUsageRecordRepository` implements `sumEmbeddingTokensSince`, so the fail-closed branch can
+ * no longer be reached through it — but the branch still guards every OTHER `QuotaUsageLedger`
+ * implementation, and an operator who configures a ceiling must never be silently allowed past
+ * it because an aggregate is missing (FR-063). Stripping the method is the only honest way to
+ * stand where those implementations stand.
+ */
+function ledgerWithoutEmbeddingTotals(usage: PgUsageRecordRepository): QuotaUsageLedger {
   return {
     sumLlmTokensSince: (projectId, since) => usage.sumLlmTokensSince(projectId, since),
     countImagesSince: (projectId, since) => usage.countImagesSince(projectId, since),
     sumVideoSecondsSince: (projectId, since) => usage.sumVideoSecondsSince(projectId, since),
-    async sumEmbeddingTokensSince(projectId, since) {
-      const result = await db.$client.query<{ total: string | null }>(
-        "select sum(coalesce(input_tokens, 0) + coalesce(output_tokens, 0)) as total from usage_records " +
-          "where project_id = $1 and kind = 'embedding' and created_at >= $2::timestamptz",
-        [projectId, since.toISOString()]
-      );
-      return Number(result.rows[0]?.total ?? 0);
-    },
   };
 }
 
@@ -174,13 +175,15 @@ describe("QuotaManager (real PGlite Postgres + PgUsageRecordRepository)", () => 
   it("allows embedding work when no embedding limit is configured, even on a ledger that cannot total it", async () => {
     // The "unset limit means no limit" rule holds for the new kind too — and an unset limit
     // must never consult (or trip over) the aggregate the base repository does not have.
-    const manager = new QuotaManager(usage, { dailyTokenLimit: 1_000_000 });
+    const manager = new QuotaManager(ledgerWithoutEmbeddingTotals(usage), { dailyTokenLimit: 1_000_000 });
     expect(await manager.checkEmbeddingTokens(projectId, 500_000)).toEqual({ allowed: true });
   });
 
   it("meters embedding tokens against their own budget, separately from the chat token budget", async () => {
+    // Through the real repository aggregate — a hand-written copy of the SQL in this file would
+    // prove only that the copy works.
     await record({ kind: "embedding", projectId, provider: "hash", model: "feature-hash-v2", inputTokens: 900, requestId: "e1" });
-    const manager = new QuotaManager(ledgerWithEmbeddingTotals(db, usage), {
+    const manager = new QuotaManager(usage, {
       dailyEmbeddingTokenLimit: 1000,
       // Deliberately generous: an ingestion run must be stopped by the embedding limit, not
       // by the chat budget it does not spend from.
@@ -197,7 +200,7 @@ describe("QuotaManager (real PGlite Postgres + PgUsageRecordRepository)", () => 
   it("refuses embedding work, with a reason naming the gap, when a limit is configured that the ledger cannot measure", async () => {
     // Fail-closed: an operator who configured a ceiling asked for one, and quietly allowing
     // everything because the aggregate is missing is precisely FR-063's "silent overage".
-    const manager = new QuotaManager(usage, { dailyEmbeddingTokenLimit: 1000 });
+    const manager = new QuotaManager(ledgerWithoutEmbeddingTotals(usage), { dailyEmbeddingTokenLimit: 1000 });
 
     const result = await manager.checkEmbeddingTokens(projectId, 1);
     expect(result.allowed).toBe(false);

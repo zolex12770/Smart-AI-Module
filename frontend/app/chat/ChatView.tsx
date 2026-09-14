@@ -28,6 +28,7 @@ export default function ChatView({
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const conversationIdRef = useRef<string | undefined>(conversationId);
+  const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     listConversations()
@@ -46,6 +47,7 @@ export default function ChatView({
     setIsStreaming(true);
 
     const controller = new AbortController();
+    controllerRef.current = controller;
 
     try {
       const stream = streamChat(
@@ -71,7 +73,31 @@ export default function ChatView({
       if (wasNewConversation && result.value) {
         router.replace(`/chat/${result.value}`);
       }
+    } catch (err) {
+      // A transport failure threw straight out of the generator: the `error` event above only
+      // covers errors the SERVER managed to send. A dropped connection, a CORS refusal or a
+      // stop leaves an empty bubble and a screen that says nothing happened — the silent
+      // failure of docs/26_DECISIONS.md ADR-123. Every exit from a send now says what became
+      // of the answer.
+      const stopped = controller.signal.aborted;
+      setMessages((prev) => {
+        const last = prev[prev.length - 1];
+        const partial = last?.role === "assistant" ? last.content : "";
+        if (stopped) {
+          // What arrived before the stop is a real answer as far as it goes — keep it.
+          return replaceLast(prev, {
+            role: "assistant",
+            content: partial || "Stopped before the model answered.",
+          });
+        }
+        return replaceLast(prev, {
+          role: "assistant",
+          content: `${partial ? `${partial}\n\n` : ""}The answer could not be delivered: ${describe(err)}`,
+          isError: true,
+        });
+      });
     } finally {
+      controllerRef.current = null;
       setIsStreaming(false);
     }
   }
@@ -116,13 +142,27 @@ export default function ChatView({
             placeholder="Say something…"
             disabled={isStreaming}
           />
-          <button type="submit" disabled={isStreaming || !input.trim()}>
-            Send
-          </button>
+          {isStreaming ? (
+            // The AbortController existed and nothing could reach it, so a long or wrong answer
+            // had to be waited out. Aborting releases the reader, which stops the server
+            // streaming into a page nobody is reading — and stops the billing with it.
+            <button type="button" className="btn-secondary" onClick={() => controllerRef.current?.abort()}>
+              Stop
+            </button>
+          ) : (
+            <button type="submit" disabled={!input.trim()}>
+              Send
+            </button>
+          )}
         </form>
       </div>
     </div>
   );
+}
+
+function describe(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  return "the connection to the server failed";
 }
 
 function replaceLast(messages: DisplayMessage[], next: DisplayMessage): DisplayMessage[] {

@@ -127,8 +127,10 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
       // See backend/src/routes/v1/chat.ts for why this is written by hand: reply.hijack()
-      // bypasses @fastify/cors's response hook entirely.
+      // bypasses @fastify/cors's response hook entirely. The EventSource subscribes with
+      // `withCredentials`, so the credentials header is required too (ADR-123).
       "Access-Control-Allow-Origin": ctx.corsOrigin,
+      "Access-Control-Allow-Credentials": "true",
     });
     reply.hijack();
 
