@@ -49,6 +49,9 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
           apiKey: config.IMAGE_API_KEY,
           supportsNegativePrompt: config.IMAGE_SUPPORTS_NEGATIVE_PROMPT,
           supportsSeed: config.IMAGE_SUPPORTS_SEED,
+          // Unset keeps the hosted defaults; a local CPU server needs something much smaller
+          // than 1024 to finish at all (ADR-129).
+          ...(config.IMAGE_BASE_SIZE !== undefined ? { baseSize: config.IMAGE_BASE_SIZE } : {}),
         })
       : null;
   if (realImageProvider) return realImageProvider;
@@ -83,7 +86,20 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
  * coloured bars. It is chosen only when there is a REAL image provider to draw the frame — a
  * mock still would make a mock clip with extra steps.
  */
-export function selectVideoProvider(config: AppConfig, imageProvider?: ImageProvider | null): VideoProvider | null {
+export function selectVideoProvider(
+  config: AppConfig,
+  imageProvider?: ImageProvider | null,
+  /**
+   * Whether ffmpeg was actually EXECUTED successfully at boot — ADR-129.
+   *
+   * `ImageMotionVideoProvider.isAvailable` inferred this from the shape of the configured string:
+   * a bare name with no path separator was taken to mean "the OS will resolve it", without asking
+   * the OS. Since `FFMPEG_PATH` defaults to the bare name, every machine without ffmpeg reported
+   * video generation as available and then skipped every render. Omitted (tests, mostly) it falls
+   * back to the old guess; the composition root passes a real answer.
+   */
+  ffmpegAvailable?: boolean
+): VideoProvider | null {
   const realVideoProvider =
     config.VIDEO_PROVIDER === "replicate" && config.VIDEO_API_TOKEN && config.VIDEO_MODEL_VERSION
       ? new ReplicateVideoProvider({
@@ -95,7 +111,8 @@ export function selectVideoProvider(config: AppConfig, imageProvider?: ImageProv
 
   // Motion from a real still (ADR-121). Honest about its ceiling: no scene motion, and it says so
   // in its name, its capabilities and every clip's metadata.
-  if (imageProvider && !imageProvider.isMock && ImageMotionVideoProvider.isAvailable(config.FFMPEG_PATH)) {
+  const hasFfmpeg = ffmpegAvailable ?? ImageMotionVideoProvider.isAvailable(config.FFMPEG_PATH);
+  if (imageProvider && !imageProvider.isMock && hasFfmpeg) {
     return new ImageMotionVideoProvider({
       imageProvider,
       ffmpegPath: config.FFMPEG_PATH,

@@ -82,7 +82,7 @@ import { sql } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import { loadConfig, type AppConfig, resolveListenHost } from "./config.js";
-import { detectLocalRuntime } from "./local-runtime.js";
+import { detectLocalRuntime, detectLocalSpeech, probeFfmpeg } from "./local-runtime.js";
 import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 import type { AppContext } from "./context.js";
 import { roleRuns, type RoleResponsibilities } from "./role.js";
@@ -552,9 +552,26 @@ async function main() {
    * refuses to boot without the token and the model version — so there is no state in which
    * this constructs a provider that cannot actually generate anything.
    */
+  /**
+   * Does ffmpeg actually run? Asked, not assumed — ADR-129.
+   *
+   * `FFMPEG_PATH` defaults to the bare name `ffmpeg` and availability was inferred from the
+   * SHAPE of that string: a name with no separator was taken to mean "the OS will resolve it".
+   * On a machine without ffmpeg the platform therefore advertised video generation, chose a
+   * provider that shells out to it, and settled every render `skipped_no_ffmpeg` — a capability
+   * the API and the screen both claimed and that could not produce a frame.
+   */
+  const ffmpegAvailable = await probeFfmpeg(config.FFMPEG_PATH);
+  if (!ffmpegAvailable) {
+    logger.warn(
+      { ffmpegPath: config.FFMPEG_PATH },
+      "ffmpeg could not be executed — video assembly and measured audio durations are unavailable. Install ffmpeg or set FFMPEG_PATH"
+    );
+  }
+
   // The image provider is passed in because the local motion provider draws its frame with it
   // (ADR-121); with no real image provider there is nothing to animate and the mock is used.
-  const videoProvider = selectVideoProvider(config, imageProvider);
+  const videoProvider = selectVideoProvider(config, imageProvider, ffmpegAvailable);
   const videoGenerationAvailable = videoProvider !== null;
 
   logger.info(
@@ -587,6 +604,12 @@ async function main() {
    * `skipped_no_narration`, exactly as it already reports `skipped_no_ffmpeg`. Muxing silence and
    * calling it a voice-over would be a fake success an operator could not detect.
    */
+  /**
+   * A synthesiser that is already on this machine — ADR-129, following ADR-118's rules exactly:
+   * explicit configuration wins, never in production, announced, and a failure adopts nothing.
+   */
+  const detectedSpeech = await detectLocalSpeech(config, logger);
+
   let speech: SpeechProvider | null = null;
   try {
     if (config.SPEECH_PROVIDER === "openai") {
@@ -602,13 +625,13 @@ async function main() {
       }
     } else if (config.SPEECH_PROVIDER === "sapi") {
       speech = new SapiSpeechProvider({ voice: config.SPEECH_VOICE });
-    } else if (config.SPEECH_PROVIDER === "piper") {
+    } else if (config.SPEECH_PROVIDER === "piper" || detectedSpeech) {
       // The offline path that exists on a server (ADR-114): one binary, one ONNX voice, the
       // same on Linux and Windows. Both paths must be set — a voice without a binary, or a
       // binary without a voice, is a misconfiguration and not a silent half-capability.
       speech = new PiperSpeechProvider({
-        binaryPath: config.PIPER_PATH ?? "",
-        voicePath: config.PIPER_VOICE ?? "",
+        binaryPath: detectedSpeech?.binaryPath ?? config.PIPER_PATH ?? "",
+        voicePath: detectedSpeech?.voicePath ?? config.PIPER_VOICE ?? "",
       });
     }
   } catch (error) {

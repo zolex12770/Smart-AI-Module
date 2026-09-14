@@ -142,4 +142,56 @@ describe("OpenAICompatibleImageProvider", () => {
     expect(caps.supportedAspectRatios).toContain("9:16");
     expect(caps.maxImagesPerCall).toBeGreaterThanOrEqual(1);
   });
+
+  /**
+   * A size a CPU can actually finish — docs/26_DECISIONS.md ADR-129.
+   *
+   * The size table is written for hosted models and was a constant, while this adapter's own
+   * option comment recommends it for `http://127.0.0.1:8080/v1`. A local CPU backend asked for a
+   * 1024-square image can only be waited on, and no setting helped.
+   */
+  it("scales every bucket to the configured base size, keeping the ratio", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      calls.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ data: [{ b64_json: Buffer.from("x").toString("base64") }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleImageProvider({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      model: "local-sd",
+      baseSize: 512,
+      fetchImpl,
+    });
+
+    await provider.generateImage({ prompt: "a harbour", aspectRatio: "1:1", quality: "fast" }, async () => "asset-1");
+    await provider.generateImage({ prompt: "a harbour", aspectRatio: "16:9", quality: "fast" }, async () => "asset-2");
+
+    // 1024 -> 512, and 1792x1024 keeps its shape at half scale, rounded to the /64 grid every
+    // diffusion backend wants.
+    expect(calls[0]!.size).toBe("512x512");
+    expect(calls[1]!.size).toBe("896x512");
+  });
+
+  it("keeps the hosted defaults when no base size is configured", async () => {
+    const calls: Array<Record<string, unknown>> = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      calls.push(JSON.parse(String(init.body)));
+      return new Response(JSON.stringify({ data: [{ b64_json: Buffer.from("x").toString("base64") }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleImageProvider({
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-image-1",
+      fetchImpl,
+    });
+    await provider.generateImage({ prompt: "a harbour", aspectRatio: "1:1", quality: "fast" }, async () => "asset-1");
+    expect(calls[0]!.size).toBe("1024x1024");
+  });
 });

@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { detectLocalRuntime, pickChatModel } from "./local-runtime.js";
+import { detectLocalRuntime, detectLocalSpeech, pickChatModel, probeBinary, probeFfmpeg } from "./local-runtime.js";
 
 /**
  * Adopting the model runtime already running on this machine — docs/26_DECISIONS.md ADR-118.
@@ -126,5 +129,121 @@ describe("pickChatModel", () => {
   it("falls back to whatever is pulled when nothing is recognised", () => {
     expect(pickChatModel(["some-unknown-model:latest"])).toBe("some-unknown-model:latest");
     expect(pickChatModel([])).toBeUndefined();
+  });
+});
+
+/**
+ * Media binaries: asked, not assumed — docs/26_DECISIONS.md ADR-129.
+ *
+ * `FFMPEG_PATH` defaults to the bare name `ffmpeg`, and availability was inferred from the SHAPE
+ * of that string — a name with no path separator was taken to mean "the OS will resolve it",
+ * without ever asking the OS. So on a machine with no ffmpeg the platform advertised video
+ * generation, selected a provider that shells out to it, and settled every render
+ * `skipped_no_ffmpeg`: a capability the API and the screen both claimed and that could not
+ * produce a single frame.
+ *
+ * `process.execPath` is used as the binary under test because it is guaranteed to exist and to
+ * execute on any machine that can run this suite — the question is whether the probe distinguishes
+ * a real executable from a name that resolves to nothing, not whether ffmpeg is installed here.
+ */
+describe("probeFfmpeg", () => {
+  it("reports a binary that really runs", async () => {
+    expect(await probeFfmpeg(process.execPath, 15_000)).toBe(true);
+  });
+
+  it("reports a bare name that resolves to nothing as UNAVAILABLE", async () => {
+    // The exact case the old shape-based check answered `true` for.
+    expect(await probeFfmpeg("definitely-not-a-real-binary-xyzzy", 15_000)).toBe(false);
+  });
+
+  it("reports an absolute path that does not exist as unavailable", async () => {
+    expect(await probeFfmpeg(join(tmpdir(), "no-such-ffmpeg-binary"), 15_000)).toBe(false);
+  });
+
+  it("gives up on a binary that never exits rather than hanging the boot", async () => {
+    // A boot-time probe that can block forever is worse than the missing capability it checks
+    // for: the process never finishes starting. Node stands in for a wedged binary because it is
+    // guaranteed present, and the script genuinely never returns.
+    const dir = mkdtempSync(join(tmpdir(), "probe-hang-"));
+    try {
+      const script = join(dir, "hang.mjs");
+      writeFileSync(script, "setInterval(() => {}, 1000);");
+      const started = Date.now();
+      expect(await probeBinary(process.execPath, [script], 400)).toBe(false);
+      // It really gave up on its own deadline rather than the process happening to exit.
+      expect(Date.now() - started).toBeLessThan(10_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("detectLocalSpeech", () => {
+  const base = { NODE_ENV: "development", SPEECH_PROVIDER: "none" };
+  const voiceFile = () => {
+    const dir = mkdtempSync(join(tmpdir(), "voice-"));
+    const voice = join(dir, "en_US-test.onnx");
+    writeFileSync(voice, "not a real model, but a real file");
+    return { dir, voice };
+  };
+
+  it("adopts a synthesiser whose binary runs and whose voice exists", async () => {
+    const { dir, voice } = voiceFile();
+    try {
+      const log = logger();
+      const found = await detectLocalSpeech(base, log, {
+        candidates: [{ binary: process.execPath, voice }],
+      });
+      expect(found).toEqual({ binaryPath: process.execPath, voicePath: voice });
+      // Announced, never silent — the same rule as the model runtime (ADR-118).
+      expect(log.info).toHaveBeenCalled();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("adopts nothing when the voice file is missing", async () => {
+    // A binary with no voice is a binary that cannot speak. Enabling speech on that basis would
+    // replace "no narration" with "every request fails", which is strictly worse.
+    const found = await detectLocalSpeech(base, logger(), {
+      candidates: [{ binary: process.execPath, voice: join(tmpdir(), "no-such-voice.onnx") }],
+    });
+    expect(found).toBeNull();
+  });
+
+  it("adopts nothing when the binary does not run", async () => {
+    const { dir, voice } = voiceFile();
+    try {
+      const found = await detectLocalSpeech(base, logger(), {
+        candidates: [{ binary: "definitely-not-a-real-binary-xyzzy", voice }],
+      });
+      expect(found).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("never probes in production", async () => {
+    const { dir, voice } = voiceFile();
+    try {
+      const found = await detectLocalSpeech({ ...base, NODE_ENV: "production" }, logger(), {
+        candidates: [{ binary: process.execPath, voice }],
+      });
+      expect(found).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves an explicitly configured provider alone", async () => {
+    const { dir, voice } = voiceFile();
+    try {
+      const found = await detectLocalSpeech({ ...base, SPEECH_PROVIDER: "openai" }, logger(), {
+        candidates: [{ binary: process.execPath, voice }],
+      });
+      expect(found).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

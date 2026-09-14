@@ -32,6 +32,14 @@ import {
  * The API takes pixel dimensions, not aspect ratios. These are the standard buckets those
  * models are trained around; a size the server rejects surfaces as a real provider error
  * rather than being silently substituted.
+ *
+ * They are also the buckets a HOSTED model is trained around, and this adapter is documented as
+ * the way to reach a LOCAL OpenAI-compatible server too (`http://127.0.0.1:8080/v1` for LocalAI,
+ * says the option's own comment). On a CPU backend a 1024-square generation is minutes of work
+ * and a 1792×1024 is worse, so a deployment that points this at a local server could only wait or
+ * time out — with no setting that helped, because the size was a constant. `baseSize` rescales
+ * the whole table while keeping the ratios, so the same configuration reaches a small local model
+ * and a hosted one (ADR-129).
  */
 const SIZE_BY_RATIO: Record<AspectRatio, { width: number; height: number }> = {
   "1:1": { width: 1024, height: 1024 },
@@ -48,6 +56,12 @@ export interface OpenAICompatibleImageOptions {
   baseUrl: string;
   model: string;
   apiKey?: string;
+  /**
+   * Longest edge of the square bucket, in pixels. Everything else keeps its ratio and scales with
+   * it. Unset keeps the hosted-model defaults (1024 and up). Set it small — 512, or 384 — when
+   * this points at a local CPU server, where the default sizes are minutes per image (ADR-129).
+   */
+  baseSize?: number;
   name?: string;
   /** Most local servers ignore a negative prompt; declare it honestly per deployment. */
   supportsNegativePrompt?: boolean;
@@ -69,11 +83,28 @@ export class OpenAICompatibleImageProvider implements ImageProvider {
   private readonly fetchImpl: typeof fetch;
   private readonly requestTimeoutMs: number;
 
+  /** Longest edge of the 1:1 bucket the table is written against; the rest scale with it. */
+  private static readonly REFERENCE_SIZE = 1024;
+
   constructor(private readonly options: OpenAICompatibleImageOptions) {
     this.name = options.name ?? "image-openai";
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 180_000;
+  }
+
+  /**
+   * The configured size, keeping each bucket's aspect ratio and rounding to a multiple of 64 —
+   * every diffusion backend worth pointing this at wants dimensions on that grid (ADR-129).
+   * Unset means the hosted defaults, unchanged.
+   */
+  private sizeFor(ratio: AspectRatio): { width: number; height: number } {
+    const base = SIZE_BY_RATIO[ratio];
+    const target = this.options.baseSize;
+    if (!target || target === OpenAICompatibleImageProvider.REFERENCE_SIZE) return base;
+    const scale = target / OpenAICompatibleImageProvider.REFERENCE_SIZE;
+    const round64 = (n: number) => Math.max(64, Math.round((n * scale) / 64) * 64);
+    return { width: round64(base.width), height: round64(base.height) };
   }
 
   getCapabilities(): ImageProviderCapabilities {
@@ -93,7 +124,7 @@ export class OpenAICompatibleImageProvider implements ImageProvider {
     req: ImageGenerationRequest,
     store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
   ): Promise<ImageResult> {
-    const size = SIZE_BY_RATIO[req.aspectRatio];
+    const size = this.sizeFor(req.aspectRatio);
     const body: Record<string, unknown> = {
       model: this.options.model,
       prompt: req.prompt,

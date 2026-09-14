@@ -170,6 +170,14 @@ const envSchema = z.object({
   IMAGE_API_KEY: optionalString,
   IMAGE_SUPPORTS_NEGATIVE_PROMPT: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   IMAGE_SUPPORTS_SEED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  /**
+   * Longest edge for the OpenAI-compatible image adapter, in pixels — ADR-129.
+   *
+   * The adapter's size table is written for hosted models (1024 and up) and was a constant, so a
+   * deployment pointing IMAGE_BASE_URL at a LOCAL server — which its own documentation suggests —
+   * asked a CPU for a 1024-square image and could only wait. Unset keeps the hosted defaults.
+   */
+  IMAGE_BASE_SIZE: z.coerce.number().int().min(64).max(4096).optional(),
   // stable-diffusion.cpp: one binary plus one weights file, on the CPU, with no server (ADR-120).
   // This is what makes image generation REAL on a machine with no image credentials.
   IMAGE_SD_CLI_PATH: optionalString,

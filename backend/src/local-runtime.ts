@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { Logger } from "@ai-platform/observability";
 
 /**
@@ -130,4 +132,91 @@ function normaliseHost(value: string | undefined): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) return undefined;
   return /^https?:\/\//i.test(trimmed) ? trimmed.replace(/\/$/, "") : `http://${trimmed.replace(/\/$/, "")}`;
+}
+
+/**
+ * Does this ffmpeg actually run? — docs/26_DECISIONS.md ADR-129.
+ *
+ * `isAvailable` answered "a bare command name is resolved by the OS" with `true`, without ever
+ * asking the OS. `FFMPEG_PATH` defaults to the bare name `ffmpeg`, so on every machine without
+ * ffmpeg installed the platform reported video generation as available, selected a provider that
+ * needs it, and settled each render `skipped_no_ffmpeg` — a capability advertised in the API and
+ * on the screen that could not produce a frame. An absolute path was checked with `existsSync`; a
+ * name on PATH was simply believed.
+ *
+ * Running `-version` is the only answer that means anything: it resolves the name, proves the
+ * binary executes, and costs milliseconds once at boot.
+ */
+export async function probeFfmpeg(ffmpegPath: string, timeoutMs = 5_000): Promise<boolean> {
+  return probeBinary(ffmpegPath, ["-version"], timeoutMs);
+}
+
+/**
+ * Piper, when it is on PATH and has a voice beside it — ADR-129.
+ *
+ * The same four rules as the model-runtime probe above: explicit configuration wins, never in
+ * production, announced in the boot log, and a failure adopts nothing. A voice is required as
+ * well as a binary, because piper without one is a binary that cannot speak, and enabling speech
+ * on that basis would replace "no narration" with "every request fails".
+ */
+export async function detectLocalSpeech(
+  config: { NODE_ENV: string; SPEECH_PROVIDER: string; PIPER_PATH?: string; PIPER_VOICE?: string },
+  logger: Pick<Logger, "info" | "warn">,
+  options: { candidates?: Array<{ binary: string; voice: string }>; probe?: typeof probeBinary } = {}
+): Promise<{ binaryPath: string; voicePath: string } | null> {
+  if (config.SPEECH_PROVIDER !== "none") return null;
+  if (config.NODE_ENV === "production") return null;
+
+  const probe = options.probe ?? probeBinary;
+  const candidates = options.candidates ?? defaultPiperCandidates();
+
+  for (const candidate of candidates) {
+    if (!existsSync(candidate.voice)) continue;
+    if (!(await probe(candidate.binary, ["--help"], 5_000))) continue;
+    logger.info(
+      { binary: candidate.binary, voice: candidate.voice },
+      "local speech synthesiser detected — narration and the audio screen are enabled (override with SPEECH_PROVIDER)"
+    );
+    return { binaryPath: candidate.binary, voicePath: candidate.voice };
+  }
+  return null;
+}
+
+/** `PIPER_VOICE` alone is enough to opt in when the binary is on PATH under its usual name. */
+function defaultPiperCandidates(): Array<{ binary: string; voice: string }> {
+  const voice = process.env.PIPER_VOICE;
+  return voice ? [{ binary: process.env.PIPER_PATH ?? "piper", voice }] : [];
+}
+
+/**
+ * Runs a binary and reports whether it exits without the OS refusing to start it.
+ *
+ * A non-zero exit still counts as present: `--help` returns 1 on several of these tools, and the
+ * question here is "does this binary exist and execute", not "did it like its arguments". What
+ * must fail is ENOENT, EACCES, and a process that never returns.
+ */
+export async function probeBinary(command: string, args: string[], timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    let child: ReturnType<typeof spawn>;
+    const timer = setTimeout(() => {
+      child?.kill("SIGKILL");
+      done(false);
+    }, timeoutMs);
+    try {
+      // `shell: false`: these paths come from configuration, and a shell is a parser (ADR-032).
+      child = spawn(command, args, { shell: false, stdio: "ignore" });
+    } catch {
+      done(false);
+      return;
+    }
+    child.on("error", () => done(false));
+    child.on("close", () => done(true));
+  });
 }

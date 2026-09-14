@@ -2117,3 +2117,18 @@ The scope moves into SQL rather than into the call signature, which matters more
 
 **Date:** 2026-09-14
 **Impact:** `backend/src/index.ts`, `backend/packages/media/src/{image-generation,video-render}.ts` + 6 tests, including a real child process that never exits.
+
+## ADR-129: The media binaries are asked, not assumed
+
+**Decision:** ffmpeg is executed once at boot to decide whether it exists, a piper installation already on this machine is adopted the way ADR-118 adopts Ollama, and the OpenAI-compatible image adapter takes a configurable size instead of a hosted-model constant.
+
+**"A bare command name is resolved by the OS" — asserted, never checked.** `ImageMotionVideoProvider.isAvailable` decided availability from the SHAPE of the configured string: a name with no path separator was assumed resolvable, an absolute path was checked with `existsSync`. `FFMPEG_PATH` defaults to the bare name `ffmpeg`, so on every machine without ffmpeg installed the platform reported video generation as available, selected a provider that shells out to it, and settled every render `skipped_no_ffmpeg`. A capability the API advertised and the screen offered, that could not produce a single frame. Running `-version` is the only answer that means anything — it resolves the name, proves the binary executes, and costs milliseconds once.
+
+**And the synthesiser that was already installed went unused.** ADR-118 adopts a running Ollama because a first chat answered by a stub, with nothing on screen saying so, is a bad first impression that a probe can prevent. Speech was in exactly that position: `SPEECH_PROVIDER` defaults to `none`, so a machine with piper and a voice on it still rendered every video silent. The same four rules apply unchanged — explicit configuration wins, never in production, announced in the boot log, a failure adopts nothing — with one addition: a voice file is required as well as a binary, because piper without a voice is a binary that cannot speak, and enabling speech on that basis would replace "no narration" with "every request fails".
+
+**Verified by booting it.** With no `.env` and nothing on PATH, the log reads "ffmpeg could not be executed", image and video report themselves mocked, and there is no speech provider — all true. With the local tools present, the same command logs `image_provider: stable-diffusion.cpp, image_is_mock: false, video_provider: image-motion, video_is_mock: false` and `speech provider registered: piper`. No configuration file was involved in either.
+
+**A size a CPU can finish.** The OpenAI-compatible image adapter's size table starts at 1024 and reaches 1792×1024, which is right for the hosted models it was written for — while the adapter's own option comment recommends it for `http://127.0.0.1:8080/v1`. Pointed at a local CPU server it asked for a 1024-square image and could only be waited on, with no setting that helped because the size was a constant. `IMAGE_BASE_SIZE` rescales every bucket, keeping each ratio and rounding to the /64 grid diffusion backends want. Unset, the hosted defaults are untouched.
+
+**Date:** 2026-09-14
+**Impact:** `backend/src/{local-runtime,providers,index,config}.ts`, `backend/packages/providers/image-openai/src/index.ts`, `.env.example` + 9 tests, including a probe against a process that genuinely never exits.
