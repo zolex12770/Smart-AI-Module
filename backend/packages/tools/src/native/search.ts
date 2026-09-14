@@ -1,5 +1,6 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { Worker } from "node:worker_threads";
 import { PERMISSION_LEVEL_DEFAULTS, type ToolDefinition, type ToolInvocationContext } from "@ai-platform/shared";
 import { resolveSandboxedPath } from "./sandbox-path.js";
 import { projectWorkspace } from "./workspace.js";
@@ -33,6 +34,8 @@ const IGNORED_DIRECTORIES = new Set([
 
 const MAX_FILE_BYTES = 2_000_000;
 const DEFAULT_MAX_RESULTS = 100;
+/** Below the tool definition's own 30 s, so the tool reports its own failure first. */
+const DEFAULT_SEARCH_TIMEOUT_MS = 20_000;
 
 export interface SearchMatch {
   path: string;
@@ -110,41 +113,109 @@ export function globToRegExp(pattern: string): RegExp {
   return new RegExp(`^${out}$`, "i");
 }
 
-export function searchFiles(
+/**
+ * Searches the workspace — and runs the model's regular expression in a WORKER (ADR-116).
+ *
+ * The split is deliberate. The walk stays here because it is what enforces containment
+ * (`resolveSandboxedPath` per entry, symlinks resolved — ADR-088/ADR-095); the matching, which is
+ * the only part that executes an attacker-influenced regular expression, happens in a thread that
+ * can be killed. `^(a+)+$` against one 60-character line was measured blocking this process for
+ * 117.7 s with zero event-loop ticks, so nothing else — including the registry's own 30 s timeout
+ * — could run. The deadline here is real because `terminate()` stops a worker mid-match.
+ */
+export async function searchFiles(
   root: string,
-  options: { pattern: string; isRegex?: boolean; glob?: string; maxResults?: number; caseSensitive?: boolean }
-): SearchMatch[] {
+  options: {
+    pattern: string;
+    isRegex?: boolean;
+    glob?: string;
+    maxResults?: number;
+    caseSensitive?: boolean;
+    /** Wall-clock ceiling for the matching pass. */
+    timeoutMs?: number;
+    /** Cancels the matching pass — the invocation's signal (a cancelled task, a node deadline). */
+    signal?: AbortSignal;
+  }
+): Promise<SearchMatch[]> {
   const max = Math.min(options.maxResults ?? DEFAULT_MAX_RESULTS, 500);
-  const flags = options.caseSensitive ? "" : "i";
-  const matcher = options.isRegex
-    ? new RegExp(options.pattern, flags)
-    : new RegExp(options.pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), flags);
   const globMatcher = options.glob ? globToRegExp(options.glob) : null;
 
-  const results: SearchMatch[] = [];
+  // Containment is applied here, once, by the same walk every other tool uses.
+  const files: { absolute: string; relative: string }[] = [];
   for (const file of walkFiles(root)) {
     const rel = relative(root, file).split(sep).join("/");
     if (globMatcher && !globMatcher.test(rel)) continue;
-
-    let content: string;
-    try {
-      content = readFileSync(file, "utf8");
-    } catch {
-      continue;
-    }
-    // Skip anything that looks binary rather than emitting garbage into a model's context.
-    if (content.includes("\u0000")) continue;
-
-    const lines = content.split(/\r\n|\n|\r/);
-    for (let i = 0; i < lines.length; i++) {
-      if (matcher.test(lines[i])) {
-        results.push({ path: rel, line: i + 1, text: lines[i].slice(0, 500) });
-        if (results.length >= max) return results;
-      }
-    }
+    files.push({ absolute: file, relative: rel });
   }
-  return results;
+  if (files.length === 0) return [];
+
+  return runMatchWorker(
+    {
+      files,
+      pattern: options.pattern,
+      isRegex: Boolean(options.isRegex),
+      caseSensitive: Boolean(options.caseSensitive),
+      maxResults: max,
+    },
+    options.timeoutMs ?? DEFAULT_SEARCH_TIMEOUT_MS,
+    options.signal
+  );
 }
+
+/** Runs the matching pass in a worker, killing it if it outlives its deadline or is cancelled. */
+function runMatchWorker(
+  workerData: {
+    files: { absolute: string; relative: string }[];
+    pattern: string;
+    isRegex: boolean;
+    caseSensitive: boolean;
+    maxResults: number;
+  },
+  timeoutMs: number,
+  signal?: AbortSignal
+): Promise<SearchMatch[]> {
+  return new Promise((resolvePromise, reject) => {
+    // Resolved against this module, so it works from `dist/` in production and from `src/` under
+    // vitest; the build copies the file next to the compiled output.
+    const worker = new Worker(new URL("./search-worker.mjs", import.meta.url), { workerData });
+    let settled = false;
+    const finish = (err?: Error, value?: SearchMatch[]) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      void worker.terminate();
+      if (err) reject(err);
+      else resolvePromise(value ?? []);
+    };
+
+    const timer = setTimeout(
+      () =>
+        finish(
+          new Error(
+            `The search did not finish within ${timeoutMs}ms and was stopped. A simpler pattern, or one that is not a regular expression, will complete.`
+          )
+        ),
+      timeoutMs
+    );
+    const onAbort = () => finish(new Error("The search was cancelled."));
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    worker.once("message", (msg: { ok: boolean; result?: SearchMatch[]; error?: string }) => {
+      if (msg.ok) finish(undefined, msg.result);
+      else finish(new Error(msg.error ?? "The search failed."));
+    });
+    worker.once("error", (err) => finish(err instanceof Error ? err : new Error(String(err))));
+    worker.once("exit", (code) => {
+      if (!settled && code !== 0) finish(new Error(`The search worker exited with code ${code}.`));
+    });
+  });
+}
+
 
 export function globFiles(root: string, pattern: string, maxResults = DEFAULT_MAX_RESULTS): string[] {
   const matcher = globToRegExp(pattern);
@@ -225,12 +296,13 @@ export function createSearchTools(root: string): NativeToolEntry[] {
       ),
       handler: async (args, context) => {
         try {
-          const matches = searchFiles(resolveSearchRoot(context), {
+          const matches = await searchFiles(resolveSearchRoot(context), {
             pattern: String(args.pattern),
             isRegex: Boolean(args.isRegex),
             glob: args.glob === undefined ? undefined : String(args.glob),
             caseSensitive: Boolean(args.caseSensitive),
             maxResults: args.maxResults === undefined ? undefined : Number(args.maxResults),
+            signal: context?.signal,
           });
           return { ok: true, output: { matchCount: matches.length, matches } };
         } catch (err) {

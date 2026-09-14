@@ -268,7 +268,7 @@ export function recordToolCall(attrs: { tool: string; outcome: string }): void {
 
 /** Media generation end to end — image or video, success or failure. */
 export function recordMediaJob(attrs: {
-  mediaType: "image" | "video";
+  mediaType: "image" | "video" | "audio";
   provider: string;
   outcome: "success" | "failure";
   durationMs: number;

@@ -10,6 +10,7 @@ export * from "./repositories/document-repository.js";
 export * from "./repositories/document-chunk-repository.js";
 export * from "./repositories/memory-item-repository.js";
 export * from "./repositories/asset-repository.js";
+export * from "./repositories/audio-generation-repository.js";
 export * from "./repositories/image-generation-repository.js";
 export * from "./repositories/video-project-repository.js";
 export * from "./repositories/video-scene-repository.js";

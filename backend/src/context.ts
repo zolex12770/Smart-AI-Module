@@ -4,6 +4,7 @@ import type {
   ConversationRepository,
   DocumentChunkRepository,
   DocumentRepository,
+  AudioGenerationRepository,
   ImageGenerationRepository,
   MemoryItemRepository,
   MessageRepository,
@@ -55,6 +56,7 @@ export interface AppContext {
   /** The only sanctioned way to read an asset's bytes — never `readFile(asset.storagePath)`
    * directly, since that path may be a `gs://` URI (docs/26_DECISIONS.md ADR-040). */
   assetStore: AssetStore;
+  audioGenerations: AudioGenerationRepository;
   imageGenerations: ImageGenerationRepository;
   videoProjects: VideoProjectRepository;
   videoScenes: VideoSceneRepository;
@@ -75,6 +77,8 @@ export interface AppContext {
    * can have a real image server and no video one, and reporting them through a single flag
    * would either disable something that works or advertise something that does not.
    */
+  /** True when a speech provider is configured, which is what the audio routes need (ADR-114). */
+  audioGenerationAvailable: boolean;
   imageGenerationAvailable: boolean;
   videoGenerationAvailable: boolean;
   /**

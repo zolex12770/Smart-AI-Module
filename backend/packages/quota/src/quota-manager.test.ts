@@ -203,4 +203,55 @@ describe("QuotaManager (real PGlite Postgres + PgUsageRecordRepository)", () => 
     expect(result.allowed).toBe(false);
     expect(result.reason).toMatch(/sumEmbeddingTokensSince/);
   });
+
+  /**
+   * Speech, budgeted in characters — ADR-114. Real rows through the real repository, because the
+   * question a quota answers ("did we already cross this line today?") is a SQL question.
+   */
+  it("counts speech characters against the daily and monthly limits, per project", async () => {
+    const other = await seedProject(db, "other-tenant");
+    const record = async (projectId: string, characters: number) =>
+      usage.create({
+        id: uuid(),
+        projectId,
+        userId: null,
+        kind: "speech",
+        provider: "piper",
+        model: "en_US-lessac-medium.onnx",
+        inputTokens: null,
+        outputTokens: null,
+        units: characters,
+        estimatedCostUsd: null,
+        requestId: null,
+        idempotencyKey: `speech:${uuid()}`,
+      });
+
+    await record(projectId, 800);
+    await record(other, 5000); // another tenant's spend must not count against this one
+
+    const manager = new QuotaManager(usage, { dailySpeechCharacterLimit: 1000 });
+    expect((await manager.checkSpeechCharacters(projectId, 300)).allowed).toBe(false); // 800 + 300 > 1000
+    expect((await manager.checkSpeechCharacters(projectId, 300)).reason).toMatch(/Daily speech limit of 1000 characters/);
+    expect(await manager.checkSpeechCharacters(projectId, 200)).toEqual({ allowed: true }); // 800 + 200 == 1000
+
+    // The monthly window is checked too, and names itself when it is the one that bites.
+    const monthly = new QuotaManager(usage, { monthlySpeechCharacterLimit: 900 });
+    expect((await monthly.checkSpeechCharacters(projectId, 200)).reason).toMatch(/Monthly speech limit of 900/);
+
+    // No limits configured means no gate at all — quotas are opt-in (FR-063).
+    expect(await new QuotaManager(usage, {}).checkSpeechCharacters(projectId, 1_000_000)).toEqual({ allowed: true });
+  });
+
+  it("refuses speech, rather than silently allowing it, when the ledger cannot measure it", async () => {
+    // Fail-closed, like the embedding budget: an operator who configured a ceiling asked for one.
+    const ledger: QuotaUsageLedger = {
+      sumLlmTokensSince: (p, s) => usage.sumLlmTokensSince(p, s),
+      countImagesSince: (p, s) => usage.countImagesSince(p, s),
+      sumVideoSecondsSince: (p, s) => usage.sumVideoSecondsSince(p, s),
+    };
+    const manager = new QuotaManager(ledger, { dailySpeechCharacterLimit: 100 });
+    const result = await manager.checkSpeechCharacters(projectId, 1);
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toMatch(/cannot measure speech usage/);
+  });
 });

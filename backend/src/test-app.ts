@@ -10,6 +10,7 @@ import {
   PgConversationRepository,
   PgDocumentChunkRepository,
   PgDocumentRepository,
+  PgAudioGenerationRepository,
   PgImageGenerationRepository,
   PgMemoryItemRepository,
   PgMessageRepository,
@@ -25,7 +26,7 @@ import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings
 import { MemoryService } from "@ai-platform/memory";
 import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
-import { LocalAssetStore } from "@ai-platform/media";
+import { LocalAssetStore, PiperSpeechProvider } from "@ai-platform/media";
 import { McpManager } from "@ai-platform/mcp";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { QuotaManager } from "@ai-platform/quota";
@@ -117,7 +118,7 @@ export async function buildTestApp(): Promise<{
   // Must mirror every queue index.ts ensures — pg-boss's send() to a queue that was never
   // created throws, which surfaced as a 500 from the upload route the first time a test
   // configured a scanner (ADR-042) before `document.scan` was listed here.
-  for (const queue of ["document.scan", "document.ingest", "image.generate", "video.generate_scene", "video.render"]) {
+  for (const queue of ["document.scan", "document.ingest", "audio.generate", "image.generate", "video.generate_scene", "video.render"]) {
     await jobQueue.ensureQueue(queue);
   }
 
@@ -136,6 +137,18 @@ export async function buildTestApp(): Promise<{
 
   const embeddings = new EmbeddingService(new HashEmbeddingProvider());
   const memoryItemRepo = new PgMemoryItemRepository(db);
+
+  /**
+   * Speech for the harness: the REAL piper when this machine has it configured, otherwise none.
+   * A fake synthesiser would make the audio route's tests pass while proving nothing about audio.
+   */
+  const speech =
+    PiperSpeechProvider.isAvailable(process.env.PIPER_PATH, process.env.PIPER_VOICE)
+      ? new PiperSpeechProvider({
+          binaryPath: process.env.PIPER_PATH as string,
+          voicePath: process.env.PIPER_VOICE as string,
+        })
+      : null;
 
   const ctx: AppContext = {
     db,
@@ -161,6 +174,7 @@ export async function buildTestApp(): Promise<{
       liveWindowMessages: config.CHAT_LIVE_WINDOW_MESSAGES,
     },
     assetStore: new LocalAssetStore(assetsRoot, new PgAssetRepository(db)),
+    audioGenerations: new PgAudioGenerationRepository(db),
     imageGenerations: new PgImageGenerationRepository(db),
     videoProjects: new PgVideoProjectRepository(db),
     videoScenes: new PgVideoSceneRepository(db),
@@ -173,6 +187,12 @@ export async function buildTestApp(): Promise<{
     scanner: null,
     uploadScanRequired: false,
     // Tests run as development would: the mock media providers are available (ADR-045).
+    // Real speech when this machine has piper configured (.local-tools/test-env.sh), and no
+    // speech otherwise — the routes then answer with a real capability error, which is the
+    // behaviour a deployment without a synthesiser has (ADR-114).
+    speech,
+    speechAvailable: speech !== null,
+    audioGenerationAvailable: speech !== null,
     imageGenerationAvailable: true,
     videoGenerationAvailable: true,
 

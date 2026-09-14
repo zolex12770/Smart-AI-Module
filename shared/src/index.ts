@@ -4,5 +4,6 @@ export * from "./chat.js";
 export * from "./task-graph.js";
 export * from "./tools.js";
 export * from "./sse.js";
+export * from "./audio.js";
 export * from "./image.js";
 export * from "./video.js";

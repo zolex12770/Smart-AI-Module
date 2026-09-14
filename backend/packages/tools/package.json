@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node -e \"require('node:fs').copyFileSync('src/native/search-worker.mjs','dist/native/search-worker.mjs')\"",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

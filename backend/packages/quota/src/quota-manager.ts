@@ -15,6 +15,8 @@ export interface QuotaUsageLedger {
   countImagesSince(projectId: string, since: Date): Promise<number>;
   sumVideoSecondsSince(projectId: string, since: Date): Promise<number>;
   sumEmbeddingTokensSince?(projectId: string, since: Date): Promise<number>;
+  /** Characters synthesised, the unit speech providers bill in (ADR-114). */
+  sumSpeechCharactersSince?(projectId: string, since: Date): Promise<number>;
 }
 
 /**
@@ -22,7 +24,7 @@ export interface QuotaUsageLedger {
  * is recorded but has no quota, because there is no unit of tool spend an operator could
  * meaningfully budget yet.
  */
-export type QuotaUsageKind = "llm" | "embedding" | "image" | "video";
+export type QuotaUsageKind = "llm" | "embedding" | "image" | "video" | "speech";
 
 /**
  * docs/22_COST_AND_QUOTA_STRATEGY.md's `QuotaManager`, now genuinely per-project (ADR-049)
@@ -43,6 +45,10 @@ export interface QuotaLimits {
   monthlyEmbeddingTokenLimit?: number;
   dailyImageLimit?: number;
   monthlyVideoSecondsLimit?: number;
+  /** Speech is billed per character by every hosted synthesiser, and per second of CPU by a
+   * local one; characters are the unit both can be budgeted in (ADR-114). */
+  dailySpeechCharacterLimit?: number;
+  monthlySpeechCharacterLimit?: number;
 }
 
 export interface QuotaCheckResult {
@@ -148,6 +154,34 @@ export class QuotaManager {
         allowed: false,
         reason: `Monthly video-seconds limit of ${this.limits.monthlyVideoSecondsLimit} would be exceeded (${used}s used so far this month).`,
       };
+    }
+    return { allowed: true };
+  }
+
+  /**
+   * Speech, budgeted in characters — ADR-114. Checked BEFORE the job is created, like every
+   * other spend: a synthesiser costs money per character hosted, and a worker's whole attention
+   * locally, so "generate audio" is not a free action just because this deployment runs piper.
+   */
+  async checkSpeechCharacters(projectId: string, characters: number): Promise<QuotaCheckResult> {
+    const { dailySpeechCharacterLimit: daily, monthlySpeechCharacterLimit: monthly } = this.limits;
+    if (daily === undefined && monthly === undefined) return { allowed: true };
+    if (!this.usage.sumSpeechCharactersSince) {
+      // Refuse rather than guess, exactly as the embedding budget does: a limit an operator
+      // configured and this ledger cannot measure must not silently pass.
+      return { allowed: false, reason: "A speech character limit is configured but this ledger cannot measure speech usage." };
+    }
+    if (daily !== undefined) {
+      const used = await this.usage.sumSpeechCharactersSince(projectId, startOfDay(this.now()));
+      if (used + characters > daily) {
+        return { allowed: false, reason: `Daily speech limit of ${daily} characters would be exceeded (${used} synthesised today).` };
+      }
+    }
+    if (monthly !== undefined) {
+      const used = await this.usage.sumSpeechCharactersSince(projectId, startOfMonth(this.now()));
+      if (used + characters > monthly) {
+        return { allowed: false, reason: `Monthly speech limit of ${monthly} characters would be exceeded (${used} synthesised this month).` };
+      }
     }
     return { allowed: true };
   }

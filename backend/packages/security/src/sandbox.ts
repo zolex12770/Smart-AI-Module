@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { resolve, sep } from "node:path";
+import { basename, resolve, sep } from "node:path";
 
 /**
  * Command execution isolation (docs/13_SECURITY_ARCHITECTURE.md §6, ADR-055).
@@ -182,7 +182,64 @@ function terminate(child: ChildProcess): void {
   }
 }
 
-/** Local-development isolation: scrubbed env, real termination, output caps. */
+/**
+ * Node's permission model, as the containment process isolation previously had none —
+ * docs/26_DECISIONS.md ADR-117.
+ *
+ * `--permission` is stable from Node 23; 20–22 spell it `--experimental-permission`. Deployments
+ * on an older runtime get the flag they understand, and one that understands neither gets no
+ * containment, which `supportsPermissionModel` reports so the caller can refuse.
+ */
+function permissionFlagFor(nodeVersion = process.versions.node): string | null {
+  const major = Number.parseInt(nodeVersion.split(".")[0] ?? "0", 10);
+  if (Number.isNaN(major) || major < 20) return null;
+  return major >= 23 ? "--permission" : "--experimental-permission";
+}
+
+/** True when this runtime can confine a Node child to a directory. */
+export function supportsPermissionModel(nodeVersion = process.versions.node): boolean {
+  return permissionFlagFor(nodeVersion) !== null;
+}
+
+/**
+ * The argument vector for a sandboxed command — ADR-117.
+ *
+ * Exported so the confinement is asserted rather than reviewed: a `node` child is run under the
+ * permission model, restricted to the workspace it was given. Anything else is returned unchanged,
+ * because the flags are Node's own; the allow-list in `terminal.run_command` is what keeps that
+ * case from arising.
+ */
+export function processSandboxArgs(
+  command: string,
+  args: string[],
+  workdir: string,
+  nodeVersion = process.versions.node
+): string[] {
+  const executable = basename(command).toLowerCase();
+  if (executable !== "node" && executable !== "node.exe") return args;
+  const flag = permissionFlagFor(nodeVersion);
+  if (!flag) return args;
+  // Read and write are granted for the workspace only. Everything else the model could reach —
+  // the API's .env, the PGlite data directory, another tenant's workspace, the user's home — is
+  // denied by the runtime, as are child processes, worker threads and native addons.
+  return [flag, `--allow-fs-read=${workdir}`, `--allow-fs-read=${workdir}/*`, `--allow-fs-write=${workdir}/*`, ...args];
+}
+
+/**
+ * Local-development isolation: scrubbed env, real termination, output caps, and — since ADR-117 —
+ * a filesystem boundary the child cannot cross.
+ *
+ * WHAT THIS USED TO BE. `spawnChild` set `cwd` and an environment and nothing else, so "sandbox"
+ * meant only "a different working directory". An audit proved the consequence end to end through
+ * the real tools: `fs.write_file` wrote a script, `terminal.run_command` ran `node` on it, and the
+ * script read a host file outside the root, wrote a new one beside it, listed every tenant's
+ * workspace under the deployment root, and resolved DNS. Both tools are `write_local`, whose
+ * default approval is `never`, so no human gate was crossed. `SANDBOX_RUNTIME=process` is the
+ * default and the only mode available without Docker, so that was the normal local posture.
+ *
+ * WHAT IT DOES NOT DO. The permission model has no network dimension: a script can still open
+ * sockets. Docker remains the production posture (`--network none`), and `docs/13` says so.
+ */
 export class ProcessSandbox extends BaseSandbox {
   readonly isolation = "process" as const;
 
@@ -192,7 +249,7 @@ export class ProcessSandbox extends BaseSandbox {
 
   protected spawnChild(request: SandboxRunRequest, _limits: SandboxLimits): ChildProcess {
     const workdir = assertContained(this.root, request.workdir);
-    return spawn(request.command, request.args, {
+    return spawn(request.command, processSandboxArgs(request.command, request.args, workdir), {
       cwd: workdir,
       env: { ...baseEnv(), ...(request.env ?? {}) },
       shell: false,

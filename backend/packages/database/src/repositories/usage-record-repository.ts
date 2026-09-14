@@ -3,7 +3,7 @@ import type { DrizzleDb } from "../client.js";
 import { usageRecords } from "../schema/index.js";
 
 /** `embedding` and `tool` joined the ledger in ADR-049: both spend, so both are recorded. */
-export type UsageKind = "llm" | "embedding" | "image" | "video" | "tool";
+export type UsageKind = "llm" | "embedding" | "image" | "video" | "speech" | "tool";
 
 export interface UsageRecord {
   id: string;
@@ -117,6 +117,11 @@ export class PgUsageRecordRepository implements UsageRecordRepository {
 
   async sumVideoSecondsSince(projectId: string, since: Date): Promise<number> {
     return this.sumColumnSince(projectId, "video", usageRecords.units, since);
+  }
+
+  /** Characters synthesised, recorded as `units` on speech rows (ADR-114). */
+  async sumSpeechCharactersSince(projectId: string, since: Date): Promise<number> {
+    return this.sumColumnSince(projectId, "speech", usageRecords.units, since);
   }
 
   async sumLlmCostUsdSince(projectId: string, since: Date): Promise<number> {

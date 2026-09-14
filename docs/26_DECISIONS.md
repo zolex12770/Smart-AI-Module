@@ -1894,3 +1894,63 @@ A container still has to accept its platform's traffic, so production keeps `0.0
 
 **Date:** 2026-09-13
 **Impact:** `backend/src/config.ts`, `backend/src/index.ts`, `.env.example` + 3 tests.
+
+## ADR-114: Speech is a capability, and it exists on Linux
+
+**Decision:** `piper` joins `SPEECH_PROVIDER`, and text-to-speech becomes a first-class feature: `POST /api/v1/audio` records a row, a queue worker synthesises it, the result is a stored asset with a MEASURED duration, and the spend is metered in characters against an optional quota.
+
+**Two gaps, one cause.** Speech existed only inside the long-form video pipeline, so a user could not ask this platform for audio at all — no route, no screen, no usage kind. And the only offline provider was `SapiSpeechProvider`, whose `isAvailable()` is `process.platform === "win32"`: every Linux deployment, which is every deployment the Dockerfiles and Terraform target, had no speech unless an operator separately stood up an HTTP TTS server. A capability that exists only on the developer's operating system is a development-only capability wearing a production interface.
+
+piper is one static binary plus an ONNX voice, published for Linux x86_64/aarch64/armv7, macOS and Windows. The provider spawns it with **the text on stdin, never in the argument vector** (arguments are where a model-authored string meets the operating system's own parsing — ADR-032 was this project's argument-injection RCE) and with a minimal environment, like the sandbox and SAPI: a process spawned to read model-authored text has no business seeing the API's keys.
+
+**The duration is measured, not estimated.** ffprobe reads the produced file; a words-per-minute guess is the kind of number that looks right in a list and is wrong in the player, which this project already got wrong once in subtitles (ADR-081). With no ffmpeg configured the column stays null — "not measured", not a fabricated figure.
+
+**Metered in characters,** the unit every synthesiser bills in, with `checkSpeechCharacters` gating before the job is created and the usage row written only on success, keyed by generation id so a retry cannot charge twice.
+
+**Verified live:** piper produced a 3.1 s 22 kHz WAV that ffprobe decodes; the job test stores a real asset and asserts the stored duration matches ffprobe's to within half a second; the route tests cover 202-and-queued, validation, 401, a viewer's 403, 429 on quota, cross-tenant 404 and cancellation.
+
+**Date:** 2026-09-14
+**Impact:** `media/src/speech-piper.ts`, `media/src/audio-generation.ts`, `database` (table `audio_generations`, migration 0003, repository, `speech` usage kind), `quota/src/quota-manager.ts`, `shared/src/audio.ts`, `backend/src/{config,index,context,server}.ts`, `routes/v1/audio.ts` + 26 tests.
+
+## ADR-115: The last server component could not work as one
+
+**Decision:** `/chat/[conversationId]` is a client component that loads its history in the browser.
+
+It was the only `async` server component left in the app, and it called `getConversationMessages` → `apiFetch`, which lives in a `"use client"` module: React refuses to call a client export from the server, so the route was a hard error. Even without that it could not have worked — `apiFetch` sends `credentials: "include"` and reads the selected project from `localStorage`, and the Next server holds neither the browser's cookie nor its storage, so the API would have answered 401.
+
+The impact was larger than "a broken link": `ChatView` redirects to this route as soon as the first message of a NEW conversation finishes streaming, so a first-time user watched their answer arrive and then landed on an error page, and every conversation in the sidebar was dead. `/agent/[id]` and `/coding/[id]` had the identical defect and were converted earlier; this one was missed, which is why the reasoning is written out here rather than left as a one-line pragma.
+
+The page renders `ChatView` only once the history has arrived, because `ChatView` seeds its transcript from `initialMessages` on mount — handing it an empty array first would leave the conversation permanently blank, which is the bug a careless fix introduces.
+
+**Date:** 2026-09-14
+**Impact:** `frontend/app/chat/[conversationId]/page.tsx`.
+
+## ADR-116: The model's regular expression runs in a thread that can be killed
+
+**Decision:** `fs.search` walks and enforces containment in the main thread, and runs the pattern match in a worker with a deadline and cancellation.
+
+`^(a+)+$` against a single 60-character line backtracked for a measured **117.7 seconds** inside the API process, with **zero event-loop ticks**: no HTTP request, SSE stream or health check was served for any tenant, and the tool's own 30 s timeout could not fire because it is a `setTimeout`. The pattern is chosen by a model, so a prompt injection in any file, RAG chunk or fetched page is enough to trigger it — a whole-deployment availability failure from one tool call.
+
+A blocked regex cannot be interrupted from the thread it is blocking, so the matching moved to a worker, which `terminate()` stops mid-match. **Only the matching moved.** The walk stays in TypeScript because it is what enforces sandbox containment — `resolveSandboxedPath` per entry with symlinks resolved (ADR-088, ADR-095) — and a second implementation of "inside the workspace" is the exact defect class ADR-088 exists to record. The worker receives already-validated paths and does nothing but read and match.
+
+The worker is plain `.mjs` because it must load identically from `dist/` in production and from `src/` under vitest, and Node 22 (what CI runs) cannot load TypeScript in a worker; the package build copies it next to the compiled output.
+
+**Proven by test:** the catastrophic pattern now rejects at its deadline while a 20 ms interval keeps firing — more than 10 ticks where the old code produced none.
+
+**Date:** 2026-09-14
+**Impact:** `tools/src/native/search.ts`, `tools/src/native/search-worker.mjs` (new), `tools/package.json` + 4 tests.
+
+## ADR-117: Process isolation now contains the child
+
+**Decision:** `ProcessSandbox` runs a `node` child under Node's permission model, granted the workspace and nothing else.
+
+**What "process isolation" used to mean.** `spawnChild` set a working directory and a scrubbed environment, and applied no filesystem containment at all. An audit proved the consequence end to end through the real tools: `fs.write_file` wrote a script, `terminal.run_command` ran `node` on it, and the script read a host file outside the sandbox root, wrote a new one beside it, listed every tenant's workspace under the deployment root, and resolved DNS. Both tools are `write_local`, whose default approval is `never`, so no human gate was crossed — and `SANDBOX_RUNTIME=process` is the default and the only mode available without Docker, which is the normal local posture.
+
+The argument guards in `terminal.run_command` (no flag-shaped arguments, every argument resolved through the sandbox boundary) were sound and irrelevant: the payload was in the SCRIPT, not the arguments. Containment had to come from the runtime.
+
+`--permission` (Node 23+; `--experimental-permission` on 20–22) with `--allow-fs-read`/`--allow-fs-write` scoped to the workspace denies reads and writes anywhere else, and denies child processes, worker threads and native addons — so a confined script cannot spawn an unconfined one. The same exploit now answers `ERR_ACCESS_DENIED` at every step, while ordinary work inside the workspace still runs.
+
+**What it does not do: the network.** The permission model has no network dimension, so a script can still open sockets and resolve DNS — verified, and stated here rather than left for someone to discover. `--network none` under Docker remains the production posture, and a runtime with no permission model at all reports that through `supportsPermissionModel` instead of pretending.
+
+**Date:** 2026-09-14
+**Impact:** `security/src/sandbox.ts` + 9 tests.

@@ -471,6 +471,38 @@ export const assets = pgTable(
   (t) => [index("assets_project_idx").on(t.projectId), index("assets_kind_idx").on(t.kind)]
 );
 
+/**
+ * Speech generations - ADR-114. Mirrors `image_generations`: one row per request, pollable the
+ * moment the API answers, with the produced audio as a real `assets` row.
+ */
+export const audioGenerations = pgTable(
+  "audio_generations",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    createdByUserId: text("created_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    text: text("text").notNull(),
+    request: jsonb("request").notNull(),
+    status: text("status", { enum: ["pending", "processing", "succeeded", "failed", "cancelled"] }).notNull(),
+    providerName: text("provider_name"),
+    voiceName: text("voice_name"),
+    /** Measured from the produced file with ffprobe, never estimated from the text. */
+    durationSeconds: doublePrecision("duration_seconds"),
+    resultAssetId: text("result_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    errorMessage: text("error_message"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    cancelRequestedAt: timestamp("cancel_requested_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull(),
+  },
+  (t) => [
+    index("audio_generations_project_created_idx").on(t.projectId, t.createdAt),
+    index("audio_generations_status_idx").on(t.status),
+  ]
+);
+
 export const imageGenerations = pgTable(
   "image_generations",
   {
@@ -578,7 +610,7 @@ export const usageRecords = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
-    kind: text("kind", { enum: ["llm", "embedding", "image", "video", "tool"] }).notNull(),
+    kind: text("kind", { enum: ["llm", "embedding", "image", "video", "speech", "tool"] }).notNull(),
     provider: text("provider").notNull(),
     model: text("model"),
     inputTokens: integer("input_tokens"),

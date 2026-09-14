@@ -177,11 +177,16 @@ const envSchema = z.object({
   // offline synthesiser and needs no server at all, but exists only on Windows. Unset means the
   // pipeline renders WITHOUT narration and says so (`audioStatus: skipped_no_narration`) rather
   // than muxing silence and calling it a voice-over.
-  SPEECH_PROVIDER: z.enum(["openai", "sapi", "none"]).default("none"),
+  SPEECH_PROVIDER: z.enum(["openai", "sapi", "piper", "none"]).default("none"),
   SPEECH_BASE_URL: optionalString,
   SPEECH_MODEL: optionalString,
   SPEECH_API_KEY: optionalString,
   SPEECH_VOICE: optionalString,
+  // `piper` is an offline neural synthesiser: one static binary plus an ONNX voice, published for
+  // Linux, macOS and Windows (ADR-114). It is the only offline path that exists on a server —
+  // `sapi` is Windows-only — so it is what makes narration and the audio feature deployable.
+  PIPER_PATH: optionalString,
+  PIPER_VOICE: optionalString,
   // --- Real video generation (ADR-085) --------------------------------------------------
   // Video is named, not URL-shaped like the two above, because there is no cross-vendor wire
   // format for it (ADR-065): an adapter is written against one vendor's asynchronous contract,
@@ -273,6 +278,8 @@ const envSchema = z.object({
   DAILY_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
   MONTHLY_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
   DAILY_IMAGE_LIMIT: z.coerce.number().int().positive().optional(),
+  DAILY_SPEECH_CHARACTER_LIMIT: z.coerce.number().int().positive().optional(),
+  MONTHLY_SPEECH_CHARACTER_LIMIT: z.coerce.number().int().positive().optional(),
   MONTHLY_VIDEO_SECONDS_LIMIT: z.coerce.number().int().positive().optional(),
 })
   /**

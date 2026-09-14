@@ -15,6 +15,7 @@ import { registerHealthRoute } from "./routes/health.js";
 import { registerAgentRoutes } from "./routes/v1/agent.js";
 import { registerAuthRoutes } from "./routes/v1/auth.js";
 import { registerChatRoute } from "./routes/v1/chat.js";
+import { registerAudioRoutes } from "./routes/v1/audio.js";
 import { registerImageRoutes } from "./routes/v1/images.js";
 import { registerRagRoutes } from "./routes/v1/rag.js";
 import { registerPlatformRoutes } from "./routes/v1/platform.js";
@@ -205,6 +206,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   registerChatRoute(app, ctx);
   registerAgentRoutes(app, ctx);
   registerRagRoutes(app, ctx);
+  registerAudioRoutes(app, ctx);
   registerImageRoutes(app, ctx);
   registerVideoRoutes(app, ctx);
   registerUsageRoute(app, ctx);

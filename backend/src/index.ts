@@ -17,6 +17,7 @@ import {
   PgDocumentChunkRepository,
   PgMemoryItemRepository,
   PgAssetRepository,
+  PgAudioGenerationRepository,
   PgImageGenerationRepository,
   PgVideoProjectRepository,
   PgVideoSceneRepository,
@@ -36,7 +37,9 @@ import {
   CloudStorageAssetStore,
   LocalAssetStore,
   OpenAiSpeechProvider,
+  PiperSpeechProvider,
   SapiSpeechProvider,
+  processAudioGeneration,
   processImageGeneration,
   processVideoRender,
   processVideoScene,
@@ -152,6 +155,8 @@ const jobScopeSchema = z.object({
 
 const documentJobSchema = jobScopeSchema.extend({ documentId: z.string().min(1) });
 const imageJobSchema = jobScopeSchema.extend({ generationId: z.string().min(1) });
+/** Speech generation — the same shape as an image job: one row, one tenant, one requester. */
+const audioJobSchema = jobScopeSchema.extend({ generationId: z.string().min(1) });
 /**
  * `videoProjectId` is the long-form video, NOT the tenant project — ADR-049 renamed that
  * column precisely because the two would otherwise collide on the one table where `projectId`
@@ -339,6 +344,8 @@ async function main() {
     dailyTokenLimit: config.DAILY_TOKEN_LIMIT,
     monthlyTokenLimit: config.MONTHLY_TOKEN_LIMIT,
     dailyImageLimit: config.DAILY_IMAGE_LIMIT,
+    dailySpeechCharacterLimit: config.DAILY_SPEECH_CHARACTER_LIMIT,
+    monthlySpeechCharacterLimit: config.MONTHLY_SPEECH_CHARACTER_LIMIT,
     monthlyVideoSecondsLimit: config.MONTHLY_VIDEO_SECONDS_LIMIT,
   });
 
@@ -424,6 +431,9 @@ async function main() {
     expireInSeconds: 120,
   });
   await jobQueue.ensureQueueWithDeadLetter("image.generate", { retryLimit: 1, expireInSeconds: 60 });
+  // Speech is fast (piper synthesises several seconds of audio per second of CPU) but a long
+  // text is minutes of work, so the claim window is wider than an image's (ADR-114).
+  await jobQueue.ensureQueueWithDeadLetter("audio.generate", { retryLimit: 1, expireInSeconds: 300 });
   // 15 minutes, not the 60s the mock needed — ADR-085. `expireInSeconds` is how long a job may
   // sit `active` before pg-boss decides the worker died and lets another claim it, and a real
   // video prediction routinely runs for minutes: a cold model can take 60s to load before
@@ -461,6 +471,7 @@ async function main() {
       : { assetStore: "local", assetsRoot },
     "asset store selected"
   );
+  const audioGenerations = new PgAudioGenerationRepository(db);
   const imageGenerations = new PgImageGenerationRepository(db);
   const videoProjects = new PgVideoProjectRepository(db);
   const videoScenes = new PgVideoSceneRepository(db);
@@ -525,6 +536,52 @@ async function main() {
       "VIDEO GENERATION IS MOCKED — output is an animated GIF, not video (ADR-030). Set VIDEO_PROVIDER, VIDEO_API_TOKEN and VIDEO_MODEL_VERSION for real generation"
     );
   }
+
+  /**
+   * Narration synthesis — docs/26_DECISIONS.md ADR-079.
+   *
+   * Constructed only when configured. There is deliberately no default and no silent fallback: a
+   * pipeline with no speech provider renders without an audio track and reports
+   * `skipped_no_narration`, exactly as it already reports `skipped_no_ffmpeg`. Muxing silence and
+   * calling it a voice-over would be a fake success an operator could not detect.
+   */
+  let speech: SpeechProvider | null = null;
+  try {
+    if (config.SPEECH_PROVIDER === "openai") {
+      if (!config.SPEECH_BASE_URL || !config.SPEECH_MODEL) {
+        logger.warn({}, "SPEECH_PROVIDER=openai but SPEECH_BASE_URL/SPEECH_MODEL are unset — narration is disabled");
+      } else {
+        speech = new OpenAiSpeechProvider({
+          baseUrl: config.SPEECH_BASE_URL,
+          model: config.SPEECH_MODEL,
+          apiKey: config.SPEECH_API_KEY,
+          defaultVoice: config.SPEECH_VOICE,
+        });
+      }
+    } else if (config.SPEECH_PROVIDER === "sapi") {
+      speech = new SapiSpeechProvider({ voice: config.SPEECH_VOICE });
+    } else if (config.SPEECH_PROVIDER === "piper") {
+      // The offline path that exists on a server (ADR-114): one binary, one ONNX voice, the
+      // same on Linux and Windows. Both paths must be set — a voice without a binary, or a
+      // binary without a voice, is a misconfiguration and not a silent half-capability.
+      speech = new PiperSpeechProvider({
+        binaryPath: config.PIPER_PATH ?? "",
+        voicePath: config.PIPER_VOICE ?? "",
+      });
+    }
+  } catch (error) {
+    // A misconfigured OPTIONAL capability must never stop a boot — the rule MCP already follows
+    // (ADR-067). Narration is disabled and the reason is logged loudly.
+    logger.warn(
+      { error: error instanceof Error ? error.message : String(error) },
+      "speech provider could not be constructed — narration is disabled"
+    );
+    speech = null;
+  }
+  logger.info(
+    { provider: speech?.name ?? null, available: speech !== null },
+    speech ? "speech provider registered" : "no speech provider configured — long-form video renders without narration"
+  );
 
   if (runs.workers) {
     if (scanner) {
@@ -643,6 +700,67 @@ async function main() {
         });
       });
 
+    /**
+     * Speech generation — ADR-114. Registered only when a provider exists, like every other
+     * media worker: a queue with no worker leaves a caller polling `pending` forever, which is
+     * why the route refuses with a capability error instead of enqueueing when none is configured.
+     */
+    if (speech)
+      await jobQueue.registerWorker<unknown>("audio.generate", async (raw) => {
+        const { projectId, userId, generationId, requestId } = audioJobSchema.parse(raw);
+        await runJob(logger, { queue: "audio.generate", jobId: generationId, projectId, requestId }, async () => {
+          const startedAt = Date.now();
+          let outcome: Awaited<ReturnType<typeof processAudioGeneration>> | undefined;
+          try {
+            outcome = await processAudioGeneration(
+              { generationRepo: audioGenerations, assetStore, speech, ffmpegPath: config.FFMPEG_PATH },
+              projectId,
+              generationId
+            );
+          } finally {
+            // In `finally` for the same reason as the image worker: a provider that throws is
+            // exactly the case a failure rate exists to show.
+            recordMediaJob({
+              mediaType: "audio",
+              provider: speech.name,
+              outcome: outcome?.status === "succeeded" ? "success" : "failure",
+              durationMs: Date.now() - startedAt,
+            });
+          }
+          const generation = await audioGenerations.get(projectId, generationId);
+          logger.info(
+            {
+              request_id: requestId,
+              job_id: generationId,
+              project_id: projectId,
+              provider: speech.name,
+              status: outcome?.status ?? "error",
+              duration_seconds: generation?.durationSeconds ?? null,
+            },
+            "provider call completed"
+          );
+          // Metered in CHARACTERS, the unit every synthesiser bills in, and only on real success —
+          // a failed synthesis never happened. The generation id is the natural idempotency key
+          // (ADR-054), so a retried job cannot charge the project twice.
+          if (outcome?.status === "succeeded" && generation) {
+            await usage.create({
+              id: uuid(),
+              projectId,
+              userId: userId ?? null,
+              kind: "speech",
+              provider: speech.name,
+              model: generation.voiceName,
+              inputTokens: null,
+              outputTokens: null,
+              units: generation.text.length,
+              estimatedCostUsd: null,
+              requestId: requestId ?? null,
+              idempotencyKey: `audio.generate:${generationId}`,
+            });
+          }
+        });
+      });
+
     if (videoProvider)
       await jobQueue.registerWorker<unknown>(
         "video.generate_scene",
@@ -733,7 +851,7 @@ async function main() {
       });
     });
     logger.info(
-      { queues: ["document.scan", "document.ingest", "image.generate", "video.generate_scene", "video.render"] },
+      { queues: ["document.scan", "document.ingest", "audio.generate", "image.generate", "video.generate_scene", "video.render"] },
       "job workers registered"
     );
   } else {
@@ -978,48 +1096,12 @@ async function main() {
   // non-terminal or in-flight state by a previous process before serving new requests.
   await engine.resumeAll();
 
-  /**
-   * Narration synthesis — docs/26_DECISIONS.md ADR-079.
-   *
-   * Constructed only when configured. There is deliberately no default and no silent fallback: a
-   * pipeline with no speech provider renders without an audio track and reports
-   * `skipped_no_narration`, exactly as it already reports `skipped_no_ffmpeg`. Muxing silence and
-   * calling it a voice-over would be a fake success an operator could not detect.
-   */
-  let speech: SpeechProvider | null = null;
-  try {
-    if (config.SPEECH_PROVIDER === "openai") {
-      if (!config.SPEECH_BASE_URL || !config.SPEECH_MODEL) {
-        logger.warn({}, "SPEECH_PROVIDER=openai but SPEECH_BASE_URL/SPEECH_MODEL are unset — narration is disabled");
-      } else {
-        speech = new OpenAiSpeechProvider({
-          baseUrl: config.SPEECH_BASE_URL,
-          model: config.SPEECH_MODEL,
-          apiKey: config.SPEECH_API_KEY,
-          defaultVoice: config.SPEECH_VOICE,
-        });
-      }
-    } else if (config.SPEECH_PROVIDER === "sapi") {
-      speech = new SapiSpeechProvider({ voice: config.SPEECH_VOICE });
-    }
-  } catch (error) {
-    // A misconfigured OPTIONAL capability must never stop a boot — the rule MCP already follows
-    // (ADR-067). Narration is disabled and the reason is logged loudly.
-    logger.warn(
-      { error: error instanceof Error ? error.message : String(error) },
-      "speech provider could not be constructed — narration is disabled"
-    );
-    speech = null;
-  }
-  logger.info(
-    { provider: speech?.name ?? null, available: speech !== null },
-    speech ? "speech provider registered" : "no speech provider configured — long-form video renders without narration"
-  );
 
   const ctx: AppContext = {
     db,
     speech,
     speechAvailable: speech !== null,
+    audioGenerationAvailable: speech !== null,
     router: modelRouter,
     conversations: new PgConversationRepository(db),
     messages: new PgMessageRepository(db),
@@ -1042,6 +1124,7 @@ async function main() {
       liveWindowMessages: config.CHAT_LIVE_WINDOW_MESSAGES,
     },
     assetStore,
+    audioGenerations,
     imageGenerations,
     videoProjects,
     videoScenes,
