@@ -1,15 +1,57 @@
 # Final Implementation Report
 
-> **Superseded. This report describes the tree at `3074680`, and an independent 32-agent audit
-> of that exact tree, plus the work of fixing what it found, established **30 gaps in it** —
-> including two P0s and a P1 privacy
-> requirement (NFR-008) that did not exist at all while this report called the implementation
-> complete.**
+> **Superseded.** This report describes the tree at `3074680`. An independent 32-agent audit
+> then read the tree eight commits later (`b4cf4af`, the last commit before the first fix) and
+> confirmed **27 gaps**, including two P0s and a P1 privacy requirement (NFR-008) that did not
+> exist at all while this report called the implementation complete. Three more were found while
+> fixing them, and a fix introduced one of those three. A second audit, of those fixes, confirmed
+> seven more. A third, of everything from `78a0e13` to `74c7cd0`, confirmed 43. See
+> [below](#since-this-report-the-third-audit-2026-09-13).
 >
 > It is kept because deleting it would remove the evidence of how a green set of gates and a
-> confident report can coexist with real defects. For current status read
-> [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md); for what the audit found and how each gap
-> was proven, read [docs/FINAL_PROJECT_AUDIT.md](docs/FINAL_PROJECT_AUDIT.md).
+> confident report can coexist with real defects. Its figures are this report's, not current ones.
+> For current status read [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md); for what the audits
+> found and how each gap was proven, read [docs/FINAL_PROJECT_AUDIT.md](docs/FINAL_PROJECT_AUDIT.md).
+> An earlier version of this note said the first audit read "that exact tree" and found 30 gaps
+> "in it". Neither was right.
+
+## Since this report: the third audit (2026-09-13)
+
+A loop-until-dry adversarial audit read `78a0e13..74c7cd0` (the fixes for the first two audits
+and everything built alongside them) and reported 43 findings. Two independent verifiers tried to
+refute each of #1–#30 and confirmed them. The verifiers for #31–#43 were lost to a session limit
+before they returned, so none of those was accepted on the finder's word. Each was verified while
+it was being fixed, by a measurement, a test that fails on the old code, mutants, a fresh clone or
+`git merge-base`.
+
+All 43 are addressed and none is disputed: 31 by code with a test or a live run, 12 as
+documentation corrections. Fourteen were filed P1: #1, #2, #8, #9, #10, #16, #17, #23, #24, #25,
+#31, #33, #35 and #38. One verifier judged #23 a P2. The fixes are ADR-108 to ADR-112, committed in
+`fc79159`, `bf1d21c` and `fd5f5a5`. Every finding, its severity and how its fix was proven is in
+[docs/FINAL_PROJECT_AUDIT.md](docs/FINAL_PROJECT_AUDIT.md). Scores, gates and blockers are in
+[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
+
+**P0/P1 remaining: 0 known; the re-audit is pending.** The signal that ended the audit as "dry"
+was an artifact: finders that failed were counted as finding nothing. The audit has to be re-run
+with that fixed before anyone can claim no findings remain.
+
+### What this report says that is not true on `fd5f5a5`
+
+| This report says | What is true now |
+|---|---|
+| 556 tests passing across 69 files, zero skips | 705 passed, 0 failed, 1 skipped, across 86 files. The skip is a file-symlink case Windows refuses without elevation; CI expects 0 |
+| 87 ADRs | ADR-112 is the latest |
+| Hosted providers: "All four adapters are fixture-tested" | Five adapters make real HTTP and are fixture-tested: the three hosted LLM adapters (OpenAI, Anthropic, Google), the OpenAI image adapter and the Replicate video adapter. The self-hosted adapter is verified end to end against a real local model. The mocks make no network calls |
+| "`DockerSandbox` is unit-tested" | No test referenced `DockerSandbox` at `3074680`, nor at `74c7cd0` (third audit, #25). `sandbox-docker.test.ts` now asserts its flags through `dockerRunArgs` (ADR-111). The real-container suite has never run |
+| The two applications "build, test, containerise and deploy independently" | From a fresh clone the documented `cd backend && npm install && npm run dev` could not start (#42). ADR-112 added the backend's `predev` and the frontend's `prebuild`. On a real fresh clone of `fd5f5a5` the backend alone served `/api/health` and the frontend alone built. Neither has been containerised or deployed |
+| The audit "confirmed thirty gaps" | It confirmed 27, and three more were found while fixing them |
+| Lint: "0 errors, in CI" | 0 errors and 5 `no-console` warnings, run locally. CI has never executed |
+
+The third audit corrected defects and added no capability, so the scores are unchanged: CODE
+COMPLETION 92% (36 of 39 feature-matrix rows), VERIFICATION 83% (38 of 46 status rows Runtime
+Verified), PRODUCTION VERIFICATION 0%. Nothing has been deployed.
+
+---
 
 **Date:** 2026-09-11 · **Commit:** `3074680` · **Scope:** the autonomous-completion brief
 
@@ -30,7 +72,7 @@ evidence; everything else is in [§ What is NOT done](#what-is-not-done).
 
 ## Headline
 
-| Metric | Original audit | Previous report | Now |
+| Metric | Original audit | Previous report | This report |
 |---|---|---|---|
 | Tests passing / files | 189 / 35 | 416 / 50 | **556 / 69** |
 | Skipped tests | 0 | 13 | **0** |

@@ -865,6 +865,8 @@ The deterministic hash provider remains as an explicit, `isDeterministicFallback
 **Date:** 2026-09-05
 **Impact:** New `packages/security`; `packages/shared/src/auth.ts`; the entire database schema; every repository; every route; `apps/web`.
 
+**Amended (2026-09-13):** The 404 rule does not hold for every credential: an API key that names a project other than its own gets 403 from `requireProject` ("This API key cannot act on a different project"), which discloses nothing because every other id is refused whether it exists or not. The API document's "404, never 403" convention was corrected to say so (ADR-112); the code did not change.
+
 ---
 
 ## ADR-055: Execution isolation — a timeout that kills, and an environment that does not leak
@@ -875,6 +877,8 @@ The deterministic hash provider remains as an explicit, `isDeterministicFallback
 
 **Date:** 2026-09-05
 **Impact:** `packages/security/src/sandbox.ts` + 9 tests; `packages/tools`; `apps/api` composition root.
+
+**Amended (2026-09-13):** No test constructed a `DockerSandbox` until ADR-111. Its argument list is now unit-tested through `dockerRunArgs`, and a real-container suite runs through `npm run test:docker`, which fails rather than skips without docker. That suite has never run, because this environment has no container runtime, so it is still unverified whether these flags contain a process.
 
 ---
 
@@ -1451,6 +1455,8 @@ Found by the final zero-gap audit.
 **Date:** 2026-09-05 (recorded 2026-09-11)
 **Impact:** `packages/database/src/schema/index.ts`; `packages/database/src/repositories/conversation-repository.ts`.
 
+**Superseded in part (2026-09-13):** The status line no longer holds, because ADR-103 writes both columns; and the watermark alone was not enough, because a count is a position in whatever history the client sends, so an edited, branched or reloaded history made it point at the wrong turns. ADR-110 stores a SHA-256 fingerprint of the covered turns next to it (migration 0002) and rebuilds the summary when the history does not match.
+
 ---
 
 ## ADR-052: Node execution state is persisted before dispatch, so another instance can see it
@@ -1529,6 +1535,8 @@ it says so rather than reading as a completed feature.
 **Date:** 2026-09-12
 **Impact:** the whole tree; `scripts/verify-boundary.sh`, `.github/workflows/ci.yml`, root `package.json`, `eslint.config.mjs`, 26 tsconfigs, both Dockerfiles.
 
+**Superseded in part (2026-09-13):** The seven properties still stand, but the grep checks described here did not reliably enforce them: check 2 again could not fail (ADR-106), the third audit found every grep defeated (single quotes, `import()`, `require()`, `.js` files and bracketed `process.env` reads were among the evasions), and check 7 passed after only confirming that a `package.json` existed. `scripts/check-boundary.mjs` now judges all seven from the TypeScript syntax tree, and `verify-boundary.sh` runs it with `--all`, so its self-test must catch 39 planted violations before the real tree is judged (ADR-111).
+
 ---
 
 ## ADR-093: A `test_suite` verification runs in the caller's project workspace
@@ -1593,6 +1601,8 @@ A read tool with no `WHERE project_id` is a cross-tenant disclosure even though 
 
 **Date:** 2026-09-12
 **Impact:** `backend/packages/security/src/auth-service.ts`, `backend/src/index.ts` + 4 tests.
+
+**Amended (2026-09-13):** The emptiness check does not stop two processes racing: it is a plain SELECT under READ COMMITTED, so two replicas booting at once with different bootstrap emails could both win, and no lock has been added (ADR-107). The flag also granted more than the `/admin` surface and the MCP tool control: `authorizeProject` short-circuited on it, so from this change until ADR-108 the bootstrapped administrator held owner+admin on every tenant's project. The flag now gates `/api/v1/admin/*` and the tool-enable and MCP-reconnect controls, and nothing else.
 
 ## ADR-097: Authentication is refused by default, not by each route remembering
 
@@ -1661,6 +1671,8 @@ Both directions are asserted, because a test that only proves "no mock in produc
 **Date:** 2026-09-12
 **Impact:** `backend/src/index.ts`, `.github/workflows/ci.yml` + 7 tests.
 
+**Amended (2026-09-13):** The `security` job still could not pass after this change, because it ran vitest against packages it never built; separately, the test imported `index.ts`, and importing that file boots the server. ADR-108 added the build step and moved the provider factories to `backend/src/providers.ts`, which has no side effects. The workflow has still never executed, because the repository has no remote.
+
 ## ADR-102: Account and data deletion (NFR-008)
 
 **Decision:** `DELETE /api/v1/auth/account` deletes the caller's account, destroys organizations they solely own, and returns the storage objects for the caller to remove.
@@ -1677,6 +1689,8 @@ Three guards, each for something different: the session (who), the current passw
 
 **Date:** 2026-09-12
 **Impact:** `backend/packages/database/src/repositories/account-deletion.ts`, `security/src/auth-service.ts`, `media/src/asset-store.ts`, `gcs-asset-store.ts`, `backend/src/routes/v1/auth.ts`, `shared/src/auth.ts` + 12 tests.
+
+**Superseded in part (2026-09-13):** The route and its order (database first, then files) still hold; the ownership rule, the guards and the audit record do not. What is kept is now decided per project — a project someone else can still reach through either membership route survives — and deletion also removes each destroyed project's agent workspace, cancels its queued jobs, scrubs the person's IP and email from the audit trail, and writes its own record after the deletion with a null user id and only a SHA-256 of the address (ADR-107, ADR-109). The guards are now a session only (an API key gets 403), a password re-check that counts toward the account lockout and audits failures, a rate limit of 5 per 15 minutes keyed on the authenticated user, and the typed confirmation (ADR-108).
 
 ## ADR-103: A live window plus a rolling summary (FR-030)
 
@@ -1698,6 +1712,8 @@ Thresholds are configuration, not constants: the right window depends on the dep
 
 **Date:** 2026-09-12
 **Impact:** `backend/packages/memory/src/conversation-window.ts`, `backend/src/routes/v1/chat.ts`, `config.ts` + 8 tests.
+
+**Superseded in part (2026-09-13):** A failed pass no longer leaves the model with less history: the turns the summary does not cover are sent verbatim, and each summarization call has its own usage key, where before two calls could share one (ADR-110). `summarized_message_count` counts turns, not prompt positions (ADR-107), and a stored summary is used only when a SHA-256 fingerprint of the turns it covers matches the history the request sent; otherwise it is rebuilt. The live window never begins on a tool result, and an empty or length-truncated summary is refused rather than stored (ADR-110).
 
 ## ADR-104: `web.fetch`, and the SSRF guard its absence had deferred
 
@@ -1725,6 +1741,8 @@ The address policy is injectable for one stated reason: the HTTP mechanics can o
 **Date:** 2026-09-12
 **Impact:** `backend/packages/tools/src/native/web.ts`, `shared/src/tools.ts`, `agent-core/src/engine.ts`, `backend/src/index.ts`, `config.ts` + 24 tests.
 
+**Amended (2026-09-13):** The guard's design stands; ADR-107 blocked three IPv6 ranges it missed (SIIT `::ffff:0:0:0/96`, Teredo `2001::/32` and site-local `fec0::/10`). ADR-108 made every hostname refusal one identical message, whether the name resolved to a private address or did not resolve at all (a literal address in the URL may still be echoed, since the caller wrote it), and replaced the socket idle timer with one deadline spanning DNS, every redirect hop and the body, which the invocation's abort signal also reaches. It also destroys redirect bodies instead of draining them, and strips HTML with a single linear-time scanner instead of backtracking regexes (ADR-108).
+
 ## ADR-105: E2E always starts its own servers
 
 **Decision:** `reuseExistingServer: false` for both Playwright web servers.
@@ -1746,6 +1764,8 @@ The direction that matters is the other one. A stale server can just as easily P
 
 **Date:** 2026-09-13
 **Impact:** `scripts/check-shared-imports.mjs` (new), `scripts/verify-boundary.sh`, `backend/packages/tools/src/native/search-isolation.test.ts`.
+
+**Superseded in part (2026-09-13):** `scripts/check-shared-imports.mjs` has been removed: the third audit showed that check 2 still passed real runtime imports of `shared`, and `scripts/check-boundary.mjs` now judges it and the other six checks from the TypeScript syntax tree (ADR-111). The skip half stands, but "on Linux CI it runs" was not enough for the zero-skip gate to pass there: the long-form video suite skipped on every non-Windows platform, so the gate would have failed every Linux run until ADR-111 gave that suite a deterministic PCM tone for machines with no synthesiser. The workflow has still never executed; the repository has no remote.
 
 ## ADR-107: Fixes to the fixes — a second audit of this phase's own diff
 
@@ -1859,3 +1879,18 @@ Regenerating cannot catch a generator that is wrong, so `backend/src/routes/api-
 
 **Date:** 2026-09-13
 **Impact:** `backend/src/{config,server}.ts`, `infrastructure/terraform/main.tf`, `.env.example`, `scripts/generate-api-docs.py`, `docs/API.md`, `.github/workflows/ci.yml`, `backend/package.json`, `frontend/package.json` + 5 tests.
+
+## ADR-113: The API listens on loopback outside production
+
+**Decision:** `HOST` is configuration. Unset, the API listens on `127.0.0.1` outside production and on `0.0.0.0` in production.
+
+`app.listen` hard-coded `host: "0.0.0.0"`. On a developer's machine that published the whole platform to every network the machine was attached to, with development's own defaults: open signup, process-level isolation for agent commands (ADR-055 refuses that only in production), and a self-registered user who owns their project and can therefore approve their own tool calls. Anyone on the LAN could have model-authored commands run on that machine.
+
+It was found by the fresh-clone check written for a different finding: its log read `Server listening at http://172.16.18.22:8799` - a corporate LAN address, from `npm run dev`.
+
+A container still has to accept its platform's traffic, so production keeps `0.0.0.0`; the Dockerfile and Cloud Run both set `NODE_ENV=production`. Every in-repo client already addresses `127.0.0.1` or `localhost`, so nothing else changed.
+
+**Verified live** against the built server in development mode: `netstat` shows only `127.0.0.1:8797` LISTENING, that address answers `/api/health`, and the machine's LAN address is refused. `resolveListenHost` is unit-tested in both directions and for an explicit override.
+
+**Date:** 2026-09-13
+**Impact:** `backend/src/config.ts`, `backend/src/index.ts`, `.env.example` + 3 tests.

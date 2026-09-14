@@ -1,8 +1,9 @@
 # Architecture
 
 What the system is, as built. Design intent lives in `docs/`; current status lives in
-`docs/PROJECT_STATUS.md`. This file describes the code that exists at commit `bfdfdc8`, and marks
-anything aspirational as such.
+`docs/PROJECT_STATUS.md`. This file describes the code that exists at commit `bfdfdc8`; its counts,
+the boundary check, the request path and the migrations were re-checked against `fd5f5a5` on
+2026-09-13. It marks anything aspirational as such.
 
 ## Shape
 
@@ -50,11 +51,31 @@ inside one. The other fourteen packages are imported only by the backend, so the
 the boundary is legible from the directory listing.
 
 None of this is enforced by the layout, so it is enforced by a check.
-`scripts/verify-boundary.sh` runs in CI and asserts nine properties — no backend package in the
-frontend, `shared` imported type-only, no database/queue/filesystem/subprocess reach from the
-frontend, no frontend import in the backend, no relative path across the boundary, no server
-secret readable from frontend code, and each application declaring its own dependencies. Both of
-its failing checks were proven to fail by injecting the violation they exist to catch.
+`scripts/check-boundary.mjs` reads the TypeScript compiler's syntax tree of every source file —
+`.ts`, `.tsx`, `.mts`, `.cts`, `.js`, `.jsx`, `.mjs` and `.cjs` — so a comment, a quoting style or a
+line break cannot hide an import, and `import`, `import()` and `require()` are each a node of their
+own. It enforces seven rules:
+
+1. the frontend imports no backend package;
+2. every frontend import of `shared` is type-only;
+3. frontend application code reaches no database, queue, filesystem or subprocess;
+4. the backend imports nothing from the frontend;
+5. no relative or aliased import crosses an application boundary;
+6. no frontend file — application, test or end-to-end spec — reads a server-side environment
+   variable;
+7. every package manifest in the tree declares every package its code imports.
+
+Rules 2 and 3 protect the browser bundle, so they cover application code, not tests or build
+configuration. Before it judges the real tree, the checker runs a self-test: a throwaway repository
+with 39 planted violations — every evasion that defeated the grep checks it replaced — and 10 clean
+files. Each violation must be reported under the right rule and nothing may be reported in the
+clean files; each of 15 mutants that disables one rule or one import form is killed by that
+self-test. `scripts/verify-boundary.sh`, the command the CI workflow calls, is a thin wrapper that
+runs `check-boundary.mjs --all` (self-test first, then the tree) and exits 0 when clean, 1 on a
+violation or a failed self-test, and 2 if the checker itself broke. On `fd5f5a5` it reports 8/8 —
+the self-test and the 7 rules — over 275 parsed source files. Rule 7, applied to every manifest,
+found `drizzle-orm` imported by `backend/src` and `uuid` by quota's tests without being declared;
+both now are (ADR-111).
 
 ## The request path
 
@@ -73,6 +94,18 @@ Two properties are load-bearing:
    signature is `get(projectId, id)`. The check a route might forget cannot be forgotten.
 2. **A route declares the permission it needs.** There is no ambient authority; a route that
    names nothing gets nothing.
+
+Membership is the only way into a project. The system administrator has no implicit access to any
+tenant's project; that role gates `/api/v1/admin/*` and the tool-enable and MCP-reconnect controls
+only (ADR-108). A project the caller is not a member of answers 404, like one that does not exist;
+the one 403 for another tenant's project is an API key naming a project other than the one it is
+bound to (`docs/API.md`). A member whose role lacks a route's permission gets 403
+`PERMISSION_DENIED`.
+
+`request.ip`, which every per-IP rate limit and audit row uses, trusts exactly `TRUST_PROXY_HOPS`
+proxies (ADR-112). 0, the default, is the connection's own address; Terraform sets 1 for Cloud
+Run's front end, which has not been checked against a live service. The former `trustProxy: true`
+took the leftmost `X-Forwarded-For` entry — the one the caller writes.
 
 ## The AI runtime
 
@@ -119,15 +152,19 @@ the reasoning worth having.
 
 ## Data
 
-22 tables, 43 indexes, a squashed baseline migration plus one incremental (the platform has never
-been deployed, so a baseline was safer than an untestable ALTER chain; everything after it is a
-normal migration).
+22 tables, 45 `CREATE INDEX` statements, and a squashed baseline migration plus two incrementals:
+`0001` adds `rate_limit_counters` (ADR-071) and `0002` adds `conversations.summary_fingerprint`
+(ADR-110). The platform has never been deployed, so a baseline was safer than an untestable ALTER
+chain; everything after it is a normal migration.
 
 - **Identity:** `users`, `organizations`, `organization_members`, `projects`, `project_members`,
   `sessions`, `api_keys`, `audit_log`.
-- **Content** (all carry `project_id`): `conversations`, `messages`, `tasks`, `task_nodes`,
-  `task_transitions`, `documents`, `document_chunks`, `memory_items`, `assets`,
-  `image_generations`, `video_projects`, `video_scenes`, `usage_records`.
+- **Content** (scoped to a project: nine carry `project_id`, and `messages`, `task_nodes`,
+  `task_transitions` and `video_scenes` reach it through their parent row): `conversations`,
+  `messages`, `tasks`, `task_nodes`, `task_transitions`, `documents`, `document_chunks`,
+  `memory_items`, `assets`, `image_generations`, `video_projects`, `video_scenes`, `usage_records`.
+- **Operational:** `rate_limit_counters` — no `project_id`; one table shared by every API instance
+  (ADR-071).
 
 Every timestamp is `timestamptz`. Vectors are a single `vector(1536)` column with the model
 recorded alongside: any provider's width is zero-padded (exact for cosine similarity), and
@@ -146,6 +183,8 @@ unless explicitly acknowledged, and only for a process that runs the agent engin
 One image, three roles (`ROLE=all|api|worker`): the Cloud Run service runs `api`, a worker pool
 runs `worker`, and local development runs `all`. A worker never serves chat and therefore boots
 without any LLM provider — the fix for the crash-loop that made the whole deployment impossible.
+The runtime contract — roles, security settings, `TRUST_PROXY_HOPS`, and how each application runs
+on its own — is in `DEPLOYMENT.md`.
 
 ## Deliberate limits
 

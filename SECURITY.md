@@ -1,7 +1,8 @@
 # Security
 
 What is actually implemented, what it protects against, and what it does not. Every claim below
-corresponds to code and, where stated, to a test that runs in `npm test`.
+corresponds to code and, where stated, to a test that runs in `npm test`. Nothing here has been
+verified in a deployment; there has been none.
 
 Design intent lives in [docs/13_SECURITY_ARCHITECTURE.md](docs/13_SECURITY_ARCHITECTURE.md); this
 file describes the **implementation**, and says plainly where the two diverge.
@@ -17,13 +18,14 @@ file describes the **implementation**, and says plainly where the two diverge.
 | Session transport | `httpOnly` cookie (JavaScript cannot read it, so an XSS bug cannot exfiltrate it), `SameSite=Lax`, `Secure` in production. |
 | API keys | 256-bit token prefixed `aip_`; only a SHA-256 is stored. The plaintext is returned exactly once, at creation. A non-secret prefix is kept so a user can identify a key in a list. |
 | Enumeration resistance | A wrong password and an unknown email return the **same** error and do comparable work (a decoy hash is verified when no account exists). |
-| Brute force | Failed-login counter with temporary lockout; signup and login carry tighter per-route rate limits than the global default. |
+| Brute force | Failed-login counter with temporary lockout, shared by login and by the password re-check before account deletion (ADR-108); signup and login carry tighter per-route rate limits than the global default. Those limits are per IP, so they depend on `TRUST_PROXY_HOPS` (§9). |
 | Revocation | Logout revokes the session immediately; `revokeAllSessions` exists for password change and administrative use; revoking an API key takes effect on the next request. |
 
 **Tested** — `backend/packages/security/src/{password,auth-service}.test.ts`: the hash never contains the
 password, salting produces different hashes for the same input, a malformed hash returns `false`
 rather than throwing, wrong-password and unknown-email errors are byte-identical, lockout engages,
-a revoked session and a revoked/expired API key both stop authenticating.
+a revoked session and a revoked/expired API key both stop authenticating, wrong re-authentication
+passwords count toward the lockout, and a locked account refuses even the correct one.
 
 **Nothing is reachable without a credential, and that is now enforced rather than assumed**
 (ADR-097). The auth plugin refuses any request to a matched route outside the four public paths
@@ -31,12 +33,43 @@ that presented no valid credential. Before this, `publicPaths` was passed to the
 read: the property rested entirely on all 53 routes remembering their own guard. They all did —
 which is why nothing noticed — but a route that forgets is now closed anyway.
 
-**An account can be deleted, with its data** (ADR-102, NFR-008). `DELETE /api/v1/auth/account`
-requires the session, the current password and a typed confirmation. Organizations the caller
-solely owns cascade away entirely; ones with any other member — by organization OR project
-membership, which the first version got wrong (ADR-107) — keep their content and only the
-caller's access ends. Storage objects are removed after the database commits, and any that could
-not be removed are reported in the response rather than swallowed.
+**An account can be deleted, with its data** (ADR-102, NFR-008; corrected by ADR-107, ADR-108 and
+ADR-109). `DELETE /api/v1/auth/account` requires an interactive session, the current password and a
+typed confirmation.
+
+- **Session only.** A request authenticated by an API key is refused with 403 before the password
+  is looked at. This document said "requires the session" before that was true: an API key plus the
+  password deleted the account, because `requireUser` accepts any credential and a bearer request
+  is exempt from CSRF (third audit, finding #27).
+- **The password re-check is a password check like any other.** A wrong password counts toward the
+  account lockout and writes a denied `auth.reauth` audit row; a locked account is refused even with
+  the correct password. The first version did neither, and leaned on a rate limit keyed on a
+  client-written `X-Forwarded-For` (#3).
+- **5 attempts per 15 minutes per authenticated user.** The limit is keyed on the user and evaluated
+  after authentication, so it holds however the client's address is derived.
+- **Decided per project** (ADR-109). The organizations considered are every one the caller reaches
+  through an organization membership or a project membership. An organization with another
+  organization member is kept whole. Otherwise each project is judged on its own: one another user
+  is a member of is kept, every other one is deleted with its content, and the organization goes if
+  nothing in it is kept. The caller's memberships in whatever survives are removed. The earlier
+  versions kept a private project nobody else could reach whenever any other project in its
+  organization had a collaborator (#2), and kept an organization after its last collaborator
+  deleted their own account too (#32).
+- **After the database commits**, the deleted projects' storage objects and agent workspaces
+  (`SANDBOX_ROOT/<projectId>`) are removed and their queued jobs cancelled. Anything that could not
+  be removed or cancelled is reported in the response rather than swallowed. Before ADR-109 the
+  workspaces stayed on disk while the route reported 200 (#1).
+- **The erasure record** is written only after the deletion succeeds, with a null `user_id` (the
+  former id is kept in `detail`), a SHA-256 of the email address instead of the address, and no IP
+  address. The person's older audit rows are
+  scrubbed (§8).
+
+**Tested** — `backend/src/routes/v1/account-deletion.test.ts`: an API key gets 403 and the user still
+exists; seven wrong passwords, each with a different `X-Forwarded-For`, get 401 five times and then
+429; a file the agent wrote is gone from disk; a queued job is cancelled.
+`backend/packages/security/src/account-deletion.test.ts`: a private project is deleted even when
+another project in the organization has a collaborator, the last collaborator's deletion removes the
+organization, and no audit row the person left keeps their IP or email.
 
 ## 2. Authorization and multi-tenancy
 
@@ -47,9 +80,19 @@ Every content table carries `project_id`, and every repository read filters on i
 There is deliberately no `get(id)` left to call — the signature is `get(projectId, id)` — so the
 ownership check a route might forget cannot be forgotten.
 
-- A project the caller cannot see returns **404, not 403**: confirming that an id exists is itself
+- **Membership is the only way into a project** (ADR-108). A caller reaches a project through a role
+  in its organization or a role on the project, and through nothing else. The system administrator
+  has no implicit tenant access: that flag gates `/api/v1/admin/*`, `POST /api/v1/tools/:id/enable`
+  and `POST /api/v1/mcp/:id/reconnect`, and no project. Until ADR-108, `authorizeProject`
+  short-circuited on `isSystemAdmin` into owner+admin on every project in every organization — read
+  any tenant's data, spend its quota, mint API keys for its projects — while the documentation
+  described the flag as gating the administrator surface only (third audit, #38).
+- A project the caller cannot reach returns **404, not 403**: confirming that an id exists is itself
   a disclosure.
-- API keys are bound to exactly one project and are refused if used against another.
+- API keys are bound to exactly one project. The one 403 for a project the caller cannot reach is an
+  API key naming a project other than its own — in the path, query, body or `x-project-id`. It is
+  refused in `requireProject` before any lookup, so an existing and a non-existent foreign id get
+  the same answer. `docs/API.md` said "404, never 403" until ADR-112 corrected its generator (#41).
 - Roles: organization `owner`/`admin`/`member`; project `admin`/`editor`/`viewer`. Permissions are
   a static table in `shared/src/auth.ts`, so the whole policy is readable in one place.
   A `viewer` cannot spend money — no `chat:write`, `agent:run` or `media:generate`.
@@ -60,7 +103,9 @@ ownership check a route might forget cannot be forgotten.
 
 **Tested** — cross-tenant reads return 404, a viewer is refused `chat:write`, another project's
 API key cannot be revoked (and still works afterwards, proving the failed attempt had no effect),
-and an organization owner reaches a project they are not an explicit member of.
+an organization owner reaches a project they are not an explicit member of, and a system
+administrator can neither authorize into another tenant's project nor create a project in another
+tenant's organization, while still reaching its own.
 
 ## 3. CSRF
 
@@ -98,6 +143,12 @@ key, `DATABASE_URL`), and the "timeout" only rejected a promise while the child 
   This matters far more now that a model chooses them.
 - All four approval modes are distinct: `never`, `first_use` (real per-project history),
   `always`, `risk_threshold` (a real, configurable risk level).
+- **An approval covers one call, not a call id** (ADR-108). The engine used to remember approved
+  calls by id, but adapters synthesise ids that repeat every turn (`gemini-call-1`, `call_0`), so one
+  human approval let a later, different destructive call carrying a recycled id skip the gate
+  (third audit, #33). The id set is gone: the approved call runs from the parked transcript, and
+  every other call goes through the approval gate. `backend/packages/agent-core/src/autonomous.test.ts` asserts that
+  a later turn reusing the approved call's id for a different call parks again.
 - Re-registering a tool id is refused, so one server cannot silently replace another's tool — or
   re-enable one an operator disabled.
 - MCP-discovered tools register **disabled**; enabling one is an explicit, authenticated,
@@ -118,6 +169,24 @@ key, `DATABASE_URL`), and the "timeout" only rejected a promise while the child 
 `read_only` — a tool that can reach the network can reach the network the deployment is on, and
 describing that as read-only would understate it where an operator looks. See the SSRF note
 below for what the guard does and does not cover.
+
+**`web.fetch` is bounded in time and CPU, and its refusals disclose nothing** (ADR-108). Each of these
+was a third-audit finding and each is asserted in `backend/packages/tools/src/native/web.test.ts`, most against a
+real local server:
+
+- A hostname that resolves to a private address and one that does not resolve at all get the
+  identical refusal, naming no address. The refusal used to name the private address, and an
+  unresolvable name surfaced the raw `ENOTFOUND` — an internal DNS map for a prompt-injected model
+  (#5). A literal address written in the URL can still be echoed back; the caller wrote it.
+- One total deadline spans DNS, every redirect hop and the body. Before it, the only bound was the
+  socket `timeout`, an idle timer, which a server sending a byte at a time resets forever (#6).
+- Cancellation reaches the socket. The invocation's abort signal, fired when a task is cancelled or a
+  node passes its deadline, destroys the request and its response (#14).
+- A redirect's body is destroyed, not drained. Draining downloaded 7 GB in six seconds, outside the
+  byte cap, after the tool had already returned (#10).
+- HTML is stripped in one linear forward pass. The regex version was quadratic: 64 KB of `<` took
+  1.4 s, which at the 512 KB cap is about 90 s of synchronous work on the API's event loop, for
+  every tenant (#31). 512 KB hostile inputs are now asserted to finish in under 2 s.
 
 ## 6. Input handling
 
@@ -152,19 +221,44 @@ below for what the guard does and does not cover.
   allow-list of names to strip has to be updated for every new secret and the one nobody
   remembers is the one that leaks. See the terminal-tool note in §6: this sentence was in this
   document before it was true of the path that actually ran.
-- CI runs gitleaks, and every commit in this repository was preceded by a staged-diff secret scan.
+- The CI workflow has a gitleaks step (it has never executed — there is no git remote), and every
+  commit in this repository was preceded by a staged-diff secret scan.
 
 ## 8. Audit
 
-An append-only `audit_log` records the authenticated principal, the action, the outcome
-(`success`/`denied`/`failure`), the credential type, IP and request id. **Denials are recorded, not
-just grants** — a permission refusal writes a row naming the permission that was refused.
+An `audit_log` records the authenticated principal, the action, the outcome
+(`success`/`denied`/`failure`), the credential type, IP (§9 says whose address that is) and request
+id. **Denials are recorded, not just grants** — a permission refusal writes a row naming the
+permission that was refused. Application code never deletes a row; the one update it makes is the
+erasure scrub below.
+
+**Account deletion scrubs the person from the trail** (ADR-109). Inside the deletion transaction,
+every row naming the user has `ip_address` cleared and `email` removed from `detail`, and so does
+every denied-login row that recorded their address with no user id. Before this, the `set null` on
+`user_id` cleared the id and nothing else: every login IP, and the email on every denied login,
+survived beside a code comment claiming no personal data remained (third audit, #7). The erasure
+record itself holds a SHA-256 of the address and no IP, so "was the account for this address
+deleted, and when" is answered by hashing the address, without that record being the row that
+keeps it.
 
 ## 9. Transport and headers
 
 `@fastify/helmet` supplies security headers (the audit found none at all). CORS is restricted to a
-configured origin with credentials enabled. `trustProxy` is set so per-IP rate limiting is correct
-behind a proxy.
+configured origin with credentials enabled.
+
+**`request.ip` trusts exactly `TRUST_PROXY_HOPS` proxies** (ADR-112). It feeds every per-IP rate
+limit and the IP address an audit row records. The default, 0, trusts no `X-Forwarded-For` entry and uses the socket's
+address, which is right for a process nothing sits in front of; N skips exactly the N entries the
+deployment's own proxies appended. Terraform sets 1 for Cloud Run, whose front end appends the
+caller's address (an external HTTPS load balancer in front would make it 2). **That value has not
+been verified against a live Cloud Run service** — there is no GCP project here.
+
+Before ADR-112 the server ran `trustProxy: true`, under which Fastify takes the LEFTMOST
+`X-Forwarded-For` entry — the one the client writes. Any caller could choose its address and rotate
+it per request, so no per-IP limit (signup, login, generation) bound anyone, and every audit row
+recorded whatever address a caller claimed. This section used to say `trustProxy` made per-IP rate
+limiting correct behind a proxy; it did the opposite. `backend/src/trust-proxy.test.ts` asserts the
+address a failed login's audit row records at 0, 1 and 2 hops.
 
 ---
 
@@ -185,9 +279,24 @@ behind a proxy.
 - **Process isolation is not container isolation.** The development sandbox shares the host's
   network and filesystem. Production refuses it by default for exactly this reason, but an operator
   who sets `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true` has accepted a real risk.
-- **The Docker sandbox has never been exercised in this environment** — no Docker installation
-  exists here. Its flags are reviewed and correct, and the code path is selected and refused
-  correctly, but a real container run is unverified.
+- **Docker isolation has never run in a real container.** No container runtime is installed here.
+  What `npm test` asserts is the argument list `dockerRunArgs` builds — every isolation flag, the
+  single workspace mount, the scrubbed environment, the containment refusal — and that asking for
+  Docker where it is unusable refuses rather than downgrades. The real-container suite
+  (`sandbox.docker.test.ts`, run only by `npm run test:docker --workspace=@ai-platform/security`) is
+  written and has never run; it fails, rather than skips, without Docker. Whether those flags
+  actually contain a process is unverified.
+- **Per-IP limits are only as good as `TRUST_PROXY_HOPS` matching the topology.** Set too low behind
+  a proxy, every client shares the proxy's one address and one bucket; set higher than the number
+  of proxies really in front, a client-written `X-Forwarded-For` entry is trusted again, which is the
+  bypass ADR-112 closed. Configuration checks only that it is an integer from 0 to 10; it cannot
+  know the deployment. Terraform's 1 for Cloud Run is unverified live. The account-deletion limit is
+  keyed per user and does not depend on it.
+- **Work already running when an account is deleted cannot be stopped.** Queued jobs for the deleted
+  projects are cancelled; a job that has already started carries on. When it writes its output, the
+  row insert fails at the foreign key to the deleted project and both asset stores remove the bytes
+  they wrote, so no file is left behind — but whatever that job already did, including any provider
+  call, has happened.
 - **No SSO/OIDC, no MFA, no password reset flow, no email verification.** Sessions and API keys
   only.
 - **SSRF is guarded, not eliminated.** `web.fetch` (ADR-104) exists now, so the protections it
