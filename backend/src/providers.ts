@@ -10,6 +10,7 @@ import type { ModelRegistry } from "@ai-platform/model-router";
 import type { Logger } from "@ai-platform/observability";
 import type { ImageProvider, VideoProvider } from "@ai-platform/shared";
 import { MockVideoProvider } from "@ai-platform/video-mock";
+import { ImageMotionVideoProvider } from "@ai-platform/video-motion";
 import { ReplicateVideoProvider } from "@ai-platform/video-replicate";
 import type { AppConfig } from "./config.js";
 
@@ -73,8 +74,16 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
   return config.NODE_ENV !== "production" ? new MockImageProvider() : null;
 }
 
-/** The video provider for this deployment, or null when there is none — ADR-101, as above. */
-export function selectVideoProvider(config: AppConfig): VideoProvider | null {
+/**
+ * The video provider for this deployment, or null when there is none — ADR-101, extended by
+ * ADR-121.
+ *
+ * `imageProvider` is what makes the local option possible: with no video credentials, a real
+ * generated still animated by ffmpeg is a real MP4, where the alternative was a mock GIF of
+ * coloured bars. It is chosen only when there is a REAL image provider to draw the frame — a
+ * mock still would make a mock clip with extra steps.
+ */
+export function selectVideoProvider(config: AppConfig, imageProvider?: ImageProvider | null): VideoProvider | null {
   const realVideoProvider =
     config.VIDEO_PROVIDER === "replicate" && config.VIDEO_API_TOKEN && config.VIDEO_MODEL_VERSION
       ? new ReplicateVideoProvider({
@@ -82,7 +91,22 @@ export function selectVideoProvider(config: AppConfig): VideoProvider | null {
           modelVersion: config.VIDEO_MODEL_VERSION,
         })
       : null;
-  return realVideoProvider ?? (config.NODE_ENV !== "production" ? new MockVideoProvider() : null);
+  if (realVideoProvider) return realVideoProvider;
+
+  // Motion from a real still (ADR-121). Honest about its ceiling: no scene motion, and it says so
+  // in its name, its capabilities and every clip's metadata.
+  if (imageProvider && !imageProvider.isMock && ImageMotionVideoProvider.isAvailable(config.FFMPEG_PATH)) {
+    return new ImageMotionVideoProvider({
+      imageProvider,
+      ffmpegPath: config.FFMPEG_PATH,
+      // 16:9, because that is what the long-form render targets: a square clip is letterboxed
+      // into black bars down both sides of the finished video (seen in the first real run).
+      width: config.IMAGE_SD_SIZE,
+      height: Math.max(64, Math.round((config.IMAGE_SD_SIZE * 9) / 16 / 64) * 64),
+    });
+  }
+
+  return config.NODE_ENV !== "production" ? new MockVideoProvider() : null;
 }
 
 export function registerLlmProviders(

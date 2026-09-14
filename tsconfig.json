@@ -62,6 +62,9 @@
       "path": "./backend/packages/providers/video-mock"
     },
     {
+      "path": "./backend/packages/providers/video-motion"
+    },
+    {
       "path": "./backend/packages/providers/video-replicate"
     },
     {

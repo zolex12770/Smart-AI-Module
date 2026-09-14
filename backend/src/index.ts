@@ -527,7 +527,9 @@ async function main() {
    * refuses to boot without the token and the model version — so there is no state in which
    * this constructs a provider that cannot actually generate anything.
    */
-  const videoProvider = selectVideoProvider(config);
+  // The image provider is passed in because the local motion provider draws its frame with it
+  // (ADR-121); with no real image provider there is nothing to animate and the mock is used.
+  const videoProvider = selectVideoProvider(config, imageProvider);
   const videoGenerationAvailable = videoProvider !== null;
 
   logger.info(
