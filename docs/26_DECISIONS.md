@@ -2245,3 +2245,18 @@ Setting the flag is not a workaround; it is the acknowledgement the guard asks f
 
 **Date:** 2026-09-14
 **Impact:** `infrastructure/terraform/main.tf`, `backend/src/role-boot.test.ts` (new, 4 tests).
+
+## ADR-139: Every tool call leaves a durable record
+
+**Decision:** `ToolRegistry.call` writes an `audit_log` row for every invocation — including the refusals — through an injected sink the composition root supplies.
+
+**Telemetry is not an audit trail.** The only record of a tool call was an OpenTelemetry span and a Prometheus counter. Both are excellent at the question they answer — which tools are slow, which fail, how often — and neither can answer the question docs/10_TOOL_AND_MCP_ARCHITECTURE.md actually asks for: which server, which tool, what arguments, what outcome. Spans are sampled, counters are aggregated, and both are retained for as long as the telemetry backend happens to keep them. The question an audit trail exists for is asked about one project, weeks later, after something went wrong, and it is at its sharpest for an MCP tool — whose handler is a third party's code running on a tenant's behalf. "What arguments did that server receive" had no answer anywhere in the system.
+
+`audit_log` already had the shape: action, resource type and id, outcome, a jsonb detail, project, user. No migration was needed. What was missing was anything writing to it from the tool path.
+
+**Written at the funnel, and the refusals count.** The row is written in `call`, where the span and the counter already are, for the reason the comment there already gives: a record added at each call site is one a third call site can silently skip. That also means the paths that never reach a handler are recorded — an unknown tool the model invented, a tool an operator has switched off, arguments that failed validation — because "a run spent its whole iteration budget calling a disabled tool" is exactly what an audit trail should be able to show. Arguments are truncated at 500 characters per field: `fs.write_file`'s `content` can be a whole file, and an audit table that grows with the traffic becomes an audit table nobody queries.
+
+**The sink cannot break the call.** It is fire-and-forget and its exceptions are swallowed: a database that is down must not turn a successful tool call into a failed one. That is asserted directly — a sink that throws leaves `ok: true` — and separately, a route-level test proves a real call through the real registry leaves a real row, with the tenant, the tool, the outcome and the arguments on it. A sink that is called and writes nothing would have passed the unit tests and satisfied nobody.
+
+**Date:** 2026-09-14
+**Impact:** `backend/packages/tools/src/registry.ts`, `backend/src/{index,test-app}.ts` + 14 tests across `tool-audit.test.ts` and `tool-audit-rows.test.ts`.

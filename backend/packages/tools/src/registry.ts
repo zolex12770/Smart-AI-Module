@@ -28,6 +28,36 @@ export interface ToolRegistryOptions {
   /** Records that a tool has been used before, for `first_use`. Persisted by the caller. */
   hasUsedBefore?: (projectId: string, toolId: string) => Promise<boolean>;
   markUsed?: (projectId: string, toolId: string) => Promise<void>;
+  /**
+   * A DURABLE record of every tool invocation — docs/26_DECISIONS.md ADR-139.
+   *
+   * The only record was a span and a counter: telemetry, sampled, retained for as long as the
+   * backend keeps it, and aggregated. docs/10_TOOL_AND_MCP_ARCHITECTURE.md requires a record of
+   * which server, which tool, what arguments, what outcome — and for an MCP tool, whose code is
+   * a third party's, "which arguments did that server receive on behalf of this tenant" is not a
+   * dashboard question. It is the question asked after an incident, about one project, weeks
+   * later, and no counter can answer it.
+   *
+   * A sink rather than a repository dependency: this package must not learn the audit schema,
+   * and a failure to write an audit row must never fail the tool call that was audited — the
+   * caller decides both.
+   */
+  auditSink?: (entry: ToolCallAudit) => void;
+}
+
+/** One tool invocation, as the audit trail records it (ADR-139). */
+export interface ToolCallAudit {
+  toolId: string;
+  /** Null for a native tool; the MCP server's id when the tool came from one. */
+  serverId: string | null;
+  projectId: string;
+  userId: string | null;
+  /** One of the registry's own bounded outcome values, the same one the span and metric carry. */
+  outcome: string;
+  ok: boolean;
+  durationMs: number;
+  arguments: Record<string, unknown>;
+  error?: string;
 }
 
 const RISK_ORDER: Record<RiskLevel, number> = { low: 0, medium: 1, high: 2, critical: 3 };
@@ -170,6 +200,7 @@ export class ToolRegistry {
         // because `invoke` writes it at several early-return points (unknown tool, disabled,
         // invalid arguments) that never reach the handler.
         const outcome = { value: "unknown" };
+        const startedAt = Date.now();
         const result = await this.invoke(span, toolId, args, context, outcome);
         /**
          * Counted as well as spanned (ADR-082): "which tools fail, and how often" is a rate
@@ -188,6 +219,32 @@ export class ToolRegistry {
          * belongs. `outcome` is untouched: it already takes one of a fixed set of values.
          */
         recordToolCall({ tool: this.entries.has(toolId) ? toolId : "unknown_tool", outcome: outcome.value });
+
+        /**
+         * Written here, in the one place every call already funnels through (ADR-139), for the
+         * same reason the span is: a record added at each call site is one a third call site can
+         * silently skip. It covers the rejection paths too — an unknown tool, a disabled one, bad
+         * arguments — because "a model spent its whole budget calling a tool that is switched
+         * off" is exactly the kind of thing an audit trail should be able to show.
+         *
+         * Never awaited and never allowed to throw: an audit write that fails must not turn a
+         * successful tool call into a failed one.
+         */
+        try {
+          this.options.auditSink?.({
+            toolId,
+            serverId: this.entries.get(toolId)?.definition.origin.serverId ?? null,
+            projectId: context.projectId,
+            userId: context.userId ?? null,
+            outcome: outcome.value,
+            ok: result.ok,
+            durationMs: Date.now() - startedAt,
+            arguments: args,
+            ...(result.ok ? {} : { error: String(result.error ?? "") }),
+          });
+        } catch {
+          // Deliberately swallowed; see above.
+        }
         return result;
       }
     );

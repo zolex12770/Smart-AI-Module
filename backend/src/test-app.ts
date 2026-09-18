@@ -1,9 +1,11 @@
 import { mkdtempSync } from "node:fs";
+import { v4 as uuid } from "uuid";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { AgentEngine } from "@ai-platform/agent-core";
 import {
+  auditLog,
   createDb,
   runMigrations,
   PgAssetRepository,
@@ -103,7 +105,31 @@ export async function buildTestApp(): Promise<{
   registry.register(new MockLLMProvider(0), { asDefault: true });
   const modelRouter = new ModelRouter(registry);
 
-  const toolRegistry = new ToolRegistry();
+  /**
+   * The same audit sink the real composition root wires (ADR-139), so a route test can assert
+   * that a tool call really lands in `audit_log` rather than only that the sink was called.
+   */
+  const toolRegistry = new ToolRegistry({
+    auditSink: (entry) => {
+      void db
+        .insert(auditLog)
+        .values({
+          id: uuid(),
+          userId: entry.userId,
+          projectId: entry.projectId,
+          action: entry.serverId ? "tool.call.mcp" : "tool.call",
+          resourceType: "tool",
+          resourceId: entry.toolId,
+          outcome: entry.ok ? "success" : entry.outcome === "disabled" ? "denied" : "failure",
+          method: "system",
+          ipAddress: null,
+          requestId: null,
+          detail: { outcome: entry.outcome, durationMs: entry.durationMs, arguments: entry.arguments },
+          createdAt: new Date(),
+        })
+        .catch(() => undefined);
+    },
+  });
   for (const { definition, handler } of createFilesystemTools(sandboxRoot)) {
     toolRegistry.register(definition, handler);
   }

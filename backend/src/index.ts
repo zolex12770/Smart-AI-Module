@@ -8,6 +8,7 @@ import {
   runMigrations,
   runPostgresMigrations,
   type DrizzleDb,
+  auditLog,
   PgConversationRepository,
   PgMessageRepository,
   PgTaskNodeRepository,
@@ -300,7 +301,52 @@ async function main() {
       : "SANDBOX: PROCESS ISOLATION ONLY — model-chosen commands share the host network and filesystem (ADR-055)"
   );
 
-  const toolRegistry = new ToolRegistry();
+  /**
+   * Every tool call, in the audit trail — docs/26_DECISIONS.md ADR-139.
+   *
+   * The only record was a span and a counter. `audit_log` already has the shape this needs
+   * (action, resource, outcome, a jsonb detail, project, user, request id), so no migration is
+   * involved — what was missing was anything writing to it from the tool path, which for an MCP
+   * tool means there was no answer at all to "what arguments did that third-party server receive
+   * on behalf of this tenant".
+   *
+   * Fire-and-forget, with the rejection swallowed: an audit write that fails must not turn a
+   * successful tool call into a failed one, and the registry's own sink contract says the same.
+   */
+  const toolRegistry = new ToolRegistry({
+    auditSink: (entry) => {
+      void db
+        .insert(auditLog)
+        .values({
+          id: uuid(),
+          userId: entry.userId,
+          projectId: entry.projectId,
+          action: entry.serverId ? "tool.call.mcp" : "tool.call",
+          resourceType: "tool",
+          resourceId: entry.toolId,
+          // The registry's outcomes are finer than these three, so the exact one is kept in
+          // `detail` and this is the coarse verdict an auditor filters on.
+          outcome: entry.ok ? "success" : entry.outcome === "disabled" ? "denied" : "failure",
+          method: "system",
+          ipAddress: null,
+          requestId: null,
+          detail: {
+            outcome: entry.outcome,
+            durationMs: entry.durationMs,
+            ...(entry.serverId ? { serverId: entry.serverId } : {}),
+            // The ARGUMENTS, because an audit trail that records only which tool ran cannot
+            // answer what it was asked to do. Truncated, since a write_file argument can be a
+            // whole file and this table is not a blob store.
+            arguments: truncateForAudit(entry.arguments),
+            ...(entry.error ? { error: entry.error.slice(0, 1_000) } : {}),
+          },
+          createdAt: new Date(),
+        })
+        .catch((error: unknown) => {
+          logger.warn({ err: String(error), tool: entry.toolId }, "failed to write a tool-call audit row");
+        });
+    },
+  });
 
   const documents = new PgDocumentRepository(db);
   const documentChunks = new PgDocumentChunkRepository(db);
@@ -1615,4 +1661,25 @@ async function runJob<T>(
       }
     }
   );
+}
+
+/**
+ * Keeps an audit row's arguments useful without letting it become a blob store — ADR-139.
+ *
+ * A `fs.write_file` call's `content` can be an entire file and a `web.fetch` result can be a page.
+ * The audit trail needs to show WHAT was asked for, which a truncated value does; storing the
+ * whole payload would make the table grow with the traffic and make it slow to query, which is
+ * the fastest way for an audit trail to stop being consulted.
+ */
+function truncateForAudit(args: Record<string, unknown>): Record<string, unknown> {
+  const LIMIT = 500;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === "string" && value.length > LIMIT) {
+      out[key] = `${value.slice(0, LIMIT)}… (${value.length} characters)`;
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
 }
