@@ -18,7 +18,7 @@ import type { ImageProvider, VideoProvider } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import { LocalAssetStore } from "./asset-store.js";
 import { processImageGeneration } from "./image-generation.js";
-import { processVideoScene } from "./video-orchestration.js";
+import { checkProjectCompletion, processVideoScene } from "./video-orchestration.js";
 
 /**
  * Cancellation that something actually observes — docs/26_DECISIONS.md ADR-122.
@@ -173,4 +173,90 @@ describe("cancelled media work never reaches the provider", () => {
     expect(row?.status).toBe("succeeded");
     expect(row?.attemptCount).toBe(1);
   });
+
+  /**
+   * The project's own cancelled status — docs/26_DECISIONS.md ADR-140.
+   *
+   * `VideoProjectStatus` included `"cancelled"` from the start and nothing could set it. ADR-122
+   * gave the SCENES a cancelled status a worker observes; the completion check still only asked
+   * "did every scene succeed?", so a user who stopped their render saw `partially_succeeded` and
+   * "0 of 2 scene(s) failed to generate" — an invitation to retry the work they had just stopped.
+   */
+  it("settles a project whose scenes were all cancelled as cancelled, not partially succeeded", async () => {
+    const projectRepo = new PgVideoProjectRepository(db);
+    const sceneRepo = new PgVideoSceneRepository(db);
+    const videoProjectId = uuid();
+    await projectRepo.create({
+      id: videoProjectId,
+      projectId: PROJECT,
+      createdByUserId: USER,
+      prompt: "a harbour at dawn",
+      targetDurationSeconds: 8,
+      sceneClipSeconds: 4,
+      sceneCount: 2,
+    });
+    const scenes = await sceneRepo.createMany(
+      { projectId: PROJECT, videoProjectId },
+      [
+        { id: uuid(), sceneIndex: 0, shotDescription: "a wide shot", durationSeconds: 4 },
+        { id: uuid(), sceneIndex: 1, shotDescription: "a close shot", durationSeconds: 4 },
+      ]
+    );
+    const scope = { projectId: PROJECT, videoProjectId };
+    for (const scene of scenes) {
+      await sceneRepo.updateStatus(scope, scene.id, "cancelled", {});
+    }
+
+    await checkProjectCompletion({ projectRepo, sceneRepo, jobQueue: neverEnqueues() }, scope);
+
+    const row = await projectRepo.get(PROJECT, videoProjectId);
+    expect(row?.status).toBe("cancelled");
+    // And it does not invite a retry of work the user stopped.
+    expect(row?.errorMessage ?? "").not.toMatch(/failed to generate/);
+    expect(row?.errorMessage ?? "").toMatch(/cancelled/i);
+  });
+
+  it("still reports a genuine failure as partially succeeded, and mentions any cancellations", async () => {
+    // A guard that turned every mixed outcome into "cancelled" would hide real failures.
+    const projectRepo = new PgVideoProjectRepository(db);
+    const sceneRepo = new PgVideoSceneRepository(db);
+    const videoProjectId = uuid();
+    await projectRepo.create({
+      id: videoProjectId,
+      projectId: PROJECT,
+      createdByUserId: USER,
+      prompt: "a harbour at dawn",
+      targetDurationSeconds: 12,
+      sceneClipSeconds: 4,
+      sceneCount: 3,
+    });
+    const scenes = await sceneRepo.createMany(
+      { projectId: PROJECT, videoProjectId },
+      [
+        { id: uuid(), sceneIndex: 0, shotDescription: "one", durationSeconds: 4 },
+        { id: uuid(), sceneIndex: 1, shotDescription: "two", durationSeconds: 4 },
+        { id: uuid(), sceneIndex: 2, shotDescription: "three", durationSeconds: 4 },
+      ]
+    );
+    const scope = { projectId: PROJECT, videoProjectId };
+    await sceneRepo.updateStatus(scope, scenes[0]!.id, "succeeded", {});
+    await sceneRepo.updateStatus(scope, scenes[1]!.id, "failed", { errorMessage: "the provider refused" });
+    await sceneRepo.updateStatus(scope, scenes[2]!.id, "cancelled", {});
+
+    await checkProjectCompletion({ projectRepo, sceneRepo, jobQueue: neverEnqueues() }, scope);
+
+    const row = await projectRepo.get(PROJECT, videoProjectId);
+    expect(row?.status).toBe("partially_succeeded");
+    expect(row?.errorMessage ?? "").toMatch(/1 of 3 scene\(s\) failed/);
+    expect(row?.errorMessage ?? "").toMatch(/1 were cancelled/);
+  });
 });
+
+/** A queue that must not be reached: a cancelled or failed project enqueues no render. */
+function neverEnqueues() {
+  return {
+    enqueue: async () => {
+      throw new Error("checkProjectCompletion must not enqueue a render for a project that did not succeed");
+    },
+  } as never;
+}

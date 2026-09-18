@@ -335,9 +335,29 @@ export async function checkProjectCompletion(
   }
 
   const failedCount = scenes.filter((s) => s.status === "failed").length;
+  const cancelledCount = scenes.filter((s) => s.status === "cancelled").length;
+
+  /**
+   * A cancelled project says it was cancelled — docs/26_DECISIONS.md ADR-140.
+   *
+   * `VideoProjectStatus` has always included `"cancelled"` and nothing could ever set it. ADR-122
+   * gave the SCENES a cancelled status a worker really observes, but this function only asked
+   * "did every scene succeed?" — so a user who stopped their own render found the project marked
+   * `partially_succeeded` with the message "0 of 2 scene(s) failed to generate", inviting them to
+   * retry the work they had just asked to stop. Nothing failed. They cancelled it, and the only
+   * record of that was scene rows nobody reads.
+   */
+  if (failedCount === 0 && cancelledCount > 0) {
+    await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "cancelled", {
+      errorMessage: `Cancelled before ${cancelledCount} of ${scenes.length} scene(s) were generated.`,
+    });
+    return;
+  }
+
   await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "partially_succeeded", {
     errorMessage:
-      `${failedCount} of ${scenes.length} scene(s) failed to generate. ` +
-      "Re-run orchestration (POST /api/v1/videos/:id/retry) to regenerate only the failed scene(s).",
+      `${failedCount} of ${scenes.length} scene(s) failed to generate` +
+      (cancelledCount > 0 ? `, and ${cancelledCount} were cancelled` : "") +
+      ". Re-run orchestration (POST /api/v1/videos/:id/retry) to regenerate only the failed scene(s).",
   });
 }

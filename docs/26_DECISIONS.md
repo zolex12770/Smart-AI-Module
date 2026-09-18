@@ -2260,3 +2260,14 @@ Setting the flag is not a workaround; it is the acknowledgement the guard asks f
 
 **Date:** 2026-09-14
 **Impact:** `backend/packages/tools/src/registry.ts`, `backend/src/{index,test-app}.ts` + 14 tests across `tool-audit.test.ts` and `tool-audit-rows.test.ts`.
+
+## ADR-140: Cancellation reaches the socket, and a cancelled project says so
+
+**Decision:** `parseSseStream` cancels the response reader in a `finally`, and a video project whose scenes were all cancelled settles as `cancelled` rather than `partially_succeeded`.
+
+**The cancellation chain was one link short.** ADR-119 built it carefully: the route aborts on client disconnect, the router closes the iterator it holds by hand, and that closes the provider's own generator. Every layer was verified except the last one. `parseSseStream` took the response body's reader and never released it, so closing the generator left the upstream HTTP connection open — and a provider that streams until its own completion kept generating tokens, and kept charging for them, for a reader that had walked away. Cancelling the reader is what actually closes the socket, and it belongs in the one function every provider adapter consumes its stream through rather than in each of the four. Removing that single line fails three tests that abandon a stream by breaking, by returning, and by throwing.
+
+**And a cancelled render blamed itself for failing.** `VideoProjectStatus` has always included `"cancelled"` and nothing could set it. ADR-122 gave the SCENES a cancelled status that a worker genuinely observes, but `checkProjectCompletion` only ever asked "did every scene succeed?" — so a user who stopped their own render found the project marked `partially_succeeded` with the message "0 of 2 scene(s) failed to generate. Re-run orchestration to regenerate only the failed scene(s)", inviting them to retry work they had just asked to stop. Nothing had failed. A mixed outcome still reports the real failures and mentions the cancellations alongside them, because a guard that turned every mixture into "cancelled" would hide exactly what the status exists to show.
+
+**Date:** 2026-09-14
+**Impact:** `shared/src/sse.ts`, `backend/packages/media/src/video-orchestration.ts` + 6 tests.

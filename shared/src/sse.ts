@@ -16,22 +16,40 @@ export async function* parseSseStream(body: ReadableStream<Uint8Array>): AsyncGe
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
+  /**
+   * The reader is CANCELLED when this generator is abandoned — docs/26_DECISIONS.md ADR-140.
+   *
+   * ADR-119 built the chain that stops a cancelled chat: the route aborts, the router closes the
+   * iterator it holds, and that closes the provider's generator. It ended here. This function
+   * took the reader and never released it, so the last link was missing — the upstream HTTP
+   * response body stayed open, and a provider that streams until its own completion kept
+   * generating tokens, and kept charging for them, for a request whose reader had walked away.
+   *
+   * Cancelling the reader is what actually closes the connection, and it belongs in the one
+   * function every provider adapter consumes its stream through rather than in each of them.
+   */
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-    let match: RegExpExecArray | null;
-    while ((match = FRAME_SEPARATOR.exec(buffer)) !== null) {
-      const rawFrame = buffer.slice(0, match.index);
-      // The separator's own length, not a hard-coded 2 — "\r\n\r\n" is four characters.
-      buffer = buffer.slice(match.index + match[0].length);
-      yield parseFrame(rawFrame);
+      let match: RegExpExecArray | null;
+      while ((match = FRAME_SEPARATOR.exec(buffer)) !== null) {
+        const rawFrame = buffer.slice(0, match.index);
+        // The separator's own length, not a hard-coded 2 — CRLF framing is four characters.
+        buffer = buffer.slice(match.index + match[0].length);
+        yield parseFrame(rawFrame);
+      }
     }
-  }
 
-  if (buffer.trim().length > 0) {
-    yield parseFrame(buffer);
+    if (buffer.trim().length > 0) {
+      yield parseFrame(buffer);
+    }
+  } finally {
+    // A stream that already ended cancels harmlessly, and a lock released by the stream closing
+    // itself throws — neither is a reason to fail the call that is finishing.
+    await reader.cancel().catch(() => undefined);
   }
 }
 
