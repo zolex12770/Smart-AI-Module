@@ -48,6 +48,15 @@ export interface VideoScript {
   model?: string | null;
   /** Why it fell back, when it did — an operator's only clue that the script stage failed. */
   fallbackReason?: string | null;
+  /**
+   * Shots the model actually described, before padding — ADR-137.
+   *
+   * Lower than `scenes.length` when the model wrote fewer shots than the requested duration
+   * needed and the remainder was filled by cycling the ones it did write. Without it,
+   * `scriptSource: "model"` claimed authorship of copies. Optional so rows written before this
+   * still parse.
+   */
+  scenesWritten?: number;
 }
 
 export interface VideoProject {

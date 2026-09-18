@@ -42,18 +42,44 @@ export interface VideoScript {
   model: string | null;
   /** Why it fell back, when it did. Null on the happy path. */
   fallbackReason: string | null;
+  /**
+   * How many shots the model actually described, before any padding — ADR-137.
+   *
+   * Equal to `scenes.length` when the reply was complete. Lower when the model wrote fewer shots
+   * than the requested duration needs and the remainder was filled by cycling the ones it did
+   * write. On the deterministic path it is 0: nothing was authored at all.
+   */
+  scenesWritten: number;
 }
 
 /** The chat surface this stage needs, named structurally so backend/packages/media stays router-free. */
 export interface ScriptModel {
-  streamChat(request: {
-    messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
-  }): AsyncIterable<ChatStreamEvent>;
+  streamChat(
+    request: {
+      messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+    },
+    /**
+     * Cancellation, because this call happens inside an HTTP request — ADR-137.
+     *
+     * The interface declared no way to stop the call, so the storyboard stage had no deadline of
+     * any kind: `POST /api/v1/videos` was measured at 74.6 seconds for a five-scene brief on a
+     * local model, and there was no upper bound at all — a wedged provider held the request open
+     * until something else gave up. The router has always taken a signal; this is the shape that
+     * lets it reach one.
+     */
+    options?: { signal?: AbortSignal }
+  ): AsyncIterable<ChatStreamEvent>;
 }
 
 export interface WriteScriptDeps {
   /** Absent means no chat provider is configured; the deterministic path is then the only one. */
   model?: ScriptModel;
+  /**
+   * Wall-clock ceiling for the storyboard call (ADR-137). On expiry the deterministic planner
+   * produces the scenes and the project records that it did — a slow model costs the user a
+   * mechanical storyboard, never a request that never returns.
+   */
+  timeoutMs?: number;
   /** Injected for tests. */
   logger?: { warn(obj: unknown, msg: string): void };
 }
@@ -87,6 +113,15 @@ export async function writeVideoScript(
     return deterministic(planned, "No chat provider is configured, so no script stage ran.");
   }
 
+  /**
+   * 25 seconds. Long enough for a local 7B model to write a handful of shots (measured at ~15s
+   * for three on this machine), short enough that a person pressing a button does not conclude
+   * the page is broken — and bounded, which is the part that was missing entirely.
+   */
+  const timeoutMs = deps.timeoutMs ?? 25_000;
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
     const raw = await completeText(deps.model, [
       { role: "system", content: SCRIPT_SYSTEM_PROMPT },
@@ -97,7 +132,7 @@ export async function writeVideoScript(
           `Total duration: ${request.targetDurationSeconds} seconds.\n` +
           `Write exactly ${planned.length} scenes, each about ${request.sceneClipSeconds} seconds long.`,
       },
-    ]);
+    ], controller.signal);
 
     const parsed = parseScriptJson(raw, planned.length);
     if (!parsed) {
@@ -118,13 +153,20 @@ export async function writeVideoScript(
       scriptSource: "model",
       model: raw.model,
       fallbackReason: null,
+      scenesWritten: parsed.scenesWritten,
     };
   } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
+    const reason = controller.signal.aborted
+      ? `The script stage exceeded its ${Math.round(timeoutMs / 1000)}s deadline.`
+      : error instanceof Error
+        ? error.message
+        : String(error);
     deps.logger?.warn({ error: reason }, "script stage failed; falling back to the deterministic storyboard");
     // A failed script stage must not fail the whole project: the deterministic decomposition
     // still produces a real video, and the project records that that is what happened.
     return deterministic(planned, `The script stage failed: ${reason}`);
+  } finally {
+    clearTimeout(deadline);
   }
 }
 
@@ -138,15 +180,18 @@ function deterministic(planned: PlannedScene[], reason: string): VideoScript {
     scriptSource: "deterministic",
     model: null,
     fallbackReason: reason,
+    // Nothing was authored: every shot here is the mechanical decomposition.
+    scenesWritten: 0,
   };
 }
 
 /** Drains the stream to its terminal event. The router streams; this stage wants one string. */
 async function completeText(
   model: ScriptModel,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+  signal?: AbortSignal
 ): Promise<{ text: string; model: string }> {
-  for await (const event of model.streamChat({ messages })) {
+  for await (const event of model.streamChat({ messages }, { signal })) {
     if (event.type === "done") {
       return { text: event.message.content ?? "", model: event.model };
     }
@@ -158,6 +203,8 @@ async function completeText(
 interface ParsedScript {
   title: string;
   scenes: Array<{ shotDescription: string; narration: string }>;
+  /** Shots the model really described, before padding cycled them to fill the duration. */
+  scenesWritten: number;
 }
 
 /**
@@ -219,7 +266,16 @@ export function parseScriptJson(
   }
 
   const title = typeof record.title === "string" && record.title.trim() !== "" ? record.title.trim() : "Untitled";
-  return { title, scenes: cleaned };
+  /**
+   * `scenesWritten` leaves this function now — docs/26_DECISIONS.md ADR-137.
+   *
+   * The count was computed here, used for the modulus, and discarded, while the caller reported
+   * `scriptSource: "model"` and "Written by <model>" unconditionally. So a reply that described
+   * two shots for a five-scene video was presented as a five-shot authored storyboard, and the
+   * three duplicates were indistinguishable from deliberate repetition. Padding by cycling real
+   * shots is a reasonable thing to do; claiming a model wrote them is not.
+   */
+  return { title, scenes: cleaned, scenesWritten: written };
 }
 
 /** The first balanced `{...}` run, so a fenced or prose-wrapped reply still yields its object. */

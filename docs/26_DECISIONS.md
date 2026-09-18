@@ -2219,3 +2219,14 @@ Everything needed was already persisted: `output.pendingCall` carries the id, na
 
 **Date:** 2026-09-14
 **Impact:** `frontend/app/tasks/page.tsx`, `frontend/app/lib/api.ts` + 4 component tests and an E2E journey.
+
+## ADR-137: A storyboard that says how much of it was written, and a stage that gives up in time
+
+**Decision:** `writeVideoScript` reports `scenesWritten` — the shots the model actually described, before padding — and the video screen qualifies "Written by <model>" when that is fewer than the scene count. The storyboard call has a 25-second deadline and falls back to the deterministic planner on expiry.
+
+**The padding was honest code with a dishonest label.** A model that wrote two shots for a five-scene brief had those two cycled to fill the remainder, which is a reasonable thing to do — a repeated real shot is better than "Scene 4 of 5: <the prompt>", which is what the old planner produced. But the count was computed for the modulus and then discarded: `parseScriptJson` returned only `{ title, scenes }`, so `writeVideoScript` reported `scriptSource: "model"` with `fallbackReason: null` unconditionally, the project persisted that, and the detail screen said "Written by qwen2.5" over three shots the model never wrote. ADR-080 exists precisely because a mechanical storyboard that reads as authored is a fake completion; this was the same failure one level down, and it had been introduced by the fix for a different bug in the same three lines.
+
+**And the stage could not be stopped.** `ScriptModel` declared `streamChat(request)` with no options, so there was no way for a deadline to reach the router's `signal` — and this call runs inside `POST /api/v1/videos`, before the 202. Measured at 74.6 seconds for a five-scene brief against a local model, with no upper bound above it at all: a wedged provider held the request open until something else gave up. It is bounded now, and expiry is a FALLBACK rather than a failure — a slow model costs the user a mechanical storyboard with the reason recorded, never a request that never returns. Moving the whole stage into a job would be better still and is the obvious next step; a bounded synchronous call is the honest interim, and the interface now has the shape that makes the move possible.
+
+**Date:** 2026-09-14
+**Impact:** `backend/packages/media/src/{video-script,video-orchestration}.ts`, `backend/packages/database/src/repositories/video-project-repository.ts`, `frontend/app/lib/api.ts`, `frontend/app/videos/[id]/page.tsx` + 5 tests.

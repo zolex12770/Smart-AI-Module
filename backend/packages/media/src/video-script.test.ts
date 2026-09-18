@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseScriptJson } from "./video-script.js";
+import { parseScriptJson, writeVideoScript, type ScriptModel } from "./video-script.js";
 
 /**
  * docs/26_DECISIONS.md ADR-080 — the script stage's fitting of a model's storyboard to the
@@ -77,5 +77,116 @@ describe("parseScriptJson: fitting a short storyboard to the requested scene cou
     );
 
     expect(parsed!.scenes.map((s) => s.shotDescription)).toEqual(["A", "B"]);
+  });
+});
+
+/**
+ * How much the model really wrote, and a stage that cannot hang — docs/26_DECISIONS.md ADR-137.
+ *
+ * Two defects in the same stage. The padding count was computed, used for the modulus and thrown
+ * away, while `writeVideoScript` reported `scriptSource: "model"` unconditionally — so a reply
+ * describing two shots for a five-scene video was persisted and displayed as a five-shot authored
+ * storyboard. Padding by cycling real shots is sensible; claiming a model wrote the copies is not.
+ *
+ * And the call had no deadline of any kind. `ScriptModel` declared no way to cancel, so the
+ * measured 74.6 seconds for a five-scene brief had no upper bound above it: a wedged provider held
+ * `POST /api/v1/videos` open indefinitely.
+ */
+describe("the script stage reports what it wrote, and gives up in time", () => {
+  const request = { prompt: "a harbour at dawn", targetDurationSeconds: 20, sceneClipSeconds: 4 };
+
+  const modelReturning = (text: string): ScriptModel => ({
+    async *streamChat() {
+      yield {
+        type: "done",
+        message: { role: "assistant", content: text },
+        usage: { inputTokens: 1, outputTokens: 1 },
+        provider: "test",
+        model: "test-model",
+        finishReason: "stop",
+      } as never;
+    },
+  });
+
+  it("reports the count the model wrote when the storyboard was padded", async () => {
+    // Two shots for a five-scene video: the other three are copies.
+    const script = await writeVideoScript(
+      {
+        model: modelReturning(
+          JSON.stringify({
+            title: "Harbour",
+            scenes: [
+              { shotDescription: "A wide shot of the harbour", narration: "Dawn." },
+              { shotDescription: "A boat's rope", narration: "Ropes creak." },
+            ],
+          })
+        ),
+      },
+      request
+    );
+
+    expect(script.scriptSource).toBe("model");
+    expect(script.scenes).toHaveLength(5);
+    // The load-bearing number: two, not five.
+    expect(script.scenesWritten).toBe(2);
+  });
+
+  it("reports a complete storyboard as complete", async () => {
+    const scenes = Array.from({ length: 5 }, (_unused, i) => ({
+      shotDescription: `Shot ${i + 1}`,
+      narration: `Line ${i + 1}`,
+    }));
+    const script = await writeVideoScript({ model: modelReturning(JSON.stringify({ title: "T", scenes })) }, request);
+    expect(script.scenesWritten).toBe(5);
+    expect(script.scenes).toHaveLength(5);
+  });
+
+  it("reports zero when nothing was authored at all", async () => {
+    const script = await writeVideoScript({}, request);
+    expect(script.scriptSource).toBe("deterministic");
+    expect(script.scenesWritten).toBe(0);
+  });
+
+  it("gives up on a model that never answers, and says that is why", async () => {
+    // A provider that hangs. Before the deadline this held the HTTP request open with no bound.
+    const hanging: ScriptModel = {
+      async *streamChat(_request, options) {
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+        yield undefined as never;
+      },
+    };
+
+    const started = Date.now();
+    const script = await writeVideoScript({ model: hanging, timeoutMs: 300 }, request);
+    const elapsed = Date.now() - started;
+
+    // It fell back rather than throwing: a slow model costs a mechanical storyboard, not a 500.
+    expect(script.scriptSource).toBe("deterministic");
+    expect(script.fallbackReason).toMatch(/deadline/i);
+    expect(script.scenes).toHaveLength(5);
+    // And it really stopped waiting.
+    expect(elapsed).toBeLessThan(15_000);
+  });
+
+  it("passes a signal the model can actually observe", async () => {
+    // The interface used to declare no options at all, so no deadline could reach the router.
+    let sawSignal = false;
+    const observing: ScriptModel = {
+      async *streamChat(_request, options) {
+        sawSignal = options?.signal instanceof AbortSignal;
+        yield {
+          type: "done",
+          message: { role: "assistant", content: '{"title":"T","scenes":[{"shotDescription":"S","narration":"N"}]}' },
+          usage: { inputTokens: 1, outputTokens: 1 },
+          provider: "test",
+          model: "test-model",
+          finishReason: "stop",
+        } as never;
+      },
+    };
+    await writeVideoScript({ model: observing }, request);
+    expect(sawSignal).toBe(true);
   });
 });

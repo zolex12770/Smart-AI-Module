@@ -87,7 +87,26 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
             (ADR-080). So it says which, every time.
           */}
           {project.script.scriptSource === "model" ? (
-            <p className="page-subtitle">Written by {project.script.model ?? "a model"}.</p>
+            <p className="page-subtitle">
+              Written by {project.script.model ?? "a model"}.
+              {/**
+               * How much of it — docs/26_DECISIONS.md ADR-137.
+               *
+               * A model that described two shots for a five-scene video had those two cycled to
+               * fill the remainder, and this line still said "Written by <model>" with nothing
+               * to indicate that three of the five were copies. The padding is reasonable; the
+               * unqualified claim was not.
+               */}
+              {typeof project.script.scenesWritten === "number" &&
+              project.script.scenesWritten > 0 &&
+              project.script.scenesWritten < (project.script.scenes?.length ?? 0) ? (
+                <>
+                  {" "}
+                  It described {project.script.scenesWritten} of {project.script.scenes?.length} shots; the rest
+                  repeat those, cycled to fill the requested duration.
+                </>
+              ) : null}
+            </p>
           ) : (
             <p className="page-subtitle">
               No script was written — the scenes come from the deterministic planner.

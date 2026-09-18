@@ -172,6 +172,14 @@ export interface VideoScript {
   scriptSource?: "model" | "deterministic";
   model?: string | null;
   fallbackReason?: string | null;
+  /**
+   * Shots the model actually described, before padding — ADR-137.
+   *
+   * Lower than `scenes.length` when the model wrote fewer than the requested duration needed and
+   * the rest repeat those, cycled. Without it the screen said "Written by <model>" over shots the
+   * model never wrote.
+   */
+  scenesWritten?: number;
   scenes?: Array<{ sceneIndex: number; shotDescription: string; narration?: string }>;
 }
 

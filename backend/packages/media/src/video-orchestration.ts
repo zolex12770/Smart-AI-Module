@@ -82,6 +82,15 @@ export async function createVideoProject(
       scriptSource: script.scriptSource,
       model: script.model,
       fallbackReason: script.fallbackReason,
+      /**
+       * How much of this storyboard the model really wrote — docs/26_DECISIONS.md ADR-137.
+       *
+       * A reply describing two shots for a five-scene video was padded by cycling those two, and
+       * the project still recorded `scriptSource: "model"` with no qualification — so a screen
+       * reading "Written by qwen2.5" was describing three shots the model never wrote. Persisted
+       * beside the source so the distinction survives the request that made it.
+       */
+      scenesWritten: script.scenesWritten,
       scenes: script.scenes.map((scene) => ({
         sceneIndex: scene.sceneIndex,
         shotDescription: scene.shotDescription,
