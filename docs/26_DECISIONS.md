@@ -2299,3 +2299,14 @@ Files are written, not repositories cloned, and that is a decision rather than a
 
 **Date:** 2026-09-14
 **Impact:** `backend/src/routes/v1/workspace.ts` (new), `backend/src/server.ts`, `frontend/app/lib/api.ts`, `frontend/app/tasks/page.tsx`, `frontend/app/agent/TaskDetail.tsx`, `docs/{API,27_RISKS_AND_LIMITATIONS}.md` + 15 tests.
+
+## ADR-143: The Enable button only appears to someone who can use it
+
+**Decision:** The MCP tool control on the Tasks screen is rendered only for a system administrator; everyone else is told whose decision it is.
+
+**Found by running it, in a fix from the same audit.** ADR-136 replaced an instruction to send a `POST` by hand with a real Enable button, on the correct reasoning that a governance gate nobody can operate is not a gate. It offered that button to every user. But `POST /api/v1/tools/:id/enable` mutates a PROCESS-WIDE registry — `setEnabled` takes no project, so enabling an MCP-discovered tool enables it for every tenant in the deployment — and ADR-089 moved it to system-admin for exactly that reason, answering 404 rather than 403 because confirming an endpoint exists is itself a disclosure. So an ordinary project member would have pressed a button and been told "Not found."
+
+That is the same class of defect ADR-136 was written to remove: a control that cannot do what it appears to offer. The component test could not have caught it — it mocks the API, and the refusal lives in the API. The acceptance run caught it in one call, which is the argument for running the thing rather than only testing it.
+
+**Date:** 2026-09-18
+**Impact:** `frontend/app/tasks/page.tsx` + 1 test.

@@ -1,6 +1,11 @@
 # Final Project Audit
 
-**Date:** 2026-09-13 · **Audits:** three, each followed by the fixes it forced and a re-run of every gate.
+**Date:** 2026-09-18 · **Audits:** four, each followed by the fixes it forced and a re-run of every gate.
+
+> **The fourth audit (`acc5416..513e709`, ADR-123 ... ADR-142)** read the whole tree with 11
+> independent agents and confirmed **5 P0s and 53 P1s**. All 58 are closed across 18 commits. Its
+> record is the section "The fourth audit" at the end of this file; the acceptance run that
+> followed it is `docs/LOCAL_USER_ACCEPTANCE_TEST.md`.
 
 - **First audit** (32 independent agents) read the tree at `b4cf4af`, the last commit before its
   first fix, `b028922`. An earlier version of this header named `9e794b3`, which already
@@ -378,3 +383,123 @@ Stated because an audit that lists only what it proved is half a document.
     dry" signal counted failed finders as dry, so it cannot support a claim that no findings
     remain. P0/P1 remaining: 0 known — every one of the 80 gaps above is addressed — and the
     re-audit is pending.
+
+---
+
+# The fourth audit (2026-09-14 … 2026-09-18)
+
+**Tree read:** `acc5416`. **Fixes:** `48eebec … 513e709`, eighteen commits, ADR-123 … ADR-142.
+**Confirmed:** 5 P0 · 53 P1 · 98 P2. **Closed:** every P0 and every P1.
+
+## What kind of defects these were
+
+Almost none of the 58 were "this code is wrong". They were, overwhelmingly, **machinery that
+existed and nothing reached**:
+
+- `revokeAllSessions` shipped with the docstring "used on password change and by an admin". Neither
+  caller was ever written, so a user whose laptop was stolen could only delete their account.
+- `MEMORY_EXTRACTION_PROMPT`, `parseExtractedFacts` and `recordExtracted` all shipped with their own
+  tests and no caller anywhere else. Memory held only what somebody typed in by hand.
+- The reasoning loop's `verify` hook had a self-correction branch behind it, and `planAutonomous`
+  explained in a comment that "the reasoning loop runs its own verification pass".
+  `grep -rn "verify:" backend/` returned nothing at all. The gate could not fail.
+- The loop emitted a `tool_call` and a `tool_result` for every action, and the engine forwarded
+  neither: a ten-minute run was a spinner and then an answer, with no record afterwards.
+- The approval card read `node.toolId` and `node.input` — the fields of a declarative node — so
+  every autonomous run asked a human to approve "Tool call `undefined`" with the arguments hidden.
+- The coding screen filtered for `code.apply_literal_fix`, a tool that is not registered anywhere.
+- The task-type dropdown omitted `autonomous`, so the model-driven engine the whole platform is
+  built around could only be started by posting JSON by hand.
+- The agent works in a per-project workspace and **nothing in the product could put a file in it**,
+  so "fix the failing test" had no test to fix.
+
+The pattern matters more than any single item: a feature can be built, tested, documented and
+completely unreachable, and every gate stays green the whole time. Tests assert what the author
+thought to assert; they do not ask whether anything calls the thing.
+
+## The defects that cost money or gave something away
+
+- **The lockout was a password oracle.** `login` verified the password *before* checking
+  `lockedUntil`, so a locked account answered a wrong guess "Invalid email or password." and a
+  RIGHT one "This account is temporarily locked…". Tripping the lockout turned it into an oracle
+  for the password it exists to protect.
+- **Quotas could be raised by pressing a button.** Every limit was per project, and any user can
+  create projects. `DAILY_TOKEN_LIMIT=100000` meant a hundred thousand tokens *per project*.
+- **`image.generate` gave a job 60 seconds** while the providers are allowed 180 and 600. Every
+  real generation outran its claim window and was generated twice — and the usage row's
+  idempotency key deduplicated the *billing record*, hiding the second charge rather than
+  preventing it.
+- **`runFfmpeg` had no timeout**, so a wedged render held a worker forever while pg-boss handed the
+  same render to another one: a hang produced two ffmpegs writing one project.
+- **Dead-letter replay accepted any queue name and any job state.** `sourceQueueNameFor` returns a
+  non-`.dlq` name unchanged, so a completed job could be re-sent to the live queue it had already
+  run on, repeatedly — and `cancel` is a no-op on a completed job, so nothing ever stopped it.
+- **Cancellation stopped one layer short.** ADR-119 built the chain carefully and verified every
+  layer but the last: `parseSseStream` took the response reader and never released it, so the
+  upstream connection stayed open and a provider kept generating, and charging, for a reader that
+  had gone.
+- **Streamed answers were discarded by the browser.** The SSE response set
+  `Access-Control-Allow-Origin` but not `Access-Control-Allow-Credentials`, and the client sends
+  `credentials: "include"`. `curl`, `fetch` from Node and `app.inject()` all ignore CORS, which is
+  why every green run stayed green.
+
+## The gates that could not fail
+
+- **CI could not pass.** Its zero-skip step asserts that no test skipped, on the stated premise
+  that every gated binary is installed above it. Four suites needed binaries CI never installed.
+- **The deployed API could not start.** The Dockerfile sets `NODE_ENV=production`, the Terraform
+  service sets `ROLE=api`, and the code refuses that combination under process isolation unless an
+  operator explicitly accepts it. `grep -rn "SANDBOX" infrastructure/` returned one line of prose.
+- **`roleRuns` was the only coverage the api/worker split had** — a pure decision table. Nothing
+  started a process, which is exactly why nobody noticed that one of them refused to.
+- **The metrics described one branch of one route.** `provider_request_count` was written only in
+  the chat route's success path, below a `continue`. A dashboard built on it showed 100% success
+  during an outage: the failures were not recorded as failures, they were not recorded at all.
+
+## How the fixes were checked
+
+Every fix was re-run **with itself removed**, to watch the covering test fail. That discipline
+found three tests that were worthless and one that was actively misleading:
+
+- An end-to-end sandbox-escape test passed against the unfixed resolver — a junction to a missing
+  directory fails the write anyway, for an ordinary reason. Replaced with a file-symlink case,
+  correctly reported as skipped on Windows and run in CI.
+- The first browser test of the CORS fix asserted `not.toBeEmpty()` on the assistant bubble, which
+  the in-flight "…" placeholder satisfies. It went green against a transport that never delivered a
+  single word. It asserts a word character now.
+- A probe test named "gives up on a binary that never exits" probed a binary that exits.
+- A quota test asserted fail-closed behaviour on a ledger that could, by then, measure the thing.
+
+The same discipline applied to the live run, and **UAT-11 found a defect in a fix from this very
+audit**. The new MCP Enable button was offered to every user, but the endpoint is system-admin only
+(ADR-089) and answers 404 — so a project member would have pressed it and been told "Not found."
+The component test could not have caught it, because it mocks the API and the refusal lives in the
+API.
+
+## What was run, and what was not
+
+Sixteen of seventeen acceptance tests pass against a real stack, with every measurement recorded in
+`docs/LOCAL_USER_ACCEPTANCE_TEST.md`: a real local model answering chat and RAG with a real
+citation and an honest refusal; an agent choosing `fs.read_file` itself and being verified; a
+576,011-byte 512×512 PNG from a local diffusion model; a 3.98 s WAV whose stored duration was
+measured rather than estimated; a 249,579-byte MP4 confirmed by ffprobe as h264 + aac + mov_text,
+with captions reading back as the narration; real 429s; cross-tenant reads answered 404; and the
+agent's own tool call sitting in the `audit_log` table.
+
+**UAT-17 — the coding agent — did not complete, and is reported as FAIL.** Every component worked,
+and the platform refused three stale patches rather than corrupting a file. The 7B local model
+invoked the terminal tool with the binary duplicated into its own arguments, so the test never ran
+and it never saw the failure it was meant to fix; the patch it then wrote was its own no-op. That
+is a model-capability ceiling rather than a platform defect, and it is the one capability here
+never observed working end to end.
+
+**Still BLOCKED_EXTERNAL, unchanged:** container builds and the CI workflow (no Docker, no git
+remote), the cloud deployment (no GCP project), and the three hosted model providers plus Replicate
+(no credentials). Nothing in this repository has ever run in a deployed environment.
+
+## The 98 P2s
+
+Triaged, not fixed. None is a broken capability, a security hole or a false claim — the three
+classes this phase treated as blocking. They are recorded in the audit artefacts and remain open
+work; a phase that closed 58 defects and called the remaining 98 "done" would be repeating the
+mistake this document exists to catch.

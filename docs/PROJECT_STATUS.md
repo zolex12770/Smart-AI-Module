@@ -1,6 +1,6 @@
 # Project Status — the single source of truth
 
-**Date:** 2026-09-13 · **Code commit:** `fd5f5a5` — every result below was measured on that tree
+**Date:** 2026-09-18 · **Code commit:** `513e709` — every result below was measured on that tree
 
 This file supersedes every other status claim in the repository. Where it disagrees with a
 report, a README, an ADR or the root `PROJECT_STATUS.md` (which is a historical phase log, not a
@@ -104,12 +104,23 @@ could not start on a fresh clone (#42), and six lint warnings where eslint repor
 
 ## Completion
 
-**CODE COMPLETION: 92%** — 36 of the 39 capability rows in `docs/29_FEATURE_MATRIX.md` are
+**CODE COMPLETION: 95%** — 37 of the 39 capability rows in `docs/29_FEATURE_MATRIX.md` are
 DONE, MVP DONE or MOCKED (a real implementation behind a real interface, awaiting only
 credentials). That denominator is chosen because it is reproducible: anyone can recount it from
-that file. The three that are not are **Coding Agent** (the loop, tools and verification are real
-and the limit is the local model's capability — see below), **Cloud deployment** (written and
-validated, never applied), and **Extensible architecture**, which is a property rather than a
+that file. Image and video generation are no longer MOCKED in the credential-free case — a local
+diffusion model and an ffmpeg motion path produce real files (ADR-120, ADR-121), verified in
+`docs/LOCAL_USER_ACCEPTANCE_TEST.md`. **Coding Agent** has no structural gap left after `513e709` — the last
+missing piece was a way to put files in front of it, which nothing in the product could do
+(ADR-142), and the loop, tools, approval gate, verification pass, patch tool and the screen that
+shows what it did are all real and were all exercised in a live run. It stays short of DONE for
+an honest reason: the full FAIL → patch → PASS cycle has still never been observed completing.
+The run is written up as UAT-17 in `docs/LOCAL_USER_ACCEPTANCE_TEST.md`, and what it shows is a
+model-capability ceiling rather than a platform defect — the 7B local model invoked the terminal
+tool with the binary duplicated into its own arguments, so the test never ran and it never saw
+the failure it was meant to fix; the patch it then wrote was its own no-op. The platform behaved
+correctly at every step, including refusing three stale patches rather than corrupting a file.
+The two rows that remain are **Cloud deployment** (written and validated, never applied — there
+is no GCP project here) and **Extensible architecture**, which is a property rather than a
 deliverable and will read IN PROGRESS for as long as the project is alive.
 
 Four of those rows only became honest in the previous phase (`78a0e13..74c7cd0`): NFR-008 account
@@ -118,31 +129,42 @@ the administrator role could not be granted by any code path. The version of thi
 preceded that phase scored 96% **while omitting all four from its own accounting** — which is the specific way a
 completion score goes wrong: not by miscounting what it lists, but by not listing something.
 
-None of the three scores moved at `fd5f5a5`. The third audit's phase corrected defects and added no
-capability row, and the eight rows below that are not Runtime Verified are the same eight.
+**What changed at `513e709` (ADR-123 … ADR-142).** A fourth independent audit over the whole tree
+confirmed **5 P0s and 53 P1s**. All 58 are closed. Every fix was re-run with itself removed, to
+show the test that covers it actually fails without it; three tests written during that work were
+discarded for passing against the unfixed code, and one was replaced after the live run showed it
+proved nothing.
+
+Two capability rows moved from MOCKED to real and are now Runtime Verified — **image generation**
+(a local diffusion model producing a 576,011-byte 512×512 PNG) and **video generation** (a real
+H.264/AAC/mov_text MP4, confirmed by ffprobe). Four capabilities that existed only as unreachable
+code became real features: password change with session revocation, memory formation from a
+finished turn, a durable audit record of every tool call, and a way to put files in the workspace
+the coding agent works in. The autonomous agent became startable from the interface at all.
 
 Named and deliberately not built: web SEARCH (needs a provider's credentials), per-project tool
 and MCP policy (a schema change), CSV/code-aware chunking, OCR for scanned PDFs, a user and
 project administration UI, password reset / email verification / MFA / SSO, and a generated
 OpenAPI document.
 
-**VERIFICATION: 83%** — 38 of the 46 rows above are Runtime Verified. Counted, not estimated;
-the eight that are not are named here in full:
+**VERIFICATION: 87%** — 40 of the 46 rows above are Runtime Verified. Counted, not estimated;
+the six that are not are named here in full. Image and video generation left this list at
+`513e709` because they were run for real, not because the standard moved:
 
 | Row | Why not |
 |---|---|
 | LLM providers (5 adapters) | The self-hosted OpenAI-compatible adapter is verified end to end against a real local model; the three hosted adapters (OpenAI, Anthropic, Google) have no credentials; `llm-mock` makes no network calls and is never constructed in production |
-| Coding agent | The loop and tools run against a real model; a full FAIL→patch→PASS cycle has not completed |
+| Coding agent | Every component runs against a real model and a real workspace, and the whole cycle was driven live (UAT-17); the 7B local model did not reach a passing test inside the node's ten-minute ceiling. A capable model is the missing input, not a missing feature |
 | Sandbox (Docker) | No container runtime in this environment; the real-container suite has never run |
-| Image generation | Pipeline verified end to end against `image-mock`, which makes no network calls; the OpenAI image adapter is fixture-tested and has no credentials |
-| Video generation | Replicate adapter complete and fixture-tested; no token |
 | Docker | `docker build` has never run |
 | Terraform | `fmt`, `init` and `validate` pass; `apply` needs a GCP project |
 | CI/CD | `npm ci` proven on a fresh clone, and the gate commands pass locally except the Docker steps; the workflow itself has never executed — and until ADR-111 its zero-skip step could never have passed on Linux, which no local Windows run could show |
 
 An earlier draft of this section said 89%. It was wrong — the figure had been estimated rather
 than counted, and recounting the column gave 38. It is recorded because a verification score that
-drifts upward when nobody checks is the failure this document exists to prevent.
+drifts upward when nobody checks is the failure this document exists to prevent. The move from 38
+to 40 is two named rows with measurements behind them in
+`docs/LOCAL_USER_ACCEPTANCE_TEST.md`, not a rounding.
 
 **PRODUCTION VERIFICATION: 0%** — no deployment has occurred. Nothing in this repository has run
 in a deployed environment, under real traffic, on real managed Postgres, behind a real load

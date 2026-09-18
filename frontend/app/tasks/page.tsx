@@ -14,6 +14,7 @@ import {
   type WorkspaceFile,
 } from "../lib/api";
 import { StatusBadge } from "../lib/status-badge";
+import { useSession } from "../lib/session-context";
 
 const TASK_TYPES: { value: TaskType; label: string; fields: string[]; hint?: string }[] = [
   /**
@@ -155,6 +156,21 @@ export default function TasksPage() {
  * an agent may do. A governance gate nobody can operate is not a gate.
  */
 function McpToolGate() {
+  /**
+   * Only a system administrator can actually enable a tool — ADR-089, found by running it.
+   *
+   * `POST /api/v1/tools/:id/enable` mutates a PROCESS-WIDE registry: `setEnabled` takes no
+   * project, so enabling an MCP-discovered tool enables it for every tenant in the deployment.
+   * ADR-089 moved it to system-admin for exactly that reason, and non-admins get a 404 rather
+   * than a 403 (confirming an endpoint exists is itself a disclosure).
+   *
+   * The first version of this card offered the button to everyone, and a project user pressing
+   * it got an unexplained "Not found." That is the same class of defect this card was written to
+   * fix — a control that cannot do what it appears to offer — so the button is shown only to
+   * someone who can use it, and everyone else is told who can. The component test could not have
+   * caught it: it mocks the API, and the API is where the refusal lives.
+   */
+  const { user } = useSession();
   const [tools, setTools] = useState<ToolRow[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -195,7 +211,14 @@ function McpToolGate() {
     <div style={{ marginTop: 8 }}>
       <p className="page-subtitle">
         MCP tools are registered disabled on purpose — a server can advertise anything, so nothing it offers runs
-        until you turn it on (docs/10 §3.2).
+        until someone turns it on (docs/10 §3.2).
+        {!user?.isSystemAdmin && (
+          <>
+            {" "}
+            Enabling one affects every project in this deployment, so it is a system administrator&apos;s decision
+            (docs/26_DECISIONS.md ADR-089) — ask one to enable the tool below.
+          </>
+        )}
       </p>
       {tools.map((tool) => (
         <div key={tool.id} className="row" style={{ justifyContent: "space-between", marginTop: 6 }}>
@@ -206,14 +229,16 @@ function McpToolGate() {
               {tool.enabled ? "enabled" : "disabled"} · {tool.riskLevel} risk
             </span>
           </span>
-          <button
-            type="button"
-            className={tool.enabled ? "btn btn-secondary" : "btn"}
-            disabled={busy === tool.id}
-            onClick={() => void toggle(tool)}
-          >
-            {tool.enabled ? "Disable" : "Enable"}
-          </button>
+          {user?.isSystemAdmin ? (
+            <button
+              type="button"
+              className={tool.enabled ? "btn btn-secondary" : "btn"}
+              disabled={busy === tool.id}
+              onClick={() => void toggle(tool)}
+            >
+              {tool.enabled ? "Disable" : "Enable"}
+            </button>
+          ) : null}
         </div>
       ))}
     </div>

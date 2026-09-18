@@ -15,6 +15,12 @@ import TasksPage from "./page";
  * The same screen told users to `POST` to a tool-enable endpoint themselves, which is the other
  * half: MCP tools ship disabled so that a person decides (ADR-083), and no person could.
  */
+const sessionUser: { isSystemAdmin: boolean } = { isSystemAdmin: true };
+vi.mock("../lib/session-context", () => ({
+  useSession: () => ({ user: sessionUser, projects: [], projectId: "p1", selectProject: vi.fn(), refresh: vi.fn(), signOut: vi.fn() }),
+  RequireSession: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   usePathname: () => "/tasks",
@@ -92,6 +98,44 @@ describe("Tasks screen", () => {
     await waitFor(() => expect(setToolEnabled).toHaveBeenCalledWith("mcp.reference-filesystem.read_text_file", true));
     // And the instruction to run a command by hand is gone.
     expect(screen.queryByText(/POST \/api\/v1\/tools/)).not.toBeInTheDocument();
+  });
+
+  it("does not offer an Enable button to a user who cannot use it", async () => {
+    /**
+     * Found by running it, not by testing it — ADR-089.
+     *
+     * `POST /api/v1/tools/:id/enable` mutates a PROCESS-WIDE registry, so ADR-089 restricts it to
+     * a system administrator and answers everyone else 404 rather than 403. The first version of
+     * this card offered the button to every user, so a project member pressing it got an
+     * unexplained "Not found." — the same class of defect the card exists to fix. A mocked API
+     * cannot catch that, because the refusal lives in the API.
+     */
+    sessionUser.isSystemAdmin = false;
+    listTools.mockResolvedValue({
+      tools: [
+        {
+          id: "mcp.reference-filesystem.read_text_file",
+          name: "read_text_file",
+          description: "Reads a file",
+          origin: { kind: "mcp", serverId: "reference-filesystem" },
+          permissionLevel: "read_only",
+          riskLevel: "low",
+          requiresApproval: "never",
+          enabled: false,
+        },
+      ],
+    });
+
+    const user = userEvent.setup();
+    render(<TasksPage />);
+    await user.selectOptions(screen.getByLabelText(/task type/i), "mcp_read_and_summarize");
+
+    // The tool is still listed — knowing it exists is useful — but the control is not offered.
+    expect(await screen.findByText(/mcp\.reference-filesystem\.read_text_file/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^enable$/i })).not.toBeInTheDocument();
+    // And it says who can, rather than leaving the reader to guess.
+    expect(screen.getByText(/system administrator/i)).toBeInTheDocument();
+    sessionUser.isSystemAdmin = true;
   });
 
   it("says plainly when there is no MCP server to enable anything from", async () => {
