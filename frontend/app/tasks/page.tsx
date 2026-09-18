@@ -1,12 +1,27 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Task, TaskType } from "@ai-platform/shared";
-import { createTask, listTasks } from "../lib/api";
+import { createTask, listTasks, listTools, setToolEnabled, type ToolRow } from "../lib/api";
 import { StatusBadge } from "../lib/status-badge";
 
-const TASK_TYPES: { value: TaskType; label: string; fields: string[] }[] = [
+const TASK_TYPES: { value: TaskType; label: string; fields: string[]; hint?: string }[] = [
+  /**
+   * The model-driven agent, first — docs/26_DECISIONS.md ADR-136.
+   *
+   * ADR-064 unified the deterministic task graph with the model-driven reasoning loop, and the
+   * whole point of the platform is the second one: the model decides what to do, turn by turn,
+   * with real tools. This list omitted it. Every option here was a hardcoded recipe, so from the
+   * interface the product WAS the workflow runner that the audit had already called it — the
+   * autonomous engine existed, was tested, and could be reached only by `POST`ing JSON by hand.
+   */
+  {
+    value: "autonomous",
+    label: "Autonomous agent — the model chooses the tools",
+    fields: ["goal"],
+    hint: "Describe the outcome, not the steps. The model plans, calls tools, reads what comes back, and stops to ask before anything destructive.",
+  },
   { value: "echo_chat", label: "Echo chat (single model call)", fields: ["message"] },
   { value: "read_and_summarize", label: "Read & summarize (native tool)", fields: ["path", "question"] },
   { value: "mcp_read_and_summarize", label: "Read & summarize (via MCP)", fields: ["path", "question"] },
@@ -97,13 +112,8 @@ export default function TasksPage() {
             {submitting ? "Starting…" : "Start task"}
           </button>
         </div>
-        {taskType === "mcp_read_and_summarize" && (
-          <p className="page-subtitle">
-            Note: the MCP filesystem tool is registered disabled by default (docs/10 §3.2) — enable it first via{" "}
-            <code>POST /api/v1/tools/mcp.reference-filesystem.read_text_file/enable</code>, or this task will fail with
-            a real, honest "tool disabled" error.
-          </p>
-        )}
+        {activeType.hint && <p className="page-subtitle">{activeType.hint}</p>}
+        {taskType === "mcp_read_and_summarize" && <McpToolGate />}
       </form>
 
       {error && <p className="error-text">{error}</p>}
@@ -121,6 +131,81 @@ export default function TasksPage() {
           </Link>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Turning on a tool the platform deliberately shipped off — docs/26_DECISIONS.md ADR-136.
+ *
+ * MCP-discovered tools are registered DISABLED (ADR-083) because a server can advertise anything,
+ * so nothing it offers runs until a person decides it should. That decision was reachable only
+ * from a terminal: nothing in the app could enable a tool, and this screen's own note told the
+ * user to send a POST by hand — in a product whose point is that a human stays in control of what
+ * an agent may do. A governance gate nobody can operate is not a gate.
+ */
+function McpToolGate() {
+  const [tools, setTools] = useState<ToolRow[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    listTools()
+      .then((r) => setTools(r.tools.filter((t) => t.origin.kind === "mcp")))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  async function toggle(tool: ToolRow) {
+    setBusy(tool.id);
+    setError(null);
+    try {
+      await setToolEnabled(tool.id, !tool.enabled);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (error) return <p className="error-text">{error}</p>;
+  if (!tools) return <p className="page-subtitle">Checking which MCP tools are enabled…</p>;
+  if (tools.length === 0) {
+    return (
+      <p className="page-subtitle">
+        No MCP server is configured, so this task has no tool to call. Set <code>MCP_SERVERS</code> and restart the
+        API.
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <p className="page-subtitle">
+        MCP tools are registered disabled on purpose — a server can advertise anything, so nothing it offers runs
+        until you turn it on (docs/10 §3.2).
+      </p>
+      {tools.map((tool) => (
+        <div key={tool.id} className="row" style={{ justifyContent: "space-between", marginTop: 6 }}>
+          <span>
+            <code>{tool.id}</code>
+            <span className="page-subtitle">
+              {" "}
+              {tool.enabled ? "enabled" : "disabled"} · {tool.riskLevel} risk
+            </span>
+          </span>
+          <button
+            type="button"
+            className={tool.enabled ? "btn btn-secondary" : "btn"}
+            disabled={busy === tool.id}
+            onClick={() => void toggle(tool)}
+          >
+            {tool.enabled ? "Disable" : "Enable"}
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

@@ -113,6 +113,32 @@ export interface ProvidersResponse {
 
 export const getProviders = () => request<ProvidersResponse>("/api/v1/providers");
 
+/**
+ * One tool as the platform sees it — docs/26_DECISIONS.md ADR-136.
+ *
+ * The MCP-discovered tools are registered DISABLED on purpose (ADR-083): a server can advertise
+ * anything, so nothing it offers runs until a human turns it on. But nothing in the app could
+ * turn one on, and the Tasks screen's own note told the user to send a `POST` by hand — so a
+ * governance decision that the design reserves for a person was reachable only from a terminal.
+ */
+export interface ToolRow {
+  id: string;
+  name: string;
+  description: string;
+  origin: { kind: string; serverId: string | null };
+  permissionLevel: string;
+  riskLevel: string;
+  requiresApproval: string;
+  enabled: boolean;
+}
+
+export const listTools = () => request<{ tools: ToolRow[] }>("/api/v1/tools");
+export const setToolEnabled = (id: string, enabled: boolean) =>
+  request<{ tool: { id: string; enabled: boolean } }>(`/api/v1/tools/${encodeURIComponent(id)}/enable`, {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+
 // --- Images ----------------------------------------------------------------------------
 
 export interface ImageGeneration {

@@ -2206,3 +2206,16 @@ Everything needed was already persisted: `output.pendingCall` carries the id, na
 
 **Date:** 2026-09-14
 **Impact:** `frontend/app/agent/TaskDetail.tsx` + 3 tests.
+
+## ADR-136: The agent the platform is for can be started from the platform
+
+**Decision:** `autonomous` is the first entry in the task-type list, with a single `goal` field, and the MCP tool gate is a button rather than an instruction to send a `POST`.
+
+**The flagship feature had no way in.** ADR-064 unified the deterministic task graph with the model-driven reasoning loop specifically because an earlier audit had said, correctly, that the platform's "agent" was a workflow runner. The engine was built, the loop was tested, the API accepted `type: "autonomous"` — and the task-type dropdown did not list it. Every option a user could pick was a hardcoded recipe, so from the interface the criticism was still true: the autonomous engine was reachable only by posting JSON by hand. It is first in the list now, and its one field asks for an outcome rather than a step, because that is the difference between it and everything else on the screen.
+
+**And the governance gate could not be operated.** MCP-discovered tools are registered DISABLED (ADR-083) because a server can advertise anything, so nothing it offers runs until a human decides it should. Nothing in the app could make that decision: the Tasks screen's own note told the reader to run `POST /api/v1/tools/<id>/enable` themselves, in a product whose premise is that a person stays in control of what an agent may do. A gate nobody can operate is not a gate — it is a wall with the door in a different building. The screen now lists the MCP tools with their risk level and an Enable/Disable button, and says plainly when no MCP server is configured rather than offering an empty control.
+
+**Verified in a browser.** Picking the type, typing a goal and pressing the button creates a real task, navigates to its detail screen, shows the request it was given, and lists the run back on the Tasks screen. The first version of that test looked for a list row and failed — the screen navigates straight to the detail page, which is better than what the test assumed; the test was wrong, not the code.
+
+**Date:** 2026-09-14
+**Impact:** `frontend/app/tasks/page.tsx`, `frontend/app/lib/api.ts` + 4 component tests and an E2E journey.
