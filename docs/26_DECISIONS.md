@@ -2230,3 +2230,18 @@ Everything needed was already persisted: `output.pendingCall` carries the id, na
 
 **Date:** 2026-09-14
 **Impact:** `backend/packages/media/src/{video-script,video-orchestration}.ts`, `backend/packages/database/src/repositories/video-project-repository.ts`, `frontend/app/lib/api.ts`, `frontend/app/videos/[id]/page.tsx` + 5 tests.
+
+## ADR-138: The deployed service can start, and each role is proved to boot
+
+**Decision:** The Terraform api service sets `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true` and both services set a writable `SANDBOX_ROOT`; four tests boot the real compiled entrypoint in each role.
+
+**The Cloud Run service, as defined, could not start.** `backend/Dockerfile` sets `NODE_ENV=production`. The Terraform api service sets `ROLE=api`. And `index.ts` refuses the HTTP role in production when the sandbox is process-level and no operator has explicitly accepted it (ADR-055) — Cloud Run cannot give a container the nested container isolation `SANDBOX_RUNTIME=docker` needs, so the service would exit on that guard, printing the message that names the remedy, with nothing in the whole `infrastructure/` tree supplying it. `grep -rn "SANDBOX" infrastructure/` returned one line, and it was prose in a runbook. Both services also relied on the default `SANDBOX_ROOT=./data/sandbox`, which `mkdirSync` creates at boot — on a Cloud Run container, whose root filesystem is read-only apart from `/tmp`.
+
+Setting the flag is not a workaround; it is the acknowledgement the guard asks for, and it deserves saying plainly what it accepts: a model-chosen command that escapes its workspace reaches this container's filesystem and network. The container is the blast radius, which is why the service account is scoped to one bucket and one database rather than to the project. The worker service gets the path and not the flag, because the guard is scoped to the HTTP role — the worker runs no agent loop.
+
+**A decision table does not boot anything.** `roleRuns` was the only automated coverage the api/worker split had: it asserts which flags a role sets. That is why this was invisible — nothing started a process, so nothing could discover that one of them refuses to. The new tests run the real `dist/index.js` as a child process in each role and assert the outcome: production api refuses and names the remedy, production api with the acknowledgement reaches "Server listening", the worker registers its workers and starts no listener, and the worker in production needs no acknowledgement. Verified by hand as well — production api exits 1 without the flag and answers `/api/health` with `{"status":"ok"}` with it.
+
+`terraform fmt -check` and `terraform validate` pass. The plan and apply remain BLOCKED_EXTERNAL: there is no GCP project in this environment, so no configuration here has ever been applied to a real service.
+
+**Date:** 2026-09-14
+**Impact:** `infrastructure/terraform/main.tf`, `backend/src/role-boot.test.ts` (new, 4 tests).

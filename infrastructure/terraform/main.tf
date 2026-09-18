@@ -294,6 +294,34 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "ROLE"
         value = "api"
       }
+      # The sandbox, without which this service refuses to start — ADR-138.
+      #
+      # backend/Dockerfile sets NODE_ENV=production, and backend/src/index.ts refuses to boot the
+      # HTTP role in production with process-level isolation unless an operator has said, in so
+      # many words, that they accept it (ADR-055). Cloud Run cannot give a container the nested
+      # container isolation SANDBOX_RUNTIME=docker needs. So this service, as defined, could not
+      # start: it would exit on the guard with the very message that explains the remedy, and
+      # nothing in this file supplied it. The Terraform was deploying an API that stops
+      # immediately, and no test here could have noticed — no GCP project exists in the
+      # environment that authored it.
+      #
+      # `true` is the honest setting for this topology and it is not a workaround: it is the
+      # acknowledgement the guard asks for. The consequence is real and worth stating plainly —
+      # a model-chosen command that escapes its workspace reaches this container's filesystem and
+      # network. The container is the blast radius, which is why the service account below is
+      # scoped to one bucket and one database rather than to the project.
+      env {
+        name  = "SANDBOX_ALLOW_PROCESS_IN_PRODUCTION"
+        value = "true"
+      }
+      env {
+        # A writable path: index.ts mkdirSync's this at boot, and a Cloud Run container's root
+        # filesystem is read-only apart from /tmp. The workspace is per-instance and ephemeral,
+        # which is correct — the sandbox is scratch space for one agent run, never storage
+        # (DEPLOYMENT_RUNBOOK.md §"Statelessness").
+        name  = "SANDBOX_ROOT"
+        value = "/tmp/sandbox"
+      }
       env {
         # ADR-112 — how many proxies' X-Forwarded-For entries to trust. Cloud Run's front end
         # appends the caller's address, so 1 takes that entry and ignores anything the caller
@@ -462,6 +490,15 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
       env {
         name  = "ROLE"
         value = "worker"
+      }
+      env {
+        # The worker creates this directory at boot too, and a Cloud Run container's root
+        # filesystem is read-only apart from /tmp — so the default `./data/sandbox` fails here
+        # exactly as it does in the api service (ADR-138). The worker role does NOT trip the
+        # production isolation guard, which is scoped to the HTTP role, so it needs the path and
+        # not the acknowledgement.
+        name  = "SANDBOX_ROOT"
+        value = "/tmp/sandbox"
       }
       env {
         # ADR-040 — the worker WRITES assets (image/video jobs, the ffmpeg render) and the
