@@ -63,6 +63,29 @@ export default function ChatView({
         if (event.type === "token") {
           assistantText += event.delta;
           setMessages((prev) => replaceLast(prev, { role: "assistant", content: assistantText }));
+        } else if (event.type === "tool_call") {
+          /**
+           * A tool call in CHAT is reported, not run — docs/26_DECISIONS.md ADR-141.
+           *
+           * This event was dropped silently. Chat has no executor: the route streams tool calls
+           * and stores them, and nothing anywhere runs one, so a model that decided to reach for
+           * a tool produced a turn that simply stopped — with the reason invisible.
+           *
+           * It is not fixed by executing tools here. The reasoning loop already does that, with
+           * approval gating, budgets, an audit trail and self-correction (ADR-064/133/139), and a
+           * second weaker copy inside a chat route is exactly the duplication that ADR-064
+           * removed. So chat says what happened and where the capability lives.
+           */
+          setMessages((prev) =>
+            replaceLast(prev, {
+              role: "assistant",
+              content:
+                `${assistantText}${assistantText ? "\n\n" : ""}` +
+                `The model asked to use the tool "${event.call.name}". Chat does not run tools — ` +
+                `start an Autonomous agent task from the Tasks screen for work that needs them.`,
+              isError: true,
+            })
+          );
         } else if (event.type === "error") {
           setMessages((prev) => replaceLast(prev, { role: "assistant", content: event.message, isError: true }));
         }

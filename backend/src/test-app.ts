@@ -190,6 +190,9 @@ export async function buildTestApp(): Promise<{
     documentChunks: new PgDocumentChunkRepository(db),
     memoryItems: memoryItemRepo,
     memory: new MemoryService(memoryItemRepo, embeddings),
+    // Off in the harness by default (ADR-141): a second model call per turn would change what
+    // every existing chat test observes. The tests that are ABOUT extraction turn it on.
+    memoryExtractionEnabled: false,
     embeddings,
     sandboxRoot,
     jobQueue,

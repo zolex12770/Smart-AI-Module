@@ -1325,6 +1325,7 @@ async function main() {
     documentChunks,
     memoryItems,
     memory,
+    memoryExtractionEnabled: config.MEMORY_EXTRACTION_ENABLED,
     embeddings,
     sandboxRoot,
     jobQueue,

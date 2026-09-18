@@ -275,6 +275,16 @@ const envSchema = z.object({
   SANDBOX_ALLOW_PROCESS_IN_PRODUCTION: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   SANDBOX_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   SANDBOX_MEMORY_MB: z.coerce.number().int().positive().default(512),
+  /**
+   * Whether a finished chat turn is mined for durable facts — docs/26_DECISIONS.md ADR-141.
+   *
+   * On by default, because "the platform remembers what you tell it across conversations" is a
+   * documented capability and the extraction machinery shipped unreachable, which made that claim
+   * false. It is a switch because it is a SECOND model call per turn: an operator paying per
+   * token may reasonably decide the recall is not worth doubling the calls, and that decision
+   * should not require a code change.
+   */
+  MEMORY_EXTRACTION_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
   // Bootstrap the first administrator on an empty database. Ignored once any user exists.
   BOOTSTRAP_ADMIN_EMAIL: optionalString,
   BOOTSTRAP_ADMIN_PASSWORD: optionalString,

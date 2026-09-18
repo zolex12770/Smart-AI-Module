@@ -46,6 +46,12 @@ export interface AppContext {
   /** Retrieval + injection + extraction. The repository above is the store; this is the
    * subsystem that makes memory reach a model at all (ADR-063). */
   memory: MemoryService;
+  /**
+   * Whether a finished turn is mined for durable facts (ADR-141). A second model call per turn,
+   * so an operator can switch it off; on by default because the capability was documented and
+   * unreachable.
+   */
+  memoryExtractionEnabled: boolean;
   embeddings: EmbeddingService;
   sandboxRoot: string;
   jobQueue: JobQueue;

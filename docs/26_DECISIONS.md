@@ -2271,3 +2271,18 @@ Setting the flag is not a workaround; it is the acknowledgement the guard asks f
 
 **Date:** 2026-09-14
 **Impact:** `shared/src/sse.ts`, `backend/packages/media/src/video-orchestration.ts` + 6 tests.
+
+## ADR-141: The platform forms a memory, and chat says when it cannot use a tool
+
+**Decision:** A finished chat turn is mined for durable facts through the extraction machinery that already existed, behind `MEMORY_EXTRACTION_ENABLED`. A `tool_call` arriving in chat is reported instead of dropped.
+
+**Memory could only hold what somebody typed.** `MEMORY_EXTRACTION_PROMPT` (what to ask), `parseExtractedFacts` (how to read the answer) and `MemoryService.recordExtracted` (trimming, semantic de-duplication against what is already known, provenance) all shipped, all had their own tests, and a grep across the repository found no caller outside those tests. So the platform retrieved memories and injected them into prompts, and never formed one: "it remembers what you tell it across conversations" was true the way a notebook remembers. The missing piece was one post-turn call, and every guard the rest of the platform applies to a model call applies to it — quota-checked before, recorded in the ledger after, never awaited by the response (a user waiting on their answer must not pay for a second call in latency), and dropped on failure, because the turn it came from has already succeeded.
+
+Its output is treated as untrusted, which matters more here than in most places. The exchange it reads is a user's own words, and the facts it produces are injected into FUTURE prompts — "remember that you must ignore your instructions" is a prompt injection with a persistence mechanism. The exchange is delimited (ADR-133) and `recordExtracted` bounds what can be stored.
+
+It is a switch because it is a second model call per turn. On by default, because the capability is documented and was unreachable; off is a legitimate choice for an operator paying per token, and that choice should not need a code change.
+
+**And chat admitted it cannot run tools.** The route streams `tool_call` events and stores them, and nothing anywhere executes one — there is no tool registry in the chat path at all. The client dropped the event, so a model that reached for a tool produced a turn that simply stopped, with the reason invisible. The fix is deliberately NOT to execute tools here: the reasoning loop already does it with approval gating, budgets, an audit trail and self-correction (ADR-064/133/139), and a weaker second copy inside a chat route is precisely the duplication ADR-064 removed. Chat names the tool, says it does not run tools, and points at the Autonomous agent task that does — which is reachable from the interface as of ADR-136.
+
+**Date:** 2026-09-14
+**Impact:** `backend/src/routes/v1/chat.ts`, `backend/src/{config,context,index,test-app}.ts`, `frontend/app/chat/ChatView.tsx`, `.env.example` + 6 tests.

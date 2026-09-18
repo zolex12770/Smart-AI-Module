@@ -137,4 +137,35 @@ describe("ChatView failure and stop", () => {
     });
     expect(replace).not.toHaveBeenCalled();
   });
+
+  it("says what happened when the model asks for a tool, instead of stopping silently", async () => {
+    /**
+     * Chat has no executor — docs/26_DECISIONS.md ADR-141.
+     *
+     * The route streams `tool_call` events and stores them, and nothing anywhere runs one, so a
+     * model that reached for a tool produced a turn that simply stopped with no explanation. The
+     * fix is not to execute tools here: the reasoning loop already does that with approval
+     * gating, budgets and an audit trail (ADR-064/133/139), and a weaker second copy inside a
+     * chat route is the duplication ADR-064 removed. So chat says what happened and where the
+     * capability is.
+     */
+    streamChat.mockImplementation(() =>
+      (async function* () {
+        yield { type: "token", delta: "Let me look that up. " } as ChatStreamEvent;
+        yield { type: "tool_call", call: { id: "c1", name: "fs.read_file", arguments: { path: "notes.txt" } } } as ChatStreamEvent;
+      })()
+    );
+
+    await send("what is in notes.txt?");
+
+    await waitFor(() => {
+      expect(screen.getByText(/asked to use the tool/i)).toBeInTheDocument();
+    });
+    // It names the tool, says chat does not run tools, and points at the thing that does.
+    expect(screen.getByText(/fs\.read_file/)).toBeInTheDocument();
+    expect(screen.getByText(/does not run tools/i)).toBeInTheDocument();
+    expect(screen.getByText(/Autonomous agent task/i)).toBeInTheDocument();
+    // The text that had already streamed is kept.
+    expect(screen.getByText(/Let me look that up/)).toBeInTheDocument();
+  });
 });

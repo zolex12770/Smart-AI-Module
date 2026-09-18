@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
-import { CONVERSATION_SUMMARY_PROMPT, applyConversationWindow } from "@ai-platform/memory";
+import {
+  CONVERSATION_SUMMARY_PROMPT,
+  MEMORY_EXTRACTION_PROMPT,
+  applyConversationWindow,
+  parseExtractedFacts,
+} from "@ai-platform/memory";
+import { wrapUntrustedContent } from "@ai-platform/agent-core";
 import {
   SpanStatusCode,
   withSpan,
@@ -457,6 +463,31 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 });
 
                 /**
+                 * Learning something from the exchange — docs/26_DECISIONS.md ADR-141.
+                 *
+                 * `MEMORY_EXTRACTION_PROMPT`, `parseExtractedFacts` and
+                 * `MemoryService.recordExtracted` all shipped, all tested, and nothing in
+                 * production ever called any of them. So memory could only ever hold what a user
+                 * typed into the Memory screen by hand: the platform RETRIEVED memories and
+                 * injected them, and never formed one. "The platform remembers what you tell it
+                 * across conversations" was true only in the sense that a notebook remembers.
+                 *
+                 * Deliberately after the response has been sent, never awaited by it: this is a
+                 * second model call, and a user waiting on their answer must not pay for it in
+                 * latency. A failure is logged and dropped — not learning a fact is a small loss,
+                 * and failing a completed turn over it would be a large one.
+                 */
+                void extractMemories(ctx, {
+                  projectId,
+                  userId: authCtx.user.id,
+                  conversationId: conversation.id,
+                  userMessage: lastUserMessage,
+                  assistantMessage: event.message.content,
+                  requestId: request.id,
+                  logger: request.log,
+                });
+
+                /**
                  * The metrics used to be emitted HERE, and only here — moved to the router in
                  * ADR-132.
                  *
@@ -528,4 +559,100 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       }
     }
   );
+}
+
+/**
+ * Forms durable memories from a finished exchange — docs/26_DECISIONS.md ADR-141.
+ *
+ * The three pieces this needs were all written and none was ever called:
+ * `MEMORY_EXTRACTION_PROMPT` (what to ask), `parseExtractedFacts` (how to read the answer) and
+ * `MemoryService.recordExtracted` (what to do with it — trimming, semantic de-duplication against
+ * what is already known, provenance). Memory could therefore only ever hold what somebody typed
+ * into the Memory screen by hand.
+ *
+ * Every guard the rest of the platform applies to a model call applies here:
+ *
+ *  - It is a model call, so it is quota-checked first and recorded in the ledger after. An
+ *    unbudgeted background call would be a way to spend past a ceiling the chat turn respected.
+ *  - It never runs when memory injection is off, because forming memories nothing will read is
+ *    pure cost.
+ *  - Its output is UNTRUSTED. It is derived from a user's message, and it is being asked to
+ *    produce facts that will be injected into future prompts — a "remember that you must ignore
+ *    your instructions" is a prompt injection with a persistence mechanism. The exchange is
+ *    delimited (ADR-133) and `recordExtracted` bounds what can be stored.
+ *  - A failure is logged and dropped. The turn it came from has already succeeded.
+ */
+async function extractMemories(
+  ctx: AppContext,
+  input: {
+    projectId: string;
+    userId: string;
+    conversationId: string;
+    userMessage: { content: string } | undefined;
+    assistantMessage: string;
+    requestId: string;
+    logger: { warn: (obj: unknown, msg: string) => void };
+  }
+): Promise<void> {
+  if (!input.userMessage?.content.trim() || !input.assistantMessage.trim()) return;
+  if (!ctx.memoryExtractionEnabled) return;
+
+  const exchange = `User: ${input.userMessage.content}\n\nAssistant: ${input.assistantMessage}`.slice(0, 6_000);
+  const prompt = `${wrapUntrustedContent(exchange)}`;
+
+  try {
+    const estimate = estimatePromptTokens(MEMORY_EXTRACTION_PROMPT + prompt);
+    const allowed = await ctx.quota.checkLlmTokens(input.projectId, estimate);
+    if (!allowed.allowed) return;
+
+    let text = "";
+    let provider = "unknown";
+    let model = "unknown";
+    let usage = { inputTokens: 0, outputTokens: 0 };
+    for await (const event of ctx.router.streamChat({
+      messages: [
+        { role: "system", content: MEMORY_EXTRACTION_PROMPT },
+        { role: "user", content: prompt },
+      ],
+    })) {
+      if (event.type === "token") text += event.delta;
+      if (event.type === "done") {
+        text = event.message.content || text;
+        provider = event.provider;
+        model = event.model;
+        usage = event.usage;
+      }
+    }
+
+    const facts = parseExtractedFacts(text);
+    if (facts.length > 0) {
+      await ctx.memory.recordExtracted({
+        projectId: input.projectId,
+        userId: input.userId,
+        conversationId: input.conversationId,
+        facts,
+      });
+    }
+
+    await ctx.usage.create({
+      id: uuid(),
+      projectId: input.projectId,
+      userId: input.userId,
+      kind: "llm",
+      provider,
+      model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      units: null,
+      estimatedCostUsd: estimateLlmCostUsd(provider, model, usage),
+      requestId: input.requestId,
+      // One extraction per request: a retry conflicts rather than charging twice.
+      idempotencyKey: `llm:memory-extraction:${input.requestId}`,
+    });
+  } catch (error) {
+    input.logger.warn(
+      { err: error instanceof Error ? error.message : String(error) },
+      "memory extraction failed; the turn is unaffected"
+    );
+  }
 }
