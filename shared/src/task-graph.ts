@@ -201,4 +201,36 @@ export type TaskEvent =
   | { type: "node"; taskId: string; node: TaskNode }
   | { type: "transition"; taskId: string; transition: TaskTransition }
   | { type: "completed"; taskId: string; output: Record<string, unknown> }
-  | { type: "failed"; taskId: string; error: string };
+  | { type: "failed"; taskId: string; error: string }
+  /**
+   * What the model is DOING inside a reasoning node — docs/26_DECISIONS.md ADR-134.
+   *
+   * A model-driven run emitted `tool_call`, `tool_result` and `verification` internally and the
+   * engine forwarded none of them, so a task that spent ten minutes reading files and running
+   * commands showed a spinner and then an answer. There was no way to see what it had done while
+   * it was doing it, and afterwards only the final text survived: which tools ran, with what
+   * arguments, and what came back existed nowhere a user or an auditor could look.
+   *
+   * Arguments are included because an approval that does not show them is an approval given
+   * blind (ADR-135), and the same is true of an audit trail.
+   */
+  | {
+      type: "tool_call";
+      taskId: string;
+      nodeId: string;
+      callId: string;
+      name: string;
+      arguments: Record<string, unknown>;
+      iteration: number;
+    }
+  | {
+      type: "tool_result";
+      taskId: string;
+      nodeId: string;
+      callId: string;
+      ok: boolean;
+      /** Truncated for transport; the node's persisted log holds the full text. */
+      preview: string;
+      iteration: number;
+    }
+  | { type: "verification"; taskId: string; nodeId: string; ok: boolean; reason?: string };

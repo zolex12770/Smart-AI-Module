@@ -6,12 +6,38 @@ import { API_URL } from "./api";
 import { getSelectedProjectId } from "./auth-client";
 
 interface TaskEventPayload {
-  type: "state" | "node" | "transition" | "completed" | "failed";
+  type: "state" | "node" | "transition" | "completed" | "failed" | "tool_call" | "tool_result" | "verification";
   taskId: string;
   state?: TaskState;
   node?: TaskNode;
   output?: Record<string, unknown>;
   error?: string;
+  nodeId?: string;
+  callId?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  ok?: boolean;
+  preview?: string;
+  reason?: string;
+  iteration?: number;
+}
+
+/**
+ * One thing the model did, as the screen shows it — docs/26_DECISIONS.md ADR-134.
+ *
+ * A model-driven run used to be a spinner followed by an answer: the loop emitted every tool call
+ * and result, the engine forwarded none of them, and a task that spent ten minutes reading files
+ * and running commands showed nothing at all while it did so.
+ */
+export interface TaskActivity {
+  kind: "tool_call" | "tool_result" | "verification";
+  callId?: string;
+  name?: string;
+  arguments?: Record<string, unknown>;
+  ok?: boolean;
+  preview?: string;
+  reason?: string;
+  iteration?: number;
 }
 
 /**
@@ -28,6 +54,7 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
   const [nodesById, setNodesById] = useState<Record<string, TaskNode>>(() =>
     Object.fromEntries(initialNodes.map((n) => [n.id, n]))
   );
+  const [activity, setActivity] = useState<TaskActivity[]>([]);
   const sourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -68,10 +95,36 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
       setTask((prev) => ({ ...prev, errorMessage: payload.error ?? prev.errorMessage }));
     };
 
+    /**
+     * The live activity feed (ADR-134). Appended rather than replaced, because the interesting
+     * thing about an agent run is the SEQUENCE — which tool it reached for after seeing what.
+     */
+    const onToolCall = (e: MessageEvent) => {
+      const p = JSON.parse(e.data) as TaskEventPayload;
+      setActivity((prev) => [
+        ...prev,
+        { kind: "tool_call", callId: p.callId, name: p.name, arguments: p.arguments, iteration: p.iteration },
+      ]);
+    };
+    const onToolResult = (e: MessageEvent) => {
+      const p = JSON.parse(e.data) as TaskEventPayload;
+      setActivity((prev) => [
+        ...prev,
+        { kind: "tool_result", callId: p.callId, ok: p.ok, preview: p.preview, iteration: p.iteration },
+      ]);
+    };
+    const onVerification = (e: MessageEvent) => {
+      const p = JSON.parse(e.data) as TaskEventPayload;
+      setActivity((prev) => [...prev, { kind: "verification", ok: p.ok, reason: p.reason }]);
+    };
+
     source.addEventListener("state", onState);
     source.addEventListener("node", onNode);
     source.addEventListener("completed", onCompleted);
     source.addEventListener("failed", onFailed);
+    source.addEventListener("tool_call", onToolCall);
+    source.addEventListener("tool_result", onToolResult);
+    source.addEventListener("verification", onVerification);
     source.onerror = () => {
       // A closed/errored SSE connection just stops live updates; the page still shows the
       // last known state, and a manual refresh re-fetches it — no retry loop needed for a
@@ -79,10 +132,17 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
     };
 
     return () => {
+      source.removeEventListener("state", onState);
+      source.removeEventListener("node", onNode);
+      source.removeEventListener("completed", onCompleted);
+      source.removeEventListener("failed", onFailed);
+      source.removeEventListener("tool_call", onToolCall);
+      source.removeEventListener("tool_result", onToolResult);
+      source.removeEventListener("verification", onVerification);
       source.close();
     };
   }, [taskId]);
 
   const nodes = Object.values(nodesById).sort((a, b) => a.createdAt - b.createdAt);
-  return { task, nodes };
+  return { task, nodes, activity };
 }

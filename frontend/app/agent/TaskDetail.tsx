@@ -25,7 +25,7 @@ export default function TaskDetail({
   initialNodes: TaskNode[];
   variant?: "agent" | "coding";
 }) {
-  const { task, nodes } = useTaskEvents(taskId, initialTask, initialNodes);
+  const { task, nodes, activity } = useTaskEvents(taskId, initialTask, initialNodes);
   const [busyNodeId, setBusyNodeId] = useState<string | null>(null);
 
   const waitingApproval = nodes.find((n) => n.status === "waiting_approval");
@@ -79,10 +79,62 @@ export default function TaskDetail({
       {waitingApproval && (
         <div className="card" style={{ borderColor: "var(--warning)" }}>
           <strong>Waiting for approval</strong>
-          <p className="page-subtitle">
-            Tool call <code>{waitingApproval.toolId}</code> requires human approval before it runs (docs/13_SECURITY_ARCHITECTURE.md).
-          </p>
-          <pre className="mono">{JSON.stringify(waitingApproval.input, null, 2)}</pre>
+          {/**
+           * WHAT is being approved — docs/26_DECISIONS.md ADR-135.
+           *
+           * This card read `node.toolId` and `node.input`, which are the fields of a DECLARATIVE
+           * `tool_call` node. A model-driven run parks a `reasoning` node instead: its `toolId` is
+           * null and its `input` is the goal, so the card said "Tool call `undefined`" above a
+           * copy of the original request and the approver pressed Approve knowing neither the
+           * tool nor its arguments. An approval gate whose whole purpose is a human decision was
+           * asking for that decision blind — on a destructive tool, which is the only kind that
+           * reaches it.
+           *
+           * The pending call is persisted on the node (`output.pendingCall`) and is read first;
+           * a declarative node still falls back to its own fields.
+           */}
+          {(() => {
+            const pending = pendingCallOf(waitingApproval);
+            return (
+              <>
+                <p className="page-subtitle">
+                  {pending
+                    ? "This run stopped to ask before running a tool that can change or destroy things (docs/13_SECURITY_ARCHITECTURE.md)."
+                    : "A tool call requires human approval before it runs (docs/13_SECURITY_ARCHITECTURE.md)."}
+                </p>
+                <p style={{ margin: "6px 0" }}>
+                  Tool: <code>{pending?.name ?? waitingApproval.toolId ?? "unknown"}</code>
+                </p>
+                {waitingApproval.output && typeof (waitingApproval.output as { reason?: unknown }).reason === "string" && (
+                  <p className="page-subtitle">
+                    Reason: {String((waitingApproval.output as { reason?: unknown }).reason)}
+                  </p>
+                )}
+                <strong style={{ display: "block", marginTop: 8 }}>Arguments</strong>
+                <pre className="mono">{JSON.stringify(pending?.arguments ?? waitingApproval.input, null, 2)}</pre>
+                {(() => {
+                  const queued = queuedCallsOf(waitingApproval).filter((c) => c.id !== pending?.id);
+                  if (queued.length === 0) return null;
+                  return (
+                    <>
+                      {/* The model asked for these in the same turn, after the gated one. They
+                          run only if they are approved in their own right. */}
+                      <strong style={{ display: "block", marginTop: 8 }}>
+                        Also requested in this turn, not yet run
+                      </strong>
+                      <ul className="page-subtitle" style={{ margin: "4px 0 0 18px" }}>
+                        {queued.map((c) => (
+                          <li key={c.id}>
+                            <code>{c.name}</code>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  );
+                })()}
+              </>
+            );
+          })()}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button className="btn" disabled={busyNodeId === waitingApproval.id} onClick={() => handleApprove(waitingApproval.id)}>
               Approve
@@ -90,6 +142,38 @@ export default function TaskDetail({
             <button className="btn btn-danger" disabled={busyNodeId === waitingApproval.id} onClick={() => handleReject(waitingApproval.id)}>
               Reject
             </button>
+          </div>
+        </div>
+      )}
+
+      {activity.length > 0 && (
+        <div className="card">
+          {/* What the model is doing, as it does it (ADR-134). Before this a ten-minute run was
+              a spinner and then an answer. */}
+          <strong>Activity</strong>
+          <div className="plan-steps" style={{ marginTop: 8 }}>
+            {activity.map((entry, i) => (
+              <div key={i} className="plan-step">
+                {entry.kind === "tool_call" && (
+                  <span style={{ flex: 1 }}>
+                    Called <code>{entry.name}</code>
+                    <span className="page-subtitle"> {JSON.stringify(entry.arguments)}</span>
+                  </span>
+                )}
+                {entry.kind === "tool_result" && (
+                  <span style={{ flex: 1 }}>
+                    {entry.ok ? "Result" : "Failed"}
+                    <span className="page-subtitle"> {entry.preview}</span>
+                  </span>
+                )}
+                {entry.kind === "verification" && (
+                  <span style={{ flex: 1 }}>
+                    Verification {entry.ok ? "passed" : "failed"}
+                    {entry.reason ? <span className="page-subtitle"> — {entry.reason}</span> : null}
+                  </span>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -191,4 +275,36 @@ function CodingTabs({ nodes }: { nodes: TaskNode[] }) {
         ))}
     </div>
   );
+}
+
+/**
+ * The tool call a parked run is asking about — docs/26_DECISIONS.md ADR-135.
+ *
+ * A model-driven run parks a `reasoning` node and persists the call on its output; a declarative
+ * plan parks a `tool_call` node whose own fields describe it. The approval card has to read the
+ * first and fall back to the second, because it used to read only the second and therefore showed
+ * nothing at all for the model-driven case.
+ */
+function pendingCallOf(node: TaskNode): { id: string; name: string; arguments: Record<string, unknown> } | null {
+  const raw = (node.output as { pendingCall?: unknown } | null | undefined)?.pendingCall;
+  if (!raw || typeof raw !== "object") return null;
+  const call = raw as { id?: unknown; name?: unknown; arguments?: unknown };
+  if (typeof call.name !== "string") return null;
+  return {
+    id: typeof call.id === "string" ? call.id : "",
+    name: call.name,
+    arguments: (call.arguments ?? {}) as Record<string, unknown>,
+  };
+}
+
+/** Every call from the parked turn that has not run, including the gated one (ADR-099). */
+function queuedCallsOf(node: TaskNode): Array<{ id: string; name: string }> {
+  const raw = (node.output as { pendingCalls?: unknown } | null | undefined)?.pendingCalls;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((c): c is { id?: unknown; name?: unknown } => Boolean(c) && typeof c === "object")
+    .map((c) => ({
+      id: typeof c.id === "string" ? c.id : "",
+      name: typeof c.name === "string" ? c.name : "unknown",
+    }));
 }

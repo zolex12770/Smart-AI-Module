@@ -49,6 +49,16 @@ class ScriptedAgentProvider implements LLMProvider {
   readonly isMock = false;
   readonly model = "scripted-1";
   readonly turnsSeen: number[] = [];
+  /**
+   * How many tools each request offered, snapshotted at call time — ADR-133.
+   *
+   * `requestsSeen` stores the request OBJECT, and the reasoning loop mutates its transcript
+   * array in place, so every entry ends up pointing at the same final transcript. Sizes have to
+   * be captured when the call happens, exactly as `turnsSeen` already does; this is the same
+   * snapshot for the tool list, which is what distinguishes a loop turn from the verification
+   * call that follows the answer (the verifier is given no tools).
+   */
+  readonly toolsOfferedSeen: number[] = [];
   /** Every transcript this provider was handed, so a test can assert what the model SAW.
    *  A provider rejects an assistant turn whose tool calls lack results, and that rejection
    *  is invisible to a scripted provider unless the test checks the shape itself. */
@@ -63,6 +73,7 @@ class ScriptedAgentProvider implements LLMProvider {
 
   async *streamChat(request: ChatRequest): AsyncGenerator<ChatStreamEvent, void, unknown> {
     this.turnsSeen.push(request.messages.length);
+    this.toolsOfferedSeen.push(request.tools?.length ?? 0);
     this.requestsSeen.push(request);
     const turn = this.turns[Math.min(this.index++, this.turns.length - 1)];
     const calls = turn.calls ?? [];
@@ -202,11 +213,24 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     // The real, observable outcome: the file on disk changed.
     expect(readFileSync(join(workspaceDir, "answer.txt"), "utf8")).toContain("42");
 
-    // The model was called three times, each turn seeing a longer transcript than the last —
-    // which is what makes it a reasoning loop rather than three unrelated calls.
-    expect(provider.turnsSeen).toHaveLength(3);
-    expect(provider.turnsSeen[1]).toBeGreaterThan(provider.turnsSeen[0]);
-    expect(provider.turnsSeen[2]).toBeGreaterThan(provider.turnsSeen[1]);
+    /**
+     * The model was called three times for the LOOP, each turn seeing a longer transcript than
+     * the last — which is what makes it a reasoning loop rather than three unrelated calls.
+     *
+     * A fourth call follows, and it is the verification pass (ADR-133). The loop's calls carry
+     * the tool list and the verifier's does not, which is how they are told apart here — and
+     * asserting the verifier ran at all is the point: `planAutonomous` claimed this check for a
+     * long time while the hook it needs was supplied by nothing.
+     */
+    const loopSizes = provider.turnsSeen.filter((_size, i) => provider.toolsOfferedSeen[i]! > 0);
+    expect(loopSizes).toHaveLength(3);
+    expect(loopSizes[1]).toBeGreaterThan(loopSizes[0]!);
+    expect(loopSizes[2]).toBeGreaterThan(loopSizes[1]!);
+
+    // Exactly one call with no tools: the verification pass.
+    expect(provider.toolsOfferedSeen.filter((n) => n === 0)).toHaveLength(1);
+    const verifier = provider.requestsSeen[provider.toolsOfferedSeen.indexOf(0)];
+    expect(verifier!.messages[0]!.content).toMatch(/checking whether an answer/i);
 
     const [node] = await nodes.listByRootUnscoped(task.id);
     expect(node.kind).toBe("reasoning");
@@ -325,6 +349,53 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
    * A scripted provider accepts anything, which is exactly why this asserts the SHAPE of the
    * transcript the model was handed rather than merely that the run completed.
    */
+  /**
+   * Verification that can say no — docs/26_DECISIONS.md ADR-133.
+   *
+   * `planAutonomous` set `verificationMethod: "none"` and justified it in a comment: "the
+   * reasoning loop runs its own verification pass and can self-correct". The loop does contain
+   * that pass and the self-correction turn behind it — and the `verify` hook they need was
+   * supplied by nothing, anywhere in the backend. So the plan claimed a check that no code
+   * performed, and the branch was unreachable: a gate that cannot fail.
+   *
+   * The scripted provider answers the verifier with real JSON here, which is the only way to
+   * exercise the rejection path.
+   */
+  it("rejects an answer that does not pass verification, then accepts the correction", async () => {
+    const { engine, provider } = build([
+      // Turn 1: the model answers, badly.
+      { text: "It is probably fine." },
+      // Turn 2: the VERIFIER is asked, and says no. (No tools are offered on this call.)
+      { text: '{"ok": false, "reason": "The answer does not address the goal."}' },
+      // Turn 3: the loop hands the model its own failure; it answers properly.
+      { text: "The file contains 41." },
+      // Turn 4: the verifier is not consulted again — one correction round only.
+      { text: '{"ok": true}' },
+    ]);
+
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Say what the file contains." },
+      { projectId: PROJECT, userId: USER }
+    );
+    const finished = await waitFor(task.id, ["COMPLETED", "FAILED"]);
+
+    // The run completes — with the CORRECTED answer, not the first one.
+    expect(finished.state).toBe("COMPLETED");
+    expect(String((finished.output as { content?: string })?.content)).toContain("41");
+
+    // The verifier really was consulted, and really rejected: without the correction turn the
+    // run would have finished on "It is probably fine."
+    const verifierCalls = provider.toolsOfferedSeen.filter((n) => n === 0).length;
+    expect(verifierCalls).toBeGreaterThanOrEqual(1);
+    const correction = provider.requestsSeen
+      .filter((_r, i) => provider.toolsOfferedSeen[i]! > 0)
+      .at(-1)!
+      .messages.map((m) => m.content)
+      .join("\n");
+    expect(correction).toMatch(/did not pass verification/i);
+  });
+
   it("parks and resumes a multi-call turn with a result for every tool call", async () => {
     const ran: string[] = [];
     const tool = (id: string, gated: boolean): NativeToolEntry => ({
@@ -391,7 +462,9 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     // THE LOAD-BEARING ASSERTION: in the transcript the model was handed on resume, every tool
     // call in every assistant turn has a matching `tool` message. This is precisely the
     // invariant a real provider enforces, and precisely what parking used to break.
-    const resumed = provider.requestsSeen.at(-1);
+    // The last LOOP request, not the last request of any kind: a verification call follows the
+    // answer (ADR-133) and carries no tools, so it is not the transcript under test here.
+    const resumed = provider.requestsSeen.filter((_r, i) => provider.toolsOfferedSeen[i]! > 0).at(-1);
     expect(resumed).toBeDefined();
     const resultIds = new Set(
       resumed!.messages.filter((m) => m.role === "tool").map((m) => (m as { toolCallId?: string }).toolCallId)

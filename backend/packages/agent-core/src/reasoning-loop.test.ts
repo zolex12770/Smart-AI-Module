@@ -101,7 +101,12 @@ describe("runReasoningLoop", () => {
     // reasoning loop rather than two unrelated calls.
     const secondTurn = provider.seenRequests[1].messages;
     const toolMessage = secondTurn.find((m) => m.role === "tool");
-    expect(toolMessage).toMatchObject({ content: "391", toolCallId: "c1" });
+    expect(toolMessage?.toolCallId).toBe("c1");
+    // The RESULT reaches the model — and it arrives delimited as untrusted data (ADR-133),
+    // because this is the literal output of a tool and it is being read by a model that holds a
+    // filesystem and a terminal.
+    expect(toolMessage?.content).toContain("391");
+    expect(toolMessage?.content).toMatch(/<untrusted_content>/);
     expect(secondTurn.some((m) => m.role === "assistant" && m.toolCalls?.[0]?.name === "calculator")).toBe(true);
   });
 

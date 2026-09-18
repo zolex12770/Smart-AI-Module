@@ -83,8 +83,12 @@ export function planTask(
  * model inside it. The task graph keeps doing what it is good at — persistence, state,
  * approval, retries, crash recovery — and stops pretending to supply the intelligence.
  *
- * `verificationMethod: "none"` because the reasoning loop runs its own verification pass and
- * can self-correct; layering a schema check on top would only assert that a string is a string.
+ * `verificationMethod: "none"` because the reasoning loop runs its own verification pass and can
+ * self-correct; layering a schema check on top would only assert that a string is a string.
+ *
+ * That sentence was false for as long as it existed — the loop's `verify` hook was never supplied
+ * by anything, so the branch and the self-correction turn behind it were unreachable, and this
+ * comment described a check nothing performed (ADR-133). The engine supplies it now.
  */
 function planAutonomous(input: Record<string, unknown>): CreateTaskNodeInput[] {
   const goal = String(input.goal ?? input.message ?? "").trim();
