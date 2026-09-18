@@ -133,6 +133,31 @@ export interface ToolRow {
 }
 
 export const listTools = () => request<{ tools: ToolRow[] }>("/api/v1/tools");
+
+// --- the agent's workspace ------------------------------------------------------------
+
+/**
+ * A file in the project workspace the coding agent works inside — ADR-142.
+ *
+ * Distinct from an uploaded DOCUMENT: a document goes to the asset store for retrieval, and the
+ * filesystem tools cannot see it. This is the directory the agent reads, writes and runs commands
+ * in, and until now nothing could put anything into it.
+ */
+export interface WorkspaceFile {
+  path: string;
+  sizeBytes: number;
+  modifiedAt: string;
+}
+
+export const listWorkspaceFiles = () =>
+  request<{ files: WorkspaceFile[]; truncated: boolean }>("/api/v1/workspace/files");
+export const readWorkspaceFile = (path: string) =>
+  request<{ path: string; content: string }>(`/api/v1/workspace/file?path=${encodeURIComponent(path)}`);
+export const writeWorkspaceFile = (path: string, content: string) =>
+  request<{ file: WorkspaceFile }>("/api/v1/workspace/files", {
+    method: "POST",
+    body: JSON.stringify({ path, content }),
+  });
 export const setToolEnabled = (id: string, enabled: boolean) =>
   request<{ tool: { id: string; enabled: boolean } }>(`/api/v1/tools/${encodeURIComponent(id)}/enable`, {
     method: "POST",

@@ -165,3 +165,93 @@ describe("TaskDetail activity feed", () => {
     expect(screen.getByText(/ENOENT/)).toBeInTheDocument();
   });
 });
+
+/**
+ * The coding-agent tabs read what really happened — docs/26_DECISIONS.md ADR-142.
+ *
+ * They filtered the task's NODES for `toolId === "terminal.run_command"` and
+ * `toolId === "code.apply_literal_fix"`. `planFixFailingTest` returns exactly one node, of kind
+ * `reasoning`, with no `toolId` at all — every command and edit happens inside it — so both
+ * filters matched nothing for every run that has ever existed. The screen said "Commands run (0)"
+ * over a task that had just run a dozen. And `code.apply_literal_fix` is not a registered tool at
+ * all: the tab filtered for something that does not exist.
+ */
+describe("TaskDetail coding tabs", () => {
+  afterEach(() => {
+    hookResult.activity = [];
+    hookResult.nodes = [];
+  });
+
+  const codingTask = () =>
+    ({ ...task(), taskType: "fix_failing_test", state: "RUNNING" }) as unknown as Task;
+
+  it("counts and shows the commands the reasoning node really ran", async () => {
+    hookResult.task = codingTask();
+    hookResult.nodes = [];
+    hookResult.activity = [
+      {
+        kind: "tool_call",
+        callId: "c1",
+        name: "terminal.run_command",
+        arguments: { command: "npx", args: ["vitest", "run"] },
+        iteration: 1,
+      },
+      { kind: "tool_result", callId: "c1", ok: false, preview: "1 failed", iteration: 1 },
+      { kind: "tool_call", callId: "c2", name: "fs.write_file", arguments: { path: "src/sum.ts", content: "export const sum = (a, b) => a + b;" }, iteration: 2 },
+      { kind: "tool_result", callId: "c2", ok: true, preview: "{}", iteration: 2 },
+    ];
+
+    render(<TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={[]} variant="coding" />);
+
+    // Not (0).
+    expect(screen.getByText(/Commands run \(1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/Files changed \(1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/vitest run/)).toBeInTheDocument();
+    // Twice on purpose: the Activity card (ADR-134) shows the same result as the Commands tab.
+    // Two views of one run is the intent, so this asserts presence rather than uniqueness.
+    expect(screen.getAllByText(/1 failed/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("reads a finished run's activity off the node, with no stream to listen to", () => {
+    // Opening a task after it finished is the normal case, and its history is the reason to open
+    // it. The live feed is empty then; the node's persisted log is not.
+    hookResult.task = { ...codingTask(), state: "COMPLETED" } as unknown as Task;
+    hookResult.activity = [];
+    hookResult.nodes = [
+      {
+        id: "node-1",
+        kind: "reasoning",
+        status: "completed",
+        toolId: null,
+        input: { goal: "fix the test" },
+        output: {
+          content: "Fixed it.",
+          activity: [
+            { kind: "tool_call", callId: "c1", name: "terminal.run_command", arguments: { command: "npm", args: ["test"] } },
+            { kind: "tool_result", callId: "c1", ok: true, content: "all passed" },
+          ],
+        },
+        modelProvider: null,
+        createdAt: 1,
+      } as unknown as TaskNode,
+    ];
+
+    render(
+      <TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={hookResult.nodes} variant="coding" />
+    );
+
+    expect(screen.getByText(/Commands run \(1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/npm test/)).toBeInTheDocument();
+    expect(screen.getByText(/all passed/)).toBeInTheDocument();
+  });
+
+  it("says nothing has happened rather than showing an empty tab as a result", () => {
+    hookResult.task = codingTask();
+    hookResult.activity = [];
+    hookResult.nodes = [];
+
+    render(<TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={[]} variant="coding" />);
+    expect(screen.getByText(/Commands run \(0\)/)).toBeInTheDocument();
+    expect(screen.getByText(/No commands run yet/i)).toBeInTheDocument();
+  });
+});

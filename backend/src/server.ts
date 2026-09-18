@@ -21,6 +21,7 @@ import { registerRagRoutes } from "./routes/v1/rag.js";
 import { registerPlatformRoutes } from "./routes/v1/platform.js";
 import { registerUsageRoute } from "./routes/v1/usage.js";
 import { registerVideoRoutes } from "./routes/v1/videos.js";
+import { registerWorkspaceRoutes } from "./routes/v1/workspace.js";
 
 export const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 
@@ -206,6 +207,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   registerChatRoute(app, ctx);
   registerAgentRoutes(app, ctx);
   registerRagRoutes(app, ctx);
+  registerWorkspaceRoutes(app, ctx);
   registerAudioRoutes(app, ctx);
   registerImageRoutes(app, ctx);
   registerVideoRoutes(app, ctx);

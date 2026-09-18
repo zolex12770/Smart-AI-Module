@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { Task, TaskNode } from "@ai-platform/shared";
 import { approveNode, cancelTask, rejectNode } from "../lib/api";
 import { badgeClass, StatusBadge } from "../lib/status-badge";
-import { useTaskEvents } from "../lib/use-task-events";
+import { useTaskEvents, type TaskActivity } from "../lib/use-task-events";
 
 const TERMINAL_STATES = new Set(["COMPLETED", "FAILED", "CANCELLED"]);
 const NODE_ICON: Record<string, string> = {
@@ -195,7 +195,7 @@ export default function TaskDetail({
         </div>
       </div>
 
-      {variant === "coding" && <CodingTabs nodes={nodes} />}
+      {variant === "coding" && <CodingTabs nodes={nodes} activity={activity} />}
 
       {nodes.some((n) => n.errorMessage) && (
         <div className="card" style={{ borderColor: "var(--danger)" }}>
@@ -220,39 +220,60 @@ export default function TaskDetail({
   );
 }
 
-function CodingTabs({ nodes }: { nodes: TaskNode[] }) {
+/**
+ * What the coding agent actually did — docs/26_DECISIONS.md ADR-142.
+ *
+ * These tabs filtered the task's NODES for `toolId === "terminal.run_command"` and
+ * `toolId === "code.apply_literal_fix"`. The planner produces neither: `planFixFailingTest`
+ * returns exactly ONE node, of kind `reasoning`, with no `toolId` at all, and every command and
+ * every edit happens inside it. So both filters matched nothing for every run that has ever
+ * existed — "Commands run (0)" and "Files changed (0)" above a task that had just run a dozen
+ * commands and rewritten a file. `code.apply_literal_fix` is not even a registered tool; the tab
+ * was filtering for a tool that does not exist.
+ *
+ * The real source is the reasoning node's activity (ADR-134), which is where the tool calls and
+ * their results now live — both streamed and persisted. A command is a `terminal.run_command`
+ * call; a file change is an `fs.write_file` or `fs.delete_file` call. The tabs read that.
+ */
+function CodingTabs({ nodes, activity }: { nodes: TaskNode[]; activity: TaskActivity[] }) {
   const [tab, setTab] = useState<"commands" | "files">("commands");
-  const commandNodes = nodes.filter((n) => n.toolId === "terminal.run_command");
-  const fixNodes = nodes.filter((n) => n.toolId === "code.apply_literal_fix");
+
+  // Live activity when the run is in flight, the persisted log when it is over: the same shape
+  // either way, so the screen does not need to know which it is looking at.
+  const entries = activity.length > 0 ? activity : persistedActivityOf(nodes);
+
+  const calls = entries.filter((e) => e.kind === "tool_call");
+  const resultFor = (callId?: string) =>
+    entries.find((e) => e.kind === "tool_result" && callId !== undefined && e.callId === callId);
+
+  const commands = calls.filter((c) => c.name === "terminal.run_command");
+  const fileWrites = calls.filter((c) => c.name === "fs.write_file" || c.name === "fs.delete_file");
 
   return (
     <div className="card">
       <div className="tabs">
         <span className={`tab ${tab === "commands" ? "active" : ""}`} onClick={() => setTab("commands")}>
-          Commands run ({commandNodes.length})
+          Commands run ({commands.length})
         </span>
         <span className={`tab ${tab === "files" ? "active" : ""}`} onClick={() => setTab("files")}>
-          Files changed ({fixNodes.length})
+          Files changed ({fileWrites.length})
         </span>
       </div>
 
       {tab === "commands" &&
-        (commandNodes.length === 0 ? (
+        (commands.length === 0 ? (
           <p className="empty-state">No commands run yet.</p>
         ) : (
-          commandNodes.map((n) => {
-            const output = n.output as { exitCode?: number; stdout?: string; stderr?: string } | null;
+          commands.map((call, i) => {
+            const args = call.arguments as { command?: unknown; args?: unknown } | undefined;
+            const result = resultFor(call.callId);
             return (
-              <div key={n.id} style={{ marginBottom: 12 }}>
+              <div key={call.callId ?? i} style={{ marginBottom: 12 }}>
                 <div className="mono">
-                  $ {String(n.input.command ?? "")} {(n.input.args as string[] | undefined)?.join(" ") ?? ""}
+                  $ {String(args?.command ?? "")} {Array.isArray(args?.args) ? args!.args.join(" ") : ""}
                 </div>
-                {output && (
-                  <>
-                    <div className="page-subtitle">exit code: {output.exitCode}</div>
-                    {output.stdout && <pre className="mono">{output.stdout}</pre>}
-                    {output.stderr && <pre className="mono error-text">{output.stderr}</pre>}
-                  </>
+                {result && (
+                  <pre className={`mono ${result.ok ? "" : "error-text"}`}>{result.preview}</pre>
                 )}
               </div>
             );
@@ -260,21 +281,62 @@ function CodingTabs({ nodes }: { nodes: TaskNode[] }) {
         ))}
 
       {tab === "files" &&
-        (fixNodes.length === 0 ? (
+        (fileWrites.length === 0 ? (
           <p className="empty-state">No file changes yet.</p>
         ) : (
-          fixNodes.map((n) => (
-            <div key={n.id} style={{ marginBottom: 12 }}>
-              <div className="mono">{String(n.input.path ?? "")}</div>
-              <div className="mono error-text">- {String(n.input.find ?? "")}</div>
-              <div className="mono" style={{ color: "var(--success)" }}>
-                + {String(n.input.replace ?? "")}
+          fileWrites.map((call, i) => {
+            const args = call.arguments as { path?: unknown; content?: unknown } | undefined;
+            const result = resultFor(call.callId);
+            return (
+              <div key={call.callId ?? i} style={{ marginBottom: 12 }}>
+                <div className="mono">
+                  {call.name === "fs.delete_file" ? "deleted " : "wrote "}
+                  {String(args?.path ?? "")}
+                </div>
+                {result && !result.ok && <div className="mono error-text">{result.preview}</div>}
+                {typeof args?.content === "string" && (
+                  <pre className="mono" style={{ color: "var(--success)" }}>
+                    {args.content.slice(0, 1_000)}
+                  </pre>
+                )}
               </div>
-            </div>
-          ))
+            );
+          })
         ))}
     </div>
   );
+}
+
+/**
+ * The activity a finished run left on its node (ADR-134), in the same shape the live feed uses.
+ *
+ * A task opened after it finished has no stream to read, and its history is the reason to open it.
+ */
+function persistedActivityOf(nodes: TaskNode[]): TaskActivity[] {
+  const out: TaskActivity[] = [];
+  for (const node of nodes) {
+    const raw = (node.output as { activity?: unknown } | null | undefined)?.activity;
+    if (!Array.isArray(raw)) continue;
+    for (const item of raw) {
+      if (!item || typeof item !== "object") continue;
+      const entry = item as Record<string, unknown>;
+      const kind = entry.kind;
+      if (kind !== "tool_call" && kind !== "tool_result" && kind !== "verification") continue;
+      out.push({
+        kind,
+        callId: typeof entry.callId === "string" ? entry.callId : undefined,
+        name: typeof entry.name === "string" ? entry.name : undefined,
+        arguments: (entry.arguments ?? undefined) as Record<string, unknown> | undefined,
+        ok: typeof entry.ok === "boolean" ? entry.ok : undefined,
+        // The persisted log keeps the fuller text under `content`; the live feed calls it
+        // `preview`. One field reaches the screen so the renderer needs no branch.
+        preview: typeof entry.content === "string" ? entry.content : undefined,
+        reason: typeof entry.reason === "string" ? entry.reason : undefined,
+        iteration: typeof entry.iteration === "number" ? entry.iteration : undefined,
+      });
+    }
+  }
+  return out;
 }
 
 /**

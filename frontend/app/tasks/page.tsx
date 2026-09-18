@@ -3,7 +3,16 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { Task, TaskType } from "@ai-platform/shared";
-import { createTask, listTasks, listTools, setToolEnabled, type ToolRow } from "../lib/api";
+import {
+  createTask,
+  listTasks,
+  listTools,
+  listWorkspaceFiles,
+  setToolEnabled,
+  writeWorkspaceFile,
+  type ToolRow,
+  type WorkspaceFile,
+} from "../lib/api";
 import { StatusBadge } from "../lib/status-badge";
 
 const TASK_TYPES: { value: TaskType; label: string; fields: string[]; hint?: string }[] = [
@@ -114,6 +123,7 @@ export default function TasksPage() {
         </div>
         {activeType.hint && <p className="page-subtitle">{activeType.hint}</p>}
         {taskType === "mcp_read_and_summarize" && <McpToolGate />}
+        {(taskType === "fix_failing_test" || taskType === "autonomous") && <WorkspaceSeed />}
       </form>
 
       {error && <p className="error-text">{error}</p>}
@@ -206,6 +216,92 @@ function McpToolGate() {
           </button>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Putting something in the workspace for the agent to work on — docs/26_DECISIONS.md ADR-142.
+ *
+ * The coding agent reads, writes, searches and runs commands inside a per-project workspace, and
+ * nothing could put anything into it — no route mentioned a workspace at all, and the Files
+ * screen's upload writes to the asset store, which the filesystem tools cannot see. So
+ * "fix the failing test" had no test to fix: the agent's first action was always to discover an
+ * empty directory, and the capability could not be started at all.
+ *
+ * Writing named files rather than cloning a repository is deliberate and is explained on the
+ * route: a clone means outbound access to an arbitrary URL, credentials for private repositories,
+ * and unbounded data on disk — three larger decisions than this one.
+ */
+function WorkspaceSeed() {
+  const [files, setFiles] = useState<WorkspaceFile[] | null>(null);
+  const [path, setPath] = useState("");
+  const [content, setContent] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    listWorkspaceFiles()
+      .then((r) => setFiles(r.files))
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  async function add() {
+    if (!path.trim() || !content) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await writeWorkspaceFile(path.trim(), content);
+      setPath("");
+      setContent("");
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <strong>The agent&apos;s workspace</strong>
+      <p className="page-subtitle">
+        The directory this task will read, write and run commands in. An uploaded document is not
+        the same thing — that goes to file storage, which the agent&apos;s tools cannot see.
+      </p>
+      {error && <p className="error-text">{error}</p>}
+      {files?.length === 0 && (
+        <p className="empty-state">
+          Empty. A coding task needs at least the file it is meant to fix, or it will find nothing
+          to work on.
+        </p>
+      )}
+      {files?.map((f) => (
+        <div key={f.path} className="mono" style={{ fontSize: 12 }}>
+          {f.path} <span className="page-subtitle">({f.sizeBytes} bytes)</span>
+        </div>
+      ))}
+      <div className="form-row" style={{ marginTop: 8 }}>
+        <label style={{ flex: 1, minWidth: 180 }}>
+          File path
+          <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="src/sum.test.ts" />
+        </label>
+      </div>
+      <label style={{ display: "block" }}>
+        Contents
+        <textarea
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          rows={5}
+          style={{ width: "100%", fontFamily: "var(--font-mono, monospace)" }}
+          placeholder="the file the agent should work on"
+        />
+      </label>
+      <button type="button" className="btn btn-secondary" disabled={busy || !path.trim() || !content} onClick={() => void add()}>
+        {busy ? "Adding…" : "Add file to workspace"}
+      </button>
     </div>
   );
 }

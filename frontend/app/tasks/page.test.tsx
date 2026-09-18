@@ -23,6 +23,8 @@ vi.mock("next/navigation", () => ({
 const createTask = vi.fn(async () => ({ task: { id: "task-1" } }));
 const listTasks = vi.fn(async () => ({ tasks: [] }));
 const listTools = vi.fn(async () => ({ tools: [] as unknown[] }));
+const listWorkspaceFiles = vi.fn(async () => ({ files: [] as unknown[], truncated: false }));
+const writeWorkspaceFile = vi.fn(async () => ({ file: { path: "a", sizeBytes: 1, modifiedAt: "" } }));
 const setToolEnabled = vi.fn(async () => ({ tool: { id: "t", enabled: true } }));
 
 vi.mock("../lib/api", async (importOriginal) => ({
@@ -31,6 +33,8 @@ vi.mock("../lib/api", async (importOriginal) => ({
   listTasks: () => listTasks(),
   listTools: () => listTools(),
   setToolEnabled: (...a: unknown[]) => setToolEnabled(...(a as [])),
+  listWorkspaceFiles: () => listWorkspaceFiles(),
+  writeWorkspaceFile: (...a: unknown[]) => writeWorkspaceFile(...(a as [])),
 }));
 
 describe("Tasks screen", () => {
@@ -96,5 +100,42 @@ describe("Tasks screen", () => {
     render(<TasksPage />);
     await user.selectOptions(screen.getByLabelText(/task type/i), "mcp_read_and_summarize");
     expect(await screen.findByText(/No MCP server is configured/i)).toBeInTheDocument();
+  });
+
+  /**
+   * Seeding the workspace — docs/26_DECISIONS.md ADR-142.
+   *
+   * The coding agent works inside a per-project directory and nothing could put anything into it,
+   * so "fix the failing test" had no test to fix. An uploaded document is not the same thing: it
+   * goes to the asset store, which the filesystem tools cannot see.
+   */
+  it("offers a workspace for a coding task, and says plainly when it is empty", async () => {
+    const user = userEvent.setup();
+    render(<TasksPage />);
+    await user.selectOptions(screen.getByLabelText(/task type/i), "fix_failing_test");
+
+    expect(await screen.findByText(/the agent's workspace/i)).toBeInTheDocument();
+    expect(await screen.findByText(/it will find nothing to work on/i)).toBeInTheDocument();
+  });
+
+  it("adds a file to the workspace with the path and contents that were typed", async () => {
+    const user = userEvent.setup();
+    render(<TasksPage />);
+    await user.selectOptions(screen.getByLabelText(/task type/i), "fix_failing_test");
+
+    await user.type(await screen.findByPlaceholderText("src/sum.test.ts"), "src/sum.test.ts");
+    await user.type(screen.getByPlaceholderText(/the file the agent should work on/i), "expect(sum(1,2)).toBe(3);");
+    await user.click(screen.getByRole("button", { name: /add file to workspace/i }));
+
+    await waitFor(() =>
+      expect(writeWorkspaceFile).toHaveBeenCalledWith("src/sum.test.ts", "expect(sum(1,2)).toBe(3);")
+    );
+  });
+
+  it("does not offer a workspace for a task type that has no use for one", async () => {
+    const user = userEvent.setup();
+    render(<TasksPage />);
+    await user.selectOptions(screen.getByLabelText(/task type/i), "echo_chat");
+    expect(screen.queryByText(/the agent's workspace/i)).not.toBeInTheDocument();
   });
 });

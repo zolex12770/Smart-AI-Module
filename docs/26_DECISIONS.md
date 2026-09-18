@@ -2286,3 +2286,16 @@ It is a switch because it is a second model call per turn. On by default, becaus
 
 **Date:** 2026-09-14
 **Impact:** `backend/src/routes/v1/chat.ts`, `backend/src/{config,context,index,test-app}.ts`, `frontend/app/chat/ChatView.tsx`, `.env.example` + 6 tests.
+
+## ADR-142: The coding agent has a workspace to work in, and a screen that shows what it did
+
+**Decision:** `GET/POST /api/v1/workspace/files` and `GET /api/v1/workspace/file` seed and inspect the per-project workspace through the same containment check the agent's own tools use; the Tasks screen offers it for coding and autonomous tasks; the coding tabs read the reasoning node's activity.
+
+**There was no way to give the agent anything to work on.** The coding agent reads, writes, searches and runs commands inside `projectWorkspace(sandboxRoot, projectId)`, and nothing in the system could put a file there. The full list of registered routes contained no workspace, repo, clone or upload-to-workspace path, and a grep for `git|clone|tarball|zip` across the routes returned nothing. The Files screen's upload looks like the answer and is not: it writes to the ASSET STORE, a different place that the filesystem tools cannot see. So "fix the failing test" had no test to fix — the agent's first action was always to discover an empty directory, and a capability the product documents could not be started at all.
+
+Files are written, not repositories cloned, and that is a decision rather than a shortcut: `git clone` from a model-driven environment means outbound access to an arbitrary URL, credentials for private repositories, and unbounded data on disk — three security decisions, each larger than this feature. Written down in docs/27_RISKS_AND_LIMITATIONS.md. Every path goes through `resolveSandboxedPath`, the same helper the tools use, so this route cannot become a way around the boundary it is a way into; a containment refusal answers 4xx rather than the 500 the raw `Error` produced, because asking for a path you may not have is the caller's mistake and not the server's.
+
+**And the coding screen showed zeros over a run that had done plenty.** Its two tabs filtered the task's NODES for `toolId === "terminal.run_command"` and `toolId === "code.apply_literal_fix"`. `planFixFailingTest` returns exactly one node, of kind `reasoning`, with no `toolId` at all — every command and every edit happens inside it — so both filters matched nothing for every run that has ever existed: "Commands run (0)" and "Files changed (0)" above a task that had just run a dozen commands and rewritten a file. `code.apply_literal_fix` is not even a registered tool, so one tab was filtering for something that does not exist. They read the reasoning node's activity now (ADR-134) — live while the run is in flight, and off the persisted log afterwards, which is the normal case since a finished run's history is the reason to open it.
+
+**Date:** 2026-09-14
+**Impact:** `backend/src/routes/v1/workspace.ts` (new), `backend/src/server.ts`, `frontend/app/lib/api.ts`, `frontend/app/tasks/page.tsx`, `frontend/app/agent/TaskDetail.tsx`, `docs/{API,27_RISKS_AND_LIMITATIONS}.md` + 15 tests.

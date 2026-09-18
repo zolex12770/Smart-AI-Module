@@ -59,6 +59,13 @@ This section comes from the third audit of this phase's own diff (`78a0e13..74c7
 - Foundation model training/fine-tuning.
 - Public multi-tenant self-serve billing.
 - Any real image/video/cloud spend without explicit, separate user authorization at that specific step.
+- **Cloning a repository into the agent's workspace — deliberately absent (ADR-142).** A coding
+  task is seeded by writing named files (`POST /api/v1/workspace/files`, containment-checked
+  against the same boundary the agent's own tools use). `git clone` would mean outbound network
+  access to an arbitrary URL from a model-driven environment, credential handling for private
+  repositories, and an unbounded amount of data landing on disk — three security decisions, each
+  larger than the feature. What exists is the smaller honest primitive; it does not pretend to be
+  a VCS integration.
 - **Password RESET ("forgot password") — deliberately absent, not overlooked (ADR-127).** A reset
   flow is a way to take over an account using only an email address, so it is exactly as strong as
   the channel that delivers the token. This deployment has no mail transport, no domain and no

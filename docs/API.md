@@ -5,7 +5,7 @@ Regenerate with `npm run docs:api`; CI fails if this file differs from what the 
 produces, and `backend/src/routes/api-contract.test.ts` sends a real request for every row
 below to check that the documented access and rate limit are the ones the server applies.
 
-**63 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
+**66 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
 
 ## Conventions
 
@@ -224,6 +224,14 @@ and nothing is ever substituted with a fake result (ADR-050).
 | `GET` | `/api/v1/videos/:id` | session or API key · `project:read` | global (300 / 1 minute) |
 | `POST` | `/api/v1/videos/:id/cancel` | session or API key · `media:generate` | global (300 / 1 minute) |
 | `POST` | `/api/v1/videos/:id/retry` | session or API key · `media:generate` | 5 / 1 minute |
+
+## `/api/v1/workspace`
+
+| Method | Path | Auth / permission | Rate limit |
+|---|---|---|---|
+| `GET` | `/api/v1/workspace/file` | session or API key · `project:read` | global (300 / 1 minute) |
+| `GET` | `/api/v1/workspace/files` | session or API key · `project:read` | global (300 / 1 minute) |
+| `POST` | `/api/v1/workspace/files` | session or API key · `project:write` | 120 / 10 minutes per user |
 
 ## Streaming
 
