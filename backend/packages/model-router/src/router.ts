@@ -201,8 +201,11 @@ export class ModelRouter {
       const iterator = this.streamWithRetry(provider, request, reportRetry, reportCall, signal)[Symbol.asyncIterator]();
       let first: IteratorResult<ChatStreamEvent>;
       try {
-        first = await iterator.next();
+        // Abortable here too, not only in the inner loop (ADR-146): this is the pull the CALLER
+        // is waiting on, so a signal that cannot end it cannot end the call.
+        first = await pullOrAbort(iterator, signal);
       } catch (err) {
+        if (signal?.aborted) throw err;
         lastError = err;
         this.recordFailure(provider.name);
         report({
@@ -236,8 +239,11 @@ export class ModelRouter {
         while (true) {
           let next: IteratorResult<ChatStreamEvent>;
           try {
-            next = await iterator.next();
+            next = await pullOrAbort(iterator, signal);
           } catch (err) {
+            // A CANCELLED call is not a provider failure, and must not be reported to the caller
+            // as an answer that went wrong — it is the caller's own abort coming back (ADR-146).
+            if (signal?.aborted) throw err;
             yield {
               type: "error",
               message: `The model provider failed partway through responding: ${
@@ -261,7 +267,7 @@ export class ModelRouter {
          * request — never ran. The provider kept generating, and kept billing, into a stream
          * nobody was reading. `return()` on a generator that already finished is a no-op.
          */
-        await iterator.return?.(undefined);
+        await closeQuietly(iterator);
       }
     }
 
@@ -288,7 +294,7 @@ export class ModelRouter {
       const iterator = provider.streamChat(request)[Symbol.asyncIterator]();
       let first: IteratorResult<ChatStreamEvent>;
       try {
-        first = await iterator.next();
+        first = await pullOrAbort(iterator, signal);
       } catch (err) {
         const classification = classifyProviderError(err);
         const retryable = classification === "retryable";
@@ -336,7 +342,7 @@ export class ModelRouter {
         }
         yield first.value;
         while (true) {
-          const next = await iterator.next();
+          const next = await pullOrAbort(iterator, signal);
           if (next.done) return;
           // The terminal event carries the only token counts the provider reports.
           if (next.value.type === "done") {
@@ -356,7 +362,7 @@ export class ModelRouter {
         // The provider's own iterator, closed when this generator is abandoned or finishes —
         // ADR-119. This is the layer that actually reaches the adapter's `finally`, where the
         // upstream HTTP request is aborted; the caller above closes THIS generator in turn.
-        await iterator.return?.(undefined);
+        await closeQuietly(iterator);
       }
     }
   }
@@ -390,5 +396,87 @@ export class ModelRouter {
 
   private recordSuccess(name: string): void {
     this.circuits.set(name, { failures: 0, openedAt: null });
+  }
+}
+
+/**
+ * A pull that the abort signal can end — docs/26_DECISIONS.md ADR-146.
+ *
+ * Cancellation was built on the assumption that an adapter observes its signal: the router passes
+ * one, the real adapters hand it to `fetch`, and an aborted fetch rejects. That is true of the
+ * adapters in this repository and is true of nothing else. An adapter that ignores the signal —
+ * a third-party one, a future one, or simply a provider that stops sending bytes without closing
+ * the socket — leaves this loop parked on `iterator.next()` with no way out, and the whole
+ * cancellation chain above it (route → engine → loop → router) waits on a promise that will never
+ * settle. That is what made `AgentEngine.cancel` unable to return: the abort was issued and the
+ * work did not notice.
+ *
+ * Racing the pull against the signal makes the guarantee the router's own, rather than every
+ * adapter's. The abandoned pull is not left dangling: the caller's `finally` closes the iterator
+ * (ADR-119), which is what releases the underlying response.
+ */
+async function pullOrAbort(
+  iterator: AsyncIterator<ChatStreamEvent>,
+  signal: AbortSignal | undefined
+): Promise<IteratorResult<ChatStreamEvent>> {
+  if (!signal) return iterator.next();
+  if (signal.aborted) throw abortReason(signal);
+
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      iterator.next(),
+      new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(abortReason(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function abortReason(signal: AbortSignal): Error {
+  const reason = (signal as { reason?: unknown }).reason;
+  return reason instanceof Error ? reason : new ProviderError("The model call was cancelled.");
+}
+
+/**
+ * Closing an iterator must never be the thing that hangs — docs/26_DECISIONS.md ADR-146.
+ *
+ * ADR-119 added `await iterator.return?.(undefined)` so an abandoned stream closes the provider's
+ * generator, which is what aborts the upstream request. That is right, and it has one property
+ * nobody looked for: `return()` on a generator suspended at an `await` — rather than at a `yield`
+ * — does not take effect until the generator next reaches a suspension point. A provider parked
+ * on a promise that never settles therefore never accepts the return, and the `await` on it never
+ * resolves.
+ *
+ * So the cleanup inherited exactly the hang it was written to prevent, one layer up: an aborted
+ * call rejected correctly, and then blocked forever in its own `finally`. That is what made
+ * `AgentEngine.cancel` unable to complete even after the abort reached the router — the lock it
+ * needed was held by a run stuck in cleanup.
+ *
+ * Closing is best-effort by nature: the signal has already been delivered and the socket is
+ * already being torn down by the adapter's own `finally` when it has one. Bounding the wait costs
+ * nothing real and removes a whole class of unkillable call.
+ */
+const CLOSE_TIMEOUT_MS = 2_000;
+
+async function closeQuietly(iterator: AsyncIterator<ChatStreamEvent>): Promise<void> {
+  if (!iterator.return) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      iterator.return(undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, CLOSE_TIMEOUT_MS);
+        // A cleanup timer must never hold a process (or a test run) open.
+        timer.unref?.();
+      }),
+    ]);
+  } catch {
+    // A generator that throws on close has still been asked to stop, which is all this needed.
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

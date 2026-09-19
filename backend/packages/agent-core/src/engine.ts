@@ -317,16 +317,44 @@ export class AgentEngine {
     });
   }
 
+  /**
+   * The abort happens OUTSIDE the lock — docs/26_DECISIONS.md ADR-146.
+   *
+   * `runExclusive` is strictly FIFO, and a node's whole execution runs inside that same mutex:
+   * `createAndStart` takes it, `planAndExecute` ends in `tick`, and `tick` awaits
+   * `executeReasoningNode` for the entire run — up to the ten minutes `planAutonomous` allows.
+   * So a `cancel` that took the lock first could only ever run AFTER the thing it was cancelling
+   * had finished. By then `executeReasoningNode`'s `finally` has cleared `inFlight`, and the
+   * first line of the callback sees a terminal task and returns. The route answered `{ok: true}`
+   * after blocking for the remainder of the run, having done nothing at all: the Stop button was
+   * decoration, and every "cancellation" test passed because it cancelled work that was not
+   * running.
+   *
+   * `failTimedOutNodes` already had this right — it aborts before taking the lock — which is the
+   * clearest evidence that the ordering is the whole mechanism rather than a detail.
+   *
+   * Aborting first is safe: the signal is what the in-flight work observes, and the lock is only
+   * needed for the rows. A node that finishes between the abort and the lock is simply already
+   * terminal, and the loop below skips it.
+   */
   async cancel(taskId: string, actor: string): Promise<void> {
+    const reason = new Error(`Task "${taskId}" was cancelled by ${actor}.`);
+
+    // Stop the work, not just the bookkeeping: without this a cancelled node's tool call would
+    // keep running to completion and only its row would say otherwise.
+    const running = await this.deps.nodeRepo.listByRootUnscoped(taskId);
+    for (const node of running) {
+      if (!isTerminalNode(node.status)) this.inFlight.get(node.id)?.abort(reason);
+    }
+
     await this.runExclusive(taskId, async () => {
       const task = await this.deps.taskRepo.getUnscoped(taskId);
       if (!task || isTerminalTask(task.state)) return;
+      // Re-read: the abort above may have settled nodes while this was waiting for the lock.
       const nodes = await this.deps.nodeRepo.listByRootUnscoped(taskId);
       for (const node of nodes) {
         if (!isTerminalNode(node.status)) {
-          // Stop the work, not just the bookkeeping: without this a cancelled node's tool
-          // call would keep running to completion and only its row would say otherwise.
-          this.inFlight.get(node.id)?.abort(new Error(`Task "${taskId}" was cancelled by ${actor}.`));
+          this.inFlight.get(node.id)?.abort(reason);
           await this.updateNode(node, { status: "cancelled", startedAt: null, nextAttemptAt: null }, actor);
         }
       }
@@ -982,13 +1010,39 @@ export class AgentEngine {
         activity,
       });
     } catch (err) {
-      await this.handleNodeFailure(
-        task.id,
-        node,
-        err instanceof Error ? err.message : String(err),
-        "retryable-execution",
-        activity
-      );
+      /**
+       * An abort is a CANCELLATION, not a failure — docs/26_DECISIONS.md ADR-146.
+       *
+       * Once the router could actually end a call mid-flight, the abort started arriving here as
+       * a thrown error, and this path marked the node `failed` and the task `FAILED`. A user who
+       * pressed Stop then saw their own task reported as broken, and `cancel` — which takes the
+       * lock afterwards — found a terminal task and left it that way. The loop's own
+       * `stopReason: "cancelled"` branch covers the case where it notices first; this covers the
+       * case where the throw wins the race, which is the common one.
+       *
+       * `cancel` still writes the `cancelled` rows and the task transition when it gets the lock;
+       * settling the node here keeps the two from disagreeing in between.
+       */
+      if (controller.signal.aborted) {
+        await this.updateNode(
+          node,
+          {
+            status: "cancelled",
+            startedAt: null,
+            nextAttemptAt: null,
+            ...(activity.length > 0 ? { output: { ...(node.output ?? {}), activity } } : {}),
+          },
+          "engine"
+        );
+      } else {
+        await this.handleNodeFailure(
+          task.id,
+          node,
+          err instanceof Error ? err.message : String(err),
+          "retryable-execution",
+          activity
+        );
+      }
     } finally {
       this.inFlight.delete(node.id);
     }

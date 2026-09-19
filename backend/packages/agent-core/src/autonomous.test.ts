@@ -104,9 +104,11 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
   const build = (
     turns: Array<{ text?: string; calls?: ToolCall[] }>,
     limits?: { maxIterations?: number },
-    extraTools: NativeToolEntry[] = []
+    extraTools: NativeToolEntry[] = [],
+    /** An already-built provider, for a test that needs to control WHEN a turn answers. */
+    suppliedProvider?: ScriptedAgentProvider
   ) => {
-    const provider = new ScriptedAgentProvider(turns);
+    const provider = suppliedProvider ?? new ScriptedAgentProvider(turns);
     const registry = new ModelRegistry();
     registry.register(provider, { asDefault: true });
 
@@ -648,4 +650,62 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     // And the reason the run ended is still on the node, alongside the history.
     expect(String(node.errorMessage)).toMatch(/max_iterations|stopped after/i);
   });
+
+  /**
+   * Cancel really stops a run in flight — docs/26_DECISIONS.md ADR-146.
+   *
+   * `cancel` took the per-task mutex before aborting, and a node's whole execution runs inside
+   * that same mutex — so the cancel could only run after the thing it was cancelling had already
+   * finished, by which point the task was terminal and the callback returned immediately. The
+   * route answered `{ok: true}` after blocking for the rest of the run, having done nothing.
+   *
+   * Every earlier cancellation test passed because it cancelled work that was not running. This
+   * one cancels a provider call that is still open, which is the only version of the test that
+   * could have failed.
+   */
+  it("stops a run that is still in flight, rather than waiting for it to finish", async () => {
+    let release: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    // A provider that hangs on its first turn until the test lets it go.
+    const provider = new ScriptedAgentProvider([{ text: "never reached" }]);
+    const original = provider.streamChat.bind(provider);
+    let started: (() => void) | undefined;
+    const hasStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    // Suspended at a YIELD, which is where a real adapter waits: the router closes the
+    // provider's iterator when the call is abandoned (ADR-119/ADR-140), and a generator parked
+    // on `yield` resumes with a return completion. A provider that hung BEFORE its first yield
+    // would be unlike any real one and nothing could interrupt it.
+    provider.streamChat = async function* (request) {
+      started?.();
+      yield { type: "token", delta: "thinking" } as never;
+      await blocked;
+      yield* original(request);
+    };
+
+    const { engine } = build([], undefined, [], provider);
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Wait forever." },
+      { projectId: PROJECT, userId: USER }
+    );
+
+    // The run is genuinely inside the provider call before cancel is asked for.
+    await hasStarted;
+
+    // Before the fix this call blocked here until the provider returned.
+    const cancelledWithin = await Promise.race([
+      engine.cancel(task.id, "test-operator").then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5_000)),
+    ]);
+    release?.();
+    expect(cancelledWithin).toBe(true);
+
+    const finished = await waitFor(task.id, ["CANCELLED", "COMPLETED", "FAILED"]);
+    expect(finished.state).toBe("CANCELLED");
+  }, 40_000);
 });

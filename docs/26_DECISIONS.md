@@ -2346,3 +2346,20 @@ That last part matters beyond this run: the verification gate that ADR-133 wired
 
 **Date:** 2026-09-19
 **Impact:** `backend/packages/tools/src/native/{terminal,patch}.ts`, `backend/packages/agent-core/src/engine.ts` + 8 tests.
+
+## ADR-146: Cancel actually cancels — three layers of a chain that could not end a call
+
+**Decision:** `AgentEngine.cancel` aborts before taking the per-task lock, the router races every pull against the signal and bounds the close that follows, and a node aborted by cancellation settles `cancelled` rather than `failed`.
+
+**The Stop button could never stop anything.** `runExclusive` is strictly FIFO, and a node's whole execution runs inside that same mutex — `createAndStart` takes it, `planAndExecute` ends in `tick`, and `tick` awaits the reasoning node for the ten minutes `planAutonomous` allows. So a `cancel` that took the lock first could only run AFTER the thing it was cancelling had finished. By then `executeReasoningNode`'s `finally` has cleared `inFlight` and the callback's first line sees a terminal task and returns. The route blocked for the remainder of the run and then answered `{ok: true}`, having done nothing at all. `failTimedOutNodes` aborts before taking the lock — the sweep path had it right, which is the clearest evidence the ordering is the mechanism rather than a detail. Every cancellation test passed because each cancelled work that was not running.
+
+**Aborting first was necessary and not sufficient.** With the abort issued, the call still did not end: cancellation was built on the assumption that an adapter observes its signal, which is true of the adapters here and of nothing else. A provider that ignores it — or simply stops sending bytes without closing the socket — leaves the router parked on `iterator.next()` with no way out. The router races every pull against the signal now, which makes the guarantee its own rather than every adapter's.
+
+**And the cleanup inherited the same hang.** ADR-119 added `await iterator.return?.(undefined)` so an abandoned stream closes the provider's generator, which is what aborts the upstream request. `return()` on a generator suspended at an `await` rather than a `yield` does not take effect until the generator next reaches a suspension point — so a provider parked on a promise that never settles never accepts the return, and the await on it never resolves. The abort rejected correctly and then blocked forever in its own `finally`, still holding the lock `cancel` was waiting for. Closing is best-effort by nature — the signal is delivered and the adapter's own `finally` is already tearing the socket down — so it is bounded now, which costs nothing real and removes a class of unkillable call.
+
+**Then the task said it had failed.** Once the abort could actually end a call, it arrived in the node's catch as a thrown error and marked the task `FAILED`: a user who pressed Stop saw their own task reported as broken. An abort from the node's own controller settles `cancelled`.
+
+Each layer was found by fixing the one above it and running the thing again. The test cancels a provider call that is still open — the only version that could have failed — and it fails against any of the three.
+
+**Date:** 2026-09-19
+**Impact:** `backend/packages/agent-core/src/engine.ts`, `backend/packages/model-router/src/router.ts` + 1 engine test.
