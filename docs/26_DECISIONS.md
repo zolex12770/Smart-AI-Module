@@ -2310,3 +2310,20 @@ That is the same class of defect ADR-136 was written to remove: a control that c
 
 **Date:** 2026-09-18
 **Impact:** `frontend/app/tasks/page.tsx` + 1 test.
+
+## ADR-144: One guard for every system-admin control, and a test that walks the whole app
+
+**Decision:** `SystemAdminOnly` is the single gate for any control calling a system-admin route; a source-level test walks every screen and fails if one escapes it; a browser test exercises the real boundary from both sides.
+
+**ADR-143 fixed one button, which is how the next one gets it wrong.** The MCP Enable control was shown to every user while the endpoint answers 404 to anyone who is not a system administrator (ADR-089 — an enable re-registers tools for every tenant, and confirming an endpoint exists is itself a disclosure). The fix was a `user?.isSystemAdmin` check on that one control. That is correct and teaches nothing: the next control will be written by someone who did not read this ADR.
+
+So the check is a component now, the routes and the client functions that call them are listed beside it, and `session-context.admin.test.tsx` reads every `.tsx` under `frontend/app` and fails if a file calls an admin-only client — or names an admin-only route by hand — without rendering `SystemAdminOnly`. It is a source check rather than a render check deliberately: it covers screens nobody thought to write a test for, including ones added later.
+
+**Writing that test immediately found a second defect.** It asserts the client list and the route list stay in step, and `reconnectMcpServer` did not exist: `POST /api/v1/mcp/:id/reconnect` was a real capability with no caller anywhere in the interface, so an operator could watch a server sit in `failed` on the Platform screen and have no way to act on it. It is a control now, behind the same guard.
+
+**The browser test is the part that matters.** ADR-143's component test passed because it mocked the API, and the refusal lives in the API. `admin-boundary.spec.ts` mocks nothing: it signs in as an ordinary member and as the real bootstrapped administrator (the E2E server is given `BOOTSTRAP_ADMIN_EMAIL`, so the account is made by the production path), and checks four things — the member is not offered the control, the administrator is, the member's own session is refused by the route (404), and the administrator's is accepted (200). Either pair alone would pass against a broken build: visibility alone passes against a UI that offers an action nobody can take, and the API checks alone pass against a UI that hides a control from someone entitled to it.
+
+**Checked by removing the guard.** Ungated, an ordinary member sees fourteen Enable buttons and two of the three browser tests fail. The first version of the third test passed ungated — it accepted "No MCP servers configured" as an alternative to seeing the server, and an empty list has no buttons either. It now requires the member to see the same server the administrator saw before concluding the control is absent.
+
+**Date:** 2026-09-19
+**Impact:** `frontend/app/lib/session-context.tsx`, `frontend/app/lib/api.ts`, `frontend/app/tasks/page.tsx`, `frontend/app/platform/page.tsx`, `backend/package.json` (E2E bootstraps a real admin) + 5 source-level tests and 3 browser tests.

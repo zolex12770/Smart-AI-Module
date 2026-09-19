@@ -14,7 +14,7 @@ import {
   type WorkspaceFile,
 } from "../lib/api";
 import { StatusBadge } from "../lib/status-badge";
-import { useSession } from "../lib/session-context";
+import { SystemAdminOnly, useSession } from "../lib/session-context";
 
 const TASK_TYPES: { value: TaskType; label: string; fields: string[]; hint?: string }[] = [
   /**
@@ -229,7 +229,10 @@ function McpToolGate() {
               {tool.enabled ? "enabled" : "disabled"} · {tool.riskLevel} risk
             </span>
           </span>
-          {user?.isSystemAdmin ? (
+          {/* One guard, used everywhere (ADR-144). The ad-hoc `user?.isSystemAdmin` this
+              replaces was correct, and being correct in one place is exactly how the next
+              control gets it wrong. */}
+          <SystemAdminOnly>
             <button
               type="button"
               className={tool.enabled ? "btn btn-secondary" : "btn"}
@@ -238,7 +241,7 @@ function McpToolGate() {
             >
               {tool.enabled ? "Disable" : "Enable"}
             </button>
-          ) : null}
+          </SystemAdminOnly>
         </div>
       ))}
     </div>

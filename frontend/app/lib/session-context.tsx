@@ -147,3 +147,48 @@ export function RequireSession({
   }
   return <>{children}</>;
 }
+
+/**
+ * The routes only a SYSTEM ADMINISTRATOR may call — docs/26_DECISIONS.md ADR-144.
+ *
+ * This list is the frontend's half of a boundary the backend already enforces
+ * (`requireSystemAdmin` in `backend/src/routes/v1/platform.ts`, and the authority table
+ * `PLATFORM_ROUTE_PERMISSIONS` beside it). It exists so a control that calls one of these can be
+ * found mechanically rather than by remembering — `session-context.admin.test.tsx` walks every
+ * screen, finds the calls, and fails if one is rendered outside `SystemAdminOnly`.
+ *
+ * The prompt for that test was a real defect: ADR-136 added an Enable button for MCP tools and
+ * offered it to every user, while the endpoint answers 404 to anyone who is not an administrator.
+ * Its component test passed because it mocked the API, which is where the refusal lives.
+ */
+export const SYSTEM_ADMIN_ONLY_ROUTES = [
+  "/api/v1/tools/:id/enable",
+  "/api/v1/mcp/:id/reconnect",
+  "/api/v1/admin/health",
+  "/api/v1/admin/metrics",
+  "/api/v1/admin/stats",
+] as const;
+
+/** The client functions that call them. Kept beside the routes so the pair cannot drift. */
+export const SYSTEM_ADMIN_ONLY_CLIENTS = ["setToolEnabled", "reconnectMcpServer"] as const;
+
+/**
+ * Renders its children only for a system administrator — ADR-144.
+ *
+ * `fallback` is for saying WHOSE decision something is. A control that simply vanishes teaches a
+ * user that the feature does not exist; one that explains who can use it is the difference between
+ * a missing button and an answered question.
+ *
+ * This is deliberately not a security control — the backend is, and it refuses regardless. It is
+ * how the interface stops offering an action the person looking at it cannot take.
+ */
+export function SystemAdminOnly({
+  children,
+  fallback = null,
+}: {
+  children: ReactNode;
+  fallback?: ReactNode;
+}) {
+  const { user } = useSession();
+  return <>{user?.isSystemAdmin ? children : fallback}</>;
+}

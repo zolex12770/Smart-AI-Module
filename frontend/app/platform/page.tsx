@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../lib/auth-client";
-import { RequireSession, useSession } from "../lib/session-context";
+import { RequireSession, SystemAdminOnly, useSession } from "../lib/session-context";
+import { reconnectMcpServer } from "../lib/api";
 
 /**
  * Platform operations — docs/26_DECISIONS.md ADR-066 (the API), ADR-072 (dead letters),
@@ -79,6 +80,8 @@ function PlatformView() {
   const [models, setModels] = useState<ModelRow[]>([]);
   const [tools, setTools] = useState<ToolRow[]>([]);
   const [mcp, setMcp] = useState<McpRow[]>([]);
+  const [reconnecting, setReconnecting] = useState<string | null>(null);
+
   const [jobs, setJobs] = useState<JobRow[]>([]);
   const [deadLettered, setDeadLettered] = useState<DeadLetterRow[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -132,6 +135,28 @@ function PlatformView() {
       setError(err instanceof Error ? err.message : "Could not load platform status.");
     }
   }, []);
+
+  /**
+   * Reconnects a dropped MCP server — ADR-144.
+   *
+   * Declared after `load` so the dependency is real rather than suppressed: the listing is
+   * refreshed afterwards, and a reconnect that failed leaves the server visibly `failed`, which
+   * is a better answer than a message about the attempt.
+   */
+  const reconnect = useCallback(
+    async (id: string) => {
+      setReconnecting(id);
+      try {
+        await reconnectMcpServer(id);
+      } catch {
+        /* the refreshed listing below reports the server's real state */
+      } finally {
+        setReconnecting(null);
+        await load();
+      }
+    },
+    [load]
+  );
 
   useEffect(() => {
     void load();
@@ -222,6 +247,23 @@ function PlatformView() {
               <strong>{server.id}</strong> — {server.status}
               {typeof server.toolCount === "number" ? ` (${server.toolCount} tools)` : ""}
               {server.error ? <span className="auth-error"> {server.error}</span> : null}
+              {/**
+               * Reconnect — ADR-144. The route existed with no caller anywhere, so an operator
+               * could watch a server sit in `failed` and do nothing about it. Inside the guard
+               * because a reconnect re-registers tools for every tenant, which is why the route
+               * is system-admin only.
+               */}
+              <SystemAdminOnly>
+                {" "}
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={reconnecting === server.id}
+                  onClick={() => void reconnect(server.id)}
+                >
+                  {reconnecting === server.id ? "Reconnecting…" : "Reconnect"}
+                </button>
+              </SystemAdminOnly>
             </li>
           ))}
         </ul>

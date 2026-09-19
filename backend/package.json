@@ -10,7 +10,7 @@
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "start:e2e": "node -e \"process.env.PORT='8790';process.env.DATABASE_DIR='./data/pgdata-e2e';process.env.CORS_ORIGIN='http://127.0.0.1:3100';process.env.AUTH_RATE_LIMIT_MAX='500';process.env.OLLAMA_HOST='127.0.0.1:1';import('./dist/index.js')\""
+    "start:e2e": "node -e \"process.env.PORT='8790';process.env.DATABASE_DIR='./data/pgdata-e2e';process.env.CORS_ORIGIN='http://127.0.0.1:3100';process.env.AUTH_RATE_LIMIT_MAX='500';process.env.OLLAMA_HOST='127.0.0.1:1';process.env.BOOTSTRAP_ADMIN_EMAIL='e2e-admin@example.com';process.env.BOOTSTRAP_ADMIN_PASSWORD='a-sufficiently-long-password';import('./dist/index.js')\""
   },
   "dependencies": {
     "@ai-platform/agent-core": "*",

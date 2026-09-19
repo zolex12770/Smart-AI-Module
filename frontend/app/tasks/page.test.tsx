@@ -19,6 +19,10 @@ const sessionUser: { isSystemAdmin: boolean } = { isSystemAdmin: true };
 vi.mock("../lib/session-context", () => ({
   useSession: () => ({ user: sessionUser, projects: [], projectId: "p1", selectProject: vi.fn(), refresh: vi.fn(), signOut: vi.fn() }),
   RequireSession: ({ children }: { children: React.ReactNode }) => children,
+  // Mirrors the real guard (ADR-144) rather than rendering children unconditionally: a mock that
+  // ignored the flag would make every admin-visibility assertion below meaningless.
+  SystemAdminOnly: ({ children, fallback = null }: { children: React.ReactNode; fallback?: React.ReactNode }) =>
+    sessionUser.isSystemAdmin ? children : fallback,
 }));
 
 vi.mock("next/navigation", () => ({

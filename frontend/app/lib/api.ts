@@ -158,6 +158,20 @@ export const writeWorkspaceFile = (path: string, content: string) =>
     method: "POST",
     body: JSON.stringify({ path, content }),
   });
+/**
+ * Reconnects a dropped MCP server — docs/26_DECISIONS.md ADR-144.
+ *
+ * `POST /api/v1/mcp/:id/reconnect` existed with no caller anywhere in the interface: an operator
+ * whose MCP server had dropped could see it listed as failed on the Platform screen and had no way
+ * to do anything about it. System-admin only, for the reason the route gives — a reconnect
+ * re-registers tools for every tenant in the deployment.
+ */
+export const reconnectMcpServer = (id: string) =>
+  request<{ ok: boolean; server: { id: string; status: string } }>(
+    `/api/v1/mcp/${encodeURIComponent(id)}/reconnect`,
+    { method: "POST" }
+  );
+
 export const setToolEnabled = (id: string, enabled: boolean) =>
   request<{ tool: { id: string; enabled: boolean } }>(`/api/v1/tools/${encodeURIComponent(id)}/enable`, {
     method: "POST",
