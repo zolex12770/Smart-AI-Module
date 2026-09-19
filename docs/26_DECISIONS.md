@@ -2327,3 +2327,22 @@ So the check is a component now, the routes and the client functions that call t
 
 **Date:** 2026-09-19
 **Impact:** `frontend/app/lib/session-context.tsx`, `frontend/app/lib/api.ts`, `frontend/app/tasks/page.tsx`, `frontend/app/platform/page.tsx`, `backend/package.json` (E2E bootstraps a real admin) + 5 source-level tests and 3 browser tests.
+
+## ADR-145: The coding agent completes, because the tools stopped misleading it
+
+**Decision:** The terminal tool describes its own arguments and refuses a command repeated as its first argument; `code.apply_patch` refuses a diff that changes nothing; the agent's activity log is persisted when a run FAILS, not only when it succeeds.
+
+**UAT-17 failed twice, and the activity log said exactly why.** Both reasons were tools, not the model's reasoning and not the engine:
+
+The model called the terminal with `{ command: "node", args: ["node", "sum.test.cjs"] }`, repeating the binary as its own first argument. The process tried to load a module literally called `node`, and the loader error that came back looks nothing like the assertion failure it was hunting — so it never saw the real failure at all. Nothing in the schema said what `args` meant: `command` and `args` were a bare `string` and `string[]` with no descriptions, and the tool's prose talks about "the given arguments" without saying the command is not one of them. That is a reasonable thing to get wrong, and the cheapest place to fix it is where the model reads. It is described now, and the duplication is refused with a message naming what to send instead — refused rather than silently stripped, because the loop feeds a tool error back to the model and quietly rewriting a caller's arguments would hide a real mistake.
+
+Never having seen the failure, the patch it then wrote was a no-op: the hunk's `+` line repeated its `-` line. Every hunk matched, so the tool answered `hunksApplied: 1, action: "modified"` — accurate, and read by the model as "fixed", after which it spent the rest of its budget elsewhere while the file still held the original bug. Reporting work that did not happen is the failure this platform refuses everywhere else, and it is worse when the caller is a model: a false success removes the one signal that would have made it look again.
+
+**Running it again exposed a third defect, in a fix of our own.** The retry failed at its iteration limit and the task reported `activity: 0` — while the workspace plainly showed the file had been edited. ADR-134 wrote that log on the success path only, so a run that exhausted its iterations, hit its deadline or threw kept nothing at all. That is precisely the case the log exists for: a completed run explains itself through its answer, and a failed one has only its history. The log is declared outside the `try` now, so the catch can see it, and every failure path persists it.
+
+**With all three, the cycle completes.** `COMPLETED`, nine tool calls, 22,753 input / 1,169 output tokens on a local 7B model. The guard caught the duplicated binary and the model corrected itself — twice. It saw the real `AssertionError`, read both files, applied a diff that really changed `return a - b` to `return a + b`, and re-ran the test to `exitCode: 0, stdout: "PASS"`. The verification pass from ADR-133 then pushed back — it judged the evidence ambiguous and sent the model round again, which re-ran the test and confirmed it. The final diff is one line, the workspace holds no stray files, and the test exits 0.
+
+That last part matters beyond this run: the verification gate that ADR-133 wired was described there as "a gate that can fail". Here it is a gate that DID fail, on a real run, and improved the answer.
+
+**Date:** 2026-09-19
+**Impact:** `backend/packages/tools/src/native/{terminal,patch}.ts`, `backend/packages/agent-core/src/engine.ts` + 8 tests.

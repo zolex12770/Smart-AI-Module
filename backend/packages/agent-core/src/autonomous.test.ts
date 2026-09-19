@@ -612,4 +612,40 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     const [secondPark] = await nodes.listByRootUnscoped(task.id);
     expect((secondPark.output as { pendingCall?: { arguments?: { target?: string } } }).pendingCall?.arguments?.target).toBe("second");
   });
+
+  /**
+   * A FAILED run keeps its history — docs/26_DECISIONS.md ADR-145.
+   *
+   * ADR-134 recorded what a run did so "what happened" survives past the moment somebody was
+   * watching, and wrote that log on the success path only. So a run that exhausted its
+   * iterations, hit its deadline or threw kept nothing — the exact case the log exists for, since
+   * a completed run explains itself through its answer and a failed one has only its history.
+   *
+   * Found by running the coding agent: a failed task reported `activity: 0` while the workspace
+   * plainly showed the file had been edited.
+   */
+  it("persists what it did even when the run fails", async () => {
+    // A model that calls a tool and then never answers: the loop exhausts its iteration budget.
+    const { engine } = build(
+      [{ calls: [{ id: "c1", name: "fs.glob", arguments: { pattern: "**/*" } }] }],
+      { maxIterations: 2 }
+    );
+
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Look around forever." },
+      { projectId: PROJECT, userId: USER }
+    );
+    const finished = await waitFor(task.id, ["FAILED", "COMPLETED"]);
+    expect(finished.state).toBe("FAILED");
+
+    const [node] = await nodes.listByRootUnscoped(task.id);
+    expect(node.status).toBe("failed");
+    // The tool calls it really made are still there to read.
+    const activity = ((node.output ?? {}) as { activity?: Array<{ kind?: string; name?: string }> }).activity ?? [];
+    expect(activity.length).toBeGreaterThan(0);
+    expect(activity.some((a) => a.kind === "tool_call" && a.name === "fs.glob")).toBe(true);
+    // And the reason the run ended is still on the node, alongside the history.
+    expect(String(node.errorMessage)).toMatch(/max_iterations|stopped after/i);
+  });
 });

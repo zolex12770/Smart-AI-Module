@@ -77,12 +77,42 @@ export function createTerminalTools(root: string, sandbox: CommandSandbox): Nati
         "does not by itself mean this tool call failed; only a rejected/disallowed command or a spawn " +
         "error does.",
       origin: { kind: "native", serverId: null, serverVersion: null },
+      /**
+       * Every property is described — docs/26_DECISIONS.md ADR-145.
+       *
+       * A live coding run failed here, and the transcript says exactly why: the model sent
+       * `{ command: "node", args: ["node", "sum.test.cjs"] }`, repeating the binary as its own
+       * first argument. The process then tried to load a module literally called `node`, the test
+       * never ran, and the model — never having seen the real failure — "fixed" the wrong thing.
+       *
+       * Nothing in the schema said what `args` meant. `command` and `args` were bare `string` and
+       * `string[]`, and the description above talks about "the given arguments" without saying
+       * that the command is not one of them. That is a reasonable thing for a model to get wrong,
+       * and the cheapest place to fix it is here, where the model reads.
+       */
       inputSchema: {
         type: "object",
         properties: {
-          command: { type: "string" },
-          args: { type: "array", items: { type: "string" } },
-          cwd: { type: "string" },
+          command: {
+            type: "string",
+            description:
+              "The program to run, on its own. One of the allow-listed names above — not a shell " +
+              "line, and never repeated in `args`.",
+          },
+          args: {
+            type: "array",
+            items: { type: "string" },
+            description:
+              "Arguments passed to the program, WITHOUT the program itself. To run `node app.js`, " +
+              'send command: "node" and args: ["app.js"] — putting "node" in args as well makes ' +
+              "the program try to load a file called node.",
+          },
+          cwd: {
+            type: "string",
+            description:
+              "Working directory, relative to the workspace root. Defaults to the root itself; " +
+              'use "." for it explicitly.',
+          },
         },
         required: ["command"],
         additionalProperties: false,
@@ -116,6 +146,28 @@ export function createTerminalTools(root: string, sandbox: CommandSandbox): Nati
       const workspace = projectWorkspace(root, context);
       const cwd = resolveSandboxedPath(workspace, typeof args.cwd === "string" ? args.cwd : ".");
       const cmdArgs = Array.isArray(args.args) ? args.args.map(String) : [];
+
+      /**
+       * The command repeated as its own first argument — docs/26_DECISIONS.md ADR-145.
+       *
+       * Observed in a real coding run: `{ command: "node", args: ["node", "sum.test.cjs"] }`. The
+       * process then tried to load a module called `node` and failed with a loader error that
+       * looks nothing like the test failure the model was looking for, so it drew the wrong
+       * conclusion and patched the wrong thing.
+       *
+       * Refused with an explanation rather than silently dropped: the loop feeds a tool error
+       * back to the model, which can then correct itself, and quietly rewriting a caller's
+       * arguments would hide a real mistake and could change what a deliberate invocation meant.
+       */
+      if (cmdArgs[0] === command) {
+        return {
+          ok: false,
+          error:
+            `"${command}" was passed as both the command and its first argument, so it would run as ` +
+            `\`${command} ${command} ...\` and try to load a file called "${command}". Send ` +
+            `command: "${command}" with args: ${JSON.stringify(cmdArgs.slice(1))} instead.`,
+        };
+      }
 
       // docs/13_SECURITY_ARCHITECTURE.md §6/§11 — found the hard way (a real exploit run
       // against a live server, not a theoretical review): `node`'s own CLI parser treats a

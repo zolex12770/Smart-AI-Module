@@ -217,6 +217,28 @@ export function applyUnifiedDiff(
       }
     }
     const applied = applyPatchToContent(existing, patch);
+
+    /**
+     * A diff that changes nothing is refused — docs/26_DECISIONS.md ADR-145.
+     *
+     * Observed in a real coding run: the model sent a hunk whose `-` and `+` lines were the same
+     * text (`-module.exports = { sum };` / `+module.exports = { sum };`), leaving the actual bug
+     * untouched. Every hunk matched, so the tool answered `hunksApplied: 1, action: "modified"` —
+     * accurate, and useless. The model read it as "the fix is applied" and spent the rest of its
+     * budget elsewhere while the file still held the original defect.
+     *
+     * Reporting work that did not happen is the failure mode this platform refuses everywhere
+     * else, and it is worse here than a plain error: the caller is a model, and a false success
+     * removes the one signal that would have made it look again.
+     */
+    if (!patch.isNewFile && applied.content === existing) {
+      throw new PatchError(
+        `The diff for "${relative}" applied cleanly but changed nothing — every hunk's "+" lines ` +
+          `match its "-" lines, so the file is byte-for-byte identical. Check that the line you ` +
+          `meant to change is the one the hunk actually replaces.`
+      );
+    }
+
     staged.push({
       absolute,
       content: applied.content,

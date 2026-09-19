@@ -665,6 +665,22 @@ export class AgentEngine {
     // AbortController leaked, and the run could no longer be cancelled. The approved call is
     // the single riskiest statement in this method, and it was the one statement outside the
     // guard.
+
+    /**
+     * What the run actually DID, kept so it can be persisted — docs/26_DECISIONS.md ADR-134,
+     * declared OUTSIDE the try by ADR-145.
+     *
+     * The loop emitted `tool_call` and `tool_result` from the start and the engine forwarded
+     * neither, so a ten-minute run showed a spinner and then an answer: no way to watch it, and
+     * afterwards only the final text survived.
+     *
+     * It lives out here because the failure paths need it too. Declared inside the try, it was
+     * invisible to the catch — so a run that threw, or exhausted its iterations, persisted
+     * nothing at all, which is precisely the case the log exists for: a completed run explains
+     * itself through its answer, and a failed one has only its history.
+     */
+    const activity: Array<Record<string, unknown>> = [];
+
     try {
 
       /**
@@ -764,15 +780,6 @@ export class AgentEngine {
       const modelRouter = this.deps.modelRouter;
       const meter = this.deps.meter;
 
-      /**
-       * What the run actually DID, kept so it can be persisted — docs/26_DECISIONS.md ADR-134.
-       *
-       * The loop emitted `tool_call` and `tool_result` from the start and the engine forwarded
-       * neither, so a ten-minute run showed a spinner and then an answer: no way to watch it, and
-       * afterwards only the final text survived. Which tools ran, with what arguments, and what
-       * came back existed nowhere a user or an auditor could look.
-       */
-      const activity: Array<Record<string, unknown>> = [];
 
       const result = await this.withNodeDeadline(
         node,
@@ -958,7 +965,9 @@ export class AgentEngine {
         await this.handleNodeFailure(
           task.id,
           node,
-          `The agent stopped after ${result.iterations} turns (${result.stopReason}) without reaching an answer.`
+          `The agent stopped after ${result.iterations} turns (${result.stopReason}) without reaching an answer.`,
+          "retryable-execution",
+          activity
         );
         return;
       }
@@ -973,7 +982,13 @@ export class AgentEngine {
         activity,
       });
     } catch (err) {
-      await this.handleNodeFailure(task.id, node, err instanceof Error ? err.message : String(err));
+      await this.handleNodeFailure(
+        task.id,
+        node,
+        err instanceof Error ? err.message : String(err),
+        "retryable-execution",
+        activity
+      );
     } finally {
       this.inFlight.delete(node.id);
     }
@@ -1216,11 +1231,22 @@ export class AgentEngine {
    * lists it as deferred. The column is written honestly regardless, so the replanner has
    * the input it will need.
    */
+  /**
+   * `activity` is persisted on FAILURE too — docs/26_DECISIONS.md ADR-145.
+   *
+   * ADR-134 recorded what a run did so that "what happened" survives past the moment somebody was
+   * watching. It wrote that log on the success path only. So a run that failed — exhausted its
+   * iterations, hit its deadline, threw — kept nothing at all, which is the exact case the log
+   * exists for: a completed run explains itself through its answer, and a failed one has only its
+   * history. Found by running the coding agent, where a failed task reported `activity: 0` while
+   * the workspace showed the file had plainly been edited.
+   */
   private async handleNodeFailure(
     taskId: string,
     node: TaskNodeRecord,
     message: string,
-    failureClass: FailureClass = "retryable-execution"
+    failureClass: FailureClass = "retryable-execution",
+    activity?: Array<Record<string, unknown>>
   ): Promise<void> {
     const attempts = node.attemptCount + 1;
     const canRetry = failureClass === "retryable-execution" && attempts < node.retryPolicy.maxAttempts;
@@ -1235,6 +1261,11 @@ export class AgentEngine {
           failureClass,
           startedAt: null,
           nextAttemptAt: null,
+          // Merged into whatever the node already held, so a resumed run does not lose the
+          // earlier attempt's history by failing on a later one.
+          ...(activity && activity.length > 0
+            ? { output: { ...(node.output ?? {}), activity } }
+            : {}),
         },
         "engine"
       );
