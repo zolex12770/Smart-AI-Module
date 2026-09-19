@@ -18,6 +18,26 @@ import type { AppContext } from "../../context.js";
 import { CSRF_COOKIE, SESSION_COOKIE, requireProject, requireUser } from "../../plugins/auth.js";
 
 /**
+ * The account-scoped routes refuse an API key — docs/26_DECISIONS.md ADR-147.
+ *
+ * ADR-108 established the rule for account deletion and gave the reason in full: an API key is
+ * bound to exactly one project and is documented as an automation credential, the kind that
+ * lives in CI or in a contractor's script, and a bearer request is exempt from CSRF. It must
+ * not be able to act on the ACCOUNT that owns it.
+ *
+ * The rule was then written out by hand at two of the four places it applies, and the two that
+ * were missed — listing and revoking browser sessions — are exactly the ones that let a
+ * project-scoped key enumerate every live session of its owner, with the IP address and user
+ * agent ADR-127 stores so a human can recognise their own laptop, and then end all of them.
+ * One helper, so the next account-scoped route cannot be written without meeting it.
+ */
+function requireSessionCredential(request: FastifyRequest, action: string): void {
+  if (request.auth?.method !== "session") {
+    throw new PermissionError(`${action} requires a signed-in session; an API key cannot do it.`);
+  }
+}
+
+/**
  * Identity, project and API-key endpoints — docs/26_DECISIONS.md ADR-049.
  *
  * Cookie policy: the session cookie is `httpOnly` (JavaScript cannot read it, so an XSS bug
@@ -136,9 +156,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     },
     async (request, reply) => {
       const user = requireUser(request);
-      if (request.auth?.method !== "session") {
-        throw new PermissionError("Changing a password requires a signed-in session, not an API key.");
-      }
+      requireSessionCredential(request, "Changing a password");
       const parsed = changePasswordRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
 
@@ -159,11 +177,13 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
 
   app.get("/api/v1/auth/sessions", async (request) => {
     const user = requireUser(request);
+    requireSessionCredential(request, "Listing your sessions");
     return { sessions: await ctx.auth.listSessions(user.id) };
   });
 
   app.delete("/api/v1/auth/sessions/:sessionId", async (request, reply) => {
     const user = requireUser(request);
+    requireSessionCredential(request, "Ending a session");
     const { sessionId } = request.params as { sessionId: string };
     // Scoped to the caller inside the update, so another user's session id matches nothing and
     // is reported as absent rather than refused — the two are indistinguishable on purpose.
@@ -262,9 +282,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       // A person with a browser session, not a credential (ADR-108). An API key is a
       // project-scoped automation credential; it must not be able to destroy the account and
       // every organization the user solely owns, and a bearer request is exempt from CSRF.
-      if (request.auth?.method !== "session") {
-        throw new PermissionError("Account deletion requires an interactive session; an API key cannot delete an account.");
-      }
+      requireSessionCredential(request, "Deleting an account");
       const parsed = deleteAccountRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
 

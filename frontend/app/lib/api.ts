@@ -387,6 +387,33 @@ export const changePassword = (currentPassword: string, newPassword: string) =>
     body: JSON.stringify({ currentPassword, newPassword }),
   });
 
+/**
+ * Deleting the account and everything in it — NFR-008, ADR-102, wired up by ADR-147.
+ *
+ * The route was built to be driven by a person (session credential only, current password,
+ * a typed confirmation) and then had no caller in the product at all: the one privacy action
+ * whose own docstring says it must not require asking someone else could only be reached by
+ * hand-writing an HTTP request. The counts come back so the screen can say what actually went,
+ * and the `notRemoved` lists so it can say honestly what did not.
+ */
+export interface AccountDeletionResult {
+  deleted: { organizations: number; projects: number; storageObjects: number; workspaces: number; queuedJobs: number };
+  retainedOrganizations: number;
+  retainedProjects: number;
+  storageObjectsNotRemoved: string[];
+  workspacesNotRemoved: string[];
+  projectsWithJobsNotCancelled: string[];
+}
+
+/** The server requires this exact string; it is not a label the screen is free to reword. */
+export const DELETE_ACCOUNT_CONFIRMATION = "DELETE MY ACCOUNT";
+
+export const deleteAccount = (password: string) =>
+  request<AccountDeletionResult>("/api/v1/auth/account", {
+    method: "DELETE",
+    body: JSON.stringify({ password, confirm: DELETE_ACCOUNT_CONFIRMATION }),
+  });
+
 // --- Memory --------------------------------------------------------------------------------
 
 export const listMemory = () => request<{ items: MemoryItem[] }>("/api/v1/memory");

@@ -28,7 +28,7 @@ import {
   type ProjectRole,
 } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
-import { hashPassword, needsRehash, verifyPassword, type ScryptParams } from "./password.js";
+import { createDecoyHash, hashPassword, needsRehash, verifyPassword, type ScryptParams } from "./password.js";
 import { generateApiKey, generateSessionToken, hashToken } from "./tokens.js";
 
 export interface AuthServiceOptions {
@@ -80,6 +80,7 @@ export class AuthService {
   private readonly lockoutMs: number;
   private readonly maxProjectsPerOrganization: number;
   private readonly scryptParams: ScryptParams | undefined;
+  private readonly decoyHash: Promise<string>;
   private readonly now: () => Date;
 
   constructor(
@@ -91,6 +92,18 @@ export class AuthService {
     this.lockoutMs = options.lockoutMs ?? 15 * 60 * 1000;
     this.maxProjectsPerOrganization = options.maxProjectsPerOrganization ?? 100;
     this.scryptParams = options.scryptParams;
+    /**
+     * The decoy is derived HERE, from the same parameters this instance hashes with — ADR-147.
+     *
+     * It used to be a constant pinned at the test cost while real passwords were written at
+     * OWASP's, so the branch that exists to equalise work was thirty times cheaper than the one
+     * it equalises against. Deriving it once at construction keeps the cost identical and off
+     * the request path; the promise is awaited on every login, resolved after the first.
+     */
+    this.decoyHash = createDecoyHash(this.scryptParams);
+    // A handler, so a failure here is never an unhandled rejection. The error itself still
+    // surfaces — at the await in `login`, which then fails closed.
+    void this.decoyHash.catch(() => undefined);
     this.now = options.now ?? (() => new Date());
   }
 
@@ -377,7 +390,8 @@ export class AuthService {
     // locked: verifying against a decoy hash keeps the timing of "unknown email" and "locked"
     // close to "wrong password". Skipping the verification for a locked account would replace
     // the message oracle with a timing one.
-    const encoded = locked ? DECOY_HASH : (row?.passwordHash ?? DECOY_HASH);
+    const decoy = await this.decoyHash;
+    const encoded = locked ? decoy : (row?.passwordHash ?? decoy);
     const passwordOk = await verifyPassword(password, encoded);
 
     if (locked) {
@@ -970,16 +984,9 @@ function toAuthenticatedUser(row: typeof users.$inferSelect): AuthenticatedUser 
 }
 
 /**
- * A real scrypt hash of a random value, used to equalise work on the unknown-email path.
- * Generated once at module load so login timing does not depend on account existence.
- */
-/**
  * The ONE thing a failed login is allowed to say (ADR-125). Every denial — unknown email, wrong
  * password, disabled account, locked account — uses this exact string, so the response cannot be
  * used to learn which of those it was.
  */
 const INVALID_CREDENTIALS = "Invalid email or password.";
 
-const DECOY_HASH =
-  "scrypt$4096$8$1$AAAAAAAAAAAAAAAAAAAAAA==$" +
-  "Ki2N0oQhWkYlqvVQrHkbT0M9m2vCkQ8QO2K8YvOaZ6t8sZQe1H0oQm4wYb1Nl5rD8f0K3xX7cJ0oP5vT9wQ2Zg==";

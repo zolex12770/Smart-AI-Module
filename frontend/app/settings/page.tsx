@@ -5,6 +5,9 @@ import Link from "next/link";
 import {
   changePassword,
   createApiKey,
+  deleteAccount,
+  DELETE_ACCOUNT_CONFIRMATION,
+  type AccountDeletionResult,
   listApiKeys,
   listSessions,
   revokeApiKey,
@@ -85,6 +88,8 @@ function SettingsView() {
           would misrepresent who can call the API. */}
       {projectId ? <ApiKeysCard key={projectId} /> : null}
 
+      <DangerZoneCard onDeleted={() => void signOut()} />
+
       <div className="card">
         <strong>Memory</strong>
         {/* A link, not a second copy of the list. This screen carried its own memory
@@ -160,6 +165,125 @@ function PasswordCard({ onSignedOut }: { onSignedOut: () => void }) {
           {busy ? "Changing…" : "Change password"}
         </button>
       </form>
+      {error && <p className="error-text">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * Deleting the account, from the account screen — NFR-008, ADR-102, reached at last by ADR-147.
+ *
+ * The endpoint went to real trouble to be safe for a person to drive: a session credential
+ * rather than an API key, the current password, a typed confirmation, and a per-user rate
+ * limit. Then nothing in the product called it, so the requirement it satisfies — "self-service
+ * rather than an operator ticket, because a privacy requirement satisfied only by asking
+ * someone else is not satisfied" — was not satisfied either.
+ *
+ * What is NOT removed is reported rather than hidden. The route returns the storage objects,
+ * workspaces and job queues it could not clear, and a screen that showed a plain "deleted"
+ * over that list would be making exactly the claim this platform refuses everywhere else.
+ */
+function DangerZoneCard({ onDeleted }: { onDeleted: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<AccountDeletionResult | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await deleteAccount(password);
+      setResult(r);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (result) {
+    const leftovers =
+      result.storageObjectsNotRemoved.length +
+      result.workspacesNotRemoved.length +
+      result.projectsWithJobsNotCancelled.length;
+    return (
+      <div className="card">
+        <strong>Account deleted</strong>
+        <p style={{ margin: "6px 0 0" }}>
+          {result.deleted.projects} project(s), {result.deleted.organizations} organization(s),{" "}
+          {result.deleted.storageObjects} stored file(s) and {result.deleted.workspaces} workspace(s) removed;{" "}
+          {result.deleted.queuedJobs} queued job(s) cancelled.
+        </p>
+        {result.retainedProjects > 0 && (
+          <p className="page-subtitle">
+            {result.retainedProjects} project(s) other members can still reach were kept; only your access ended.
+          </p>
+        )}
+        {leftovers > 0 && (
+          // Said plainly, because an orphaned object is a privacy problem and the person is
+          // entitled to know one exists.
+          <p className="error-text">
+            {leftovers} item(s) could not be removed and need an operator: {result.storageObjectsNotRemoved.length}{" "}
+            stored file(s), {result.workspacesNotRemoved.length} workspace(s),{" "}
+            {result.projectsWithJobsNotCancelled.length} project(s) with jobs still queued.
+          </p>
+        )}
+        <div style={{ marginTop: 12 }}>
+          <button type="button" className="btn btn-secondary" onClick={onDeleted}>
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <strong>Delete account</strong>
+      <p className="page-subtitle">
+        Removes your account, every organization you alone own, their projects, files and agent
+        workspaces, and cancels their queued jobs. Projects other members can still reach are kept.
+        This cannot be undone.
+      </p>
+      {!open ? (
+        <div style={{ marginTop: 12 }}>
+          <button type="button" className="btn btn-secondary" onClick={() => setOpen(true)}>
+            Delete account…
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={submit} style={{ marginTop: 12 }}>
+          <div className="form-row">
+            <label style={{ flex: 1, minWidth: 200 }}>
+              Current password
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
+            <label style={{ flex: 1, minWidth: 220 }}>
+              Type {DELETE_ACCOUNT_CONFIRMATION} to confirm
+              <input value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+            </label>
+          </div>
+          <button
+            type="submit"
+            className="btn"
+            disabled={busy || !password || confirm !== DELETE_ACCOUNT_CONFIRMATION}
+          >
+            {busy ? "Deleting…" : "Delete my account"}
+          </button>{" "}
+          <button type="button" className="btn btn-secondary" onClick={() => setOpen(false)} disabled={busy}>
+            Cancel
+          </button>
+        </form>
+      )}
       {error && <p className="error-text">{error}</p>}
     </div>
   );

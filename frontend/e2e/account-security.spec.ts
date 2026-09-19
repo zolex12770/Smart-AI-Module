@@ -57,4 +57,39 @@ test.describe("account security", () => {
     await page.getByRole("button", { name: /sign in/i }).click();
     await page.waitForURL("**/chat", { timeout: 30_000 });
   });
+
+  test("a user can delete their own account, and cannot sign in afterwards", async ({ page }) => {
+    /**
+     * NFR-008 / ADR-102 built this route to be driven by a person and then gave it no caller:
+     * `grep -rn "auth/account" frontend` returned nothing at all. A privacy requirement that can
+     * only be met by hand-writing an HTTP request is not met, so the check is that a browser can
+     * do it — and that the account is really gone afterwards, not merely reported gone.
+     */
+    const email = `e2e-delete-${unique()}@example.com`;
+    await signUp(page, email);
+    await page.goto("/settings");
+
+    await page.getByRole("button", { name: /delete account…/i }).click();
+
+    // The typed confirmation is required: the button stays disabled until it matches exactly.
+    const submit = page.getByRole("button", { name: /^delete my account$/i });
+    await page.getByLabel(/current password/i).last().fill(PASSWORD);
+    await expect(submit).toBeDisabled();
+    await page.getByLabel(/type delete my account to confirm/i).fill("DELETE MY ACCOUNT");
+    await expect(submit).toBeEnabled();
+
+    await submit.click();
+    await expect(page.getByText(/account deleted/i)).toBeVisible({ timeout: 30_000 });
+    // What went is reported as counts, not as a bare "done".
+    await expect(page.getByText(/project\(s\).*organization\(s\)/i)).toBeVisible();
+
+    await page.getByRole("button", { name: /sign out/i }).last().click();
+    await page.waitForURL(/\/login/, { timeout: 30_000 });
+
+    // The account is gone: the password that worked a moment ago does not.
+    await page.getByLabel("Email").fill(email);
+    await page.getByLabel("Password", { exact: true }).fill(PASSWORD);
+    await page.getByRole("button", { name: /sign in/i }).click();
+    await expect(page.getByText(/invalid email or password/i)).toBeVisible({ timeout: 30_000 });
+  });
 });

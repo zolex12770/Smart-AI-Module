@@ -214,15 +214,69 @@ describe("password change and session management", () => {
   });
 
   it("requires a session credential, not an API key", async () => {
+    /**
+     * This test used to send no credential at all — no cookie, no bearer — so the 401 it
+     * asserted came from the deny-by-default auth plugin and would have been produced whatever
+     * these routes checked. It passed against session listing and revocation, which accepted a
+     * project-scoped API key: the holder of a key left in CI could enumerate every browser its
+     * owner was signed in from, with the IP and user agent ADR-127 records, and end all of them.
+     *
+     * So it presents a REAL key now, against all three routes. Two of the three fail without
+     * the guard (ADR-147).
+     */
+    const alice = await signUp("alice@example.com");
+    const projectId = ((await me(alice.headers)).json() as { projects: Array<{ id: string }> }).projects[0]!.id;
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/api-keys",
+      headers: alice.headers,
+      payload: { name: "automation", projectId },
+    });
+    expect(created.statusCode).toBe(201);
+    const key = (created.json() as { key: string }).key;
+    const keyHeaders = { authorization: `Bearer ${key}`, "x-project-id": projectId };
+
+    // The key is a WORKING credential — otherwise every assertion below would pass for the
+    // wrong reason, which is exactly how the previous version of this test passed.
+    const whoami = await me(keyHeaders);
+    expect(whoami.statusCode).toBe(200);
+    expect((whoami.json() as { method: string }).method).toBe("api_key");
+
+    const sessionId = (
+      (await app.inject({ method: "GET", url: "/api/v1/auth/sessions", headers: alice.headers })).json() as {
+        sessions: Array<{ id: string }>;
+      }
+    ).sessions[0]!.id;
+
     expect(
       (
         await app.inject({
           method: "POST",
           url: "/api/v1/auth/password",
+          headers: keyHeaders,
           payload: { currentPassword: PASSWORD, newPassword: NEW_PASSWORD },
         })
       ).statusCode
-    ).toBe(401);
-    expect((await app.inject({ method: "GET", url: "/api/v1/auth/sessions" })).statusCode).toBe(401);
+    ).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/v1/auth/sessions", headers: keyHeaders })).statusCode).toBe(403);
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/v1/auth/sessions/${sessionId}`, headers: keyHeaders })).statusCode
+    ).toBe(403);
+
+    // And the session it tried to end is still alive.
+    expect((await me(alice.headers)).statusCode).toBe(200);
+  });
+
+  it("still lets the signed-in browser do all three", async () => {
+    // The guard must refuse the key without refusing the person; a 403 for everyone would
+    // satisfy the test above and break the feature.
+    const bob = await signUp("bob@example.com");
+    const listed = await app.inject({ method: "GET", url: "/api/v1/auth/sessions", headers: bob.headers });
+    expect(listed.statusCode).toBe(200);
+    const sessionId = (listed.json() as { sessions: Array<{ id: string }> }).sessions[0]!.id;
+    expect(
+      (await app.inject({ method: "DELETE", url: `/api/v1/auth/sessions/${sessionId}`, headers: bob.headers })).statusCode
+    ).toBe(200);
   });
 });

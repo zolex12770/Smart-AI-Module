@@ -50,6 +50,20 @@ export async function hashPassword(password: string, params: ScryptParams = DEFA
 }
 
 /**
+ * A real hash of a random value, under the SAME parameters real passwords are written with.
+ *
+ * `login` verifies a guess against this when the email is unknown or the account is locked, so
+ * that every denial costs what a wrong password costs. That only holds if the decoy's cost
+ * equals the configured cost. A decoy pinned at a fixed, cheaper N does not equalise the work —
+ * it reverses it, and makes "this account does not exist" the fastest answer the endpoint gives.
+ *
+ * Random, and never stored: no guess can match it, and nothing is learned by matching one.
+ */
+export async function createDecoyHash(params: ScryptParams = DEFAULT_SCRYPT_PARAMS): Promise<string> {
+  return hashPassword(randomBytes(32).toString("base64"), params);
+}
+
+/**
  * Constant-time verification. Returns false for a malformed hash rather than throwing, so a
  * corrupted row cannot become a 500 on the login path — it is simply a failed login.
  */
