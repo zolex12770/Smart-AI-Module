@@ -65,6 +65,16 @@ export const rejectNode = (taskId: string, nodeId: string) =>
   request<{ ok: true }>(`/api/v1/agent/tasks/${taskId}/reject`, { method: "POST", body: JSON.stringify({ nodeId }) });
 export const cancelTask = (taskId: string) =>
   request<{ ok: true }>(`/api/v1/agent/tasks/${taskId}/cancel`, { method: "POST" });
+/**
+ * Deciding what happens to a node a restart caught mid-action — ADR-148.
+ *
+ * `retry` repeats the work and re-enters the approval gate; `abandon` cancels the node.
+ */
+export const reconcileNode = (taskId: string, nodeId: string, decision: "retry" | "abandon") =>
+  request<{ ok: true }>(`/api/v1/agent/tasks/${taskId}/reconcile`, {
+    method: "POST",
+    body: JSON.stringify({ nodeId, decision }),
+  });
 
 // --- Audio (ADR-114) ---------------------------------------------------------------------
 

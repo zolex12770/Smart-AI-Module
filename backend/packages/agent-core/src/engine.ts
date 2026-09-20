@@ -318,6 +318,50 @@ export class AgentEngine {
   }
 
   /**
+   * What a human does about a node that crashed mid-action — docs/26_DECISIONS.md ADR-148.
+   *
+   * `needs_reconciliation` existed with one writer and no reader: a mutating tool call caught by
+   * a restart parked there, the task PAUSED, and nothing in the engine, the API or the product
+   * could move either again. "Surface for manual reconciliation" is only a policy if the surface
+   * leads somewhere; otherwise it is a leak that looks like caution.
+   *
+   * `retry` re-runs the node from the beginning, which is the human saying "I have checked, and
+   * doing this again is safe" — so it also clears the approval and the pending call, and the run
+   * meets the gate again rather than replaying a decision made before the crash.
+   * `abandon` cancels the node, and its dependents cascade exactly as a rejection's do.
+   */
+  async reconcile(taskId: string, nodeId: string, decision: "retry" | "abandon", actor: string): Promise<void> {
+    await this.runExclusive(taskId, async () => {
+      const node = await this.deps.nodeRepo.getUnscoped(nodeId);
+      if (!node || node.rootTaskId !== taskId || node.status !== "needs_reconciliation") {
+        throw new Error(`Node "${nodeId}" is not waiting to be reconciled.`);
+      }
+      if (decision === "abandon") {
+        await this.updateNode(node, { status: "cancelled" }, `user:${actor}`);
+      } else {
+        const { resume: _resume, pendingCall: _pendingCall, pendingCalls: _pendingCalls, ...rest } = (node.output ??
+          {}) as Record<string, unknown>;
+        await this.updateNode(
+          node,
+          {
+            status: "pending",
+            startedAt: null,
+            nextAttemptAt: null,
+            approvedBy: null,
+            approvedAt: null,
+            // The activity survives: it is the only account of what the interrupted attempt did,
+            // and the person deciding needs it to still be there afterwards.
+            output: rest,
+          },
+          `user:${actor}`
+        );
+      }
+      await this.transitionTask(taskId, "EXECUTING", `user:${actor}`);
+      await this.tick(taskId);
+    });
+  }
+
+  /**
    * The abort happens OUTSIDE the lock — docs/26_DECISIONS.md ADR-146.
    *
    * `runExclusive` is strictly FIFO, and a node's whole execution runs inside that same mutex:
@@ -707,7 +751,7 @@ export class AgentEngine {
      * nothing at all, which is precisely the case the log exists for: a completed run explains
      * itself through its answer, and a failed one has only its history.
      */
-    const activity: Array<Record<string, unknown>> = [];
+    const activity: Array<Record<string, unknown>> = persistedActivity(node.output);
 
     try {
 
@@ -727,13 +771,36 @@ export class AgentEngine {
           workspaceRoot: this.deps.workspaceRoot,
           signal: controller.signal,
         });
+        /**
+         * Delimited like every other tool result — docs/26_DECISIONS.md ADR-148.
+         *
+         * ADR-133 wraps tool output entering the model-driven transcript because it is the
+         * literal content of a file, a web page or a third party's server, going to a model that
+         * holds a filesystem and a terminal. This one call was pushed raw — and it is the single
+         * call the design treats as most dangerous, the one a human was stopped and asked about.
+         * Approval gates `always` and `first_use`, which is destructive, financial and
+         * write_external, and MCP-discovered tools inherit those defaults: an MCP server's
+         * `delete_record` response is authored by somebody else entirely, and it was arriving
+         * undelimited, in the position of an ordinary conversational turn.
+         */
         priorMessages.push({
           role: "tool",
-          content: outcome.ok
-            ? JSON.stringify(outcome.output ?? {})
-            : `Error: ${outcome.error ?? "the tool failed without a message"}`,
+          content: wrapUntrustedContent(
+            outcome.ok
+              ? JSON.stringify(outcome.output ?? {})
+              : `Error: ${outcome.error ?? "the tool failed without a message"}`
+          ),
           toolCallId: approvedCall.id,
           name: approvedCall.name,
+        });
+        // Recorded the moment it runs, so the approved action appears in the history whatever
+        // happens next — including a crash before the model answers.
+        activity.push({
+          kind: "tool_result",
+          name: approvedCall.name,
+          ok: outcome.ok,
+          approved: true,
+          ...(outcome.ok ? {} : { error: outcome.error ?? "the tool failed without a message" }),
         });
 
         /**
@@ -964,6 +1031,16 @@ export class AgentEngine {
           {
             status: "waiting_approval",
             output: {
+              /**
+               * The history so far goes WITH the park — ADR-148.
+               *
+               * `output` is replaced wholesale by the repository when the key is present, so a
+               * park that wrote only the resume state dropped every tool call the run had already
+               * made. A resumed run then started its log empty, and a run that parked, was
+               * approved and later failed had no record of anything before the pause — which is
+               * exactly the run an operator opens this screen to understand (ADR-134).
+               */
+              activity,
               resume: { transcript: result.transcript },
               pendingCall: { id: paused.call.id, name: paused.call.name, arguments: paused.call.arguments },
               // Every call from that turn that produced no `tool` message (ADR-099): the one a
@@ -1454,7 +1531,35 @@ export class AgentEngine {
 
     for (const node of inFlightNodes) {
       if (node.status === "waiting_model") {
-        await this.updateNode(node, { status: "pending", startedAt: null }, "system:crash-recovery");
+        /**
+         * A model CALL can be redone; a model-driven RUN cannot — docs/26_DECISIONS.md ADR-148.
+         *
+         * This branch re-dispatched every `waiting_model` node, and a `reasoning` node is one of
+         * them. Two ways that was wrong, both of them the thing the `waiting_tool` branch below
+         * refuses to do:
+         *
+         *  - A node resumed from an approval still carries `output.pendingCall`, and nothing
+         *    clears it; `executeReasoningNode` runs that call directly, and the gate is skipped
+         *    because `approvedAt` is already set. So a restart between the human's approval and
+         *    the end of the run performed the irreversible action a SECOND time, with nobody
+         *    asked. Only destructive, financial and write_external tools ever reach that path.
+         *  - A run with no approval at all restarts from its goal, redoing every mutating call it
+         *    had already made, because the engine has no record of what it did.
+         *
+         * So it is surfaced for a human exactly as a mutating tool call is, and `reconcile` gives
+         * that human something to do about it — a pause nobody can end is not a safety measure.
+         */
+        if (node.kind === "reasoning") {
+          const approved = readResumeState(node.output)?.pendingCall;
+          await this.updateNode(node, { status: "needs_reconciliation", startedAt: null }, "system:crash-recovery");
+          await this.transitionTask(node.rootTaskId, "PAUSED", "system:crash-recovery", {
+            reason: approved
+              ? `Node ${node.id} was running the approved call "${approved.name}" at crash time. Its outcome is unknown, so it is not repeated automatically.`
+              : `Node ${node.id} was mid-run at crash time. What it had already done is unknown, so it is not restarted automatically.`,
+          });
+        } else {
+          await this.updateNode(node, { status: "pending", startedAt: null }, "system:crash-recovery");
+        }
       } else if (node.status === "retrying") {
         // A backoff is NOT restarted by a restart, and not lost to one either: the deadline
         // is a column, so `sweep()` below picks the node up exactly when it was already due.
@@ -1638,6 +1743,18 @@ export const AUTONOMOUS_SYSTEM_PROMPT = [
 ].join(" ");
 
 /** Reads the resume state a paused reasoning node persisted, tolerating anything malformed. */
+/**
+ * The activity a node has already recorded, so a resumed run continues its history — ADR-148.
+ *
+ * Returns a fresh array; the caller pushes to it for the rest of the run and persists the whole
+ * thing at every exit.
+ */
+function persistedActivity(output: Record<string, unknown> | null): Array<Record<string, unknown>> {
+  const entries = (output as { activity?: unknown } | null)?.activity;
+  if (!Array.isArray(entries)) return [];
+  return entries.filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null);
+}
+
 function readResumeState(output: Record<string, unknown> | null): {
   transcript: ChatMessage[];
   approvedCallIds: string[];

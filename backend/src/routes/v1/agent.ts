@@ -44,6 +44,8 @@ function scopedProjectId(authCtx: AuthContext): string {
  * request — both are gone: the shape is validated here, and the actor comes from the session.
  */
 const nodeDecisionSchema = z.object({ nodeId: z.string().min(1) });
+/** `retry` repeats the interrupted action; `abandon` gives up on it. There is no default. */
+const reconcileSchema = z.object({ nodeId: z.string().min(1), decision: z.enum(["retry", "abandon"]) });
 
 /**
  * Cancel carries no fields of its own. `.strict()` so a stray `actor` is rejected loudly
@@ -178,6 +180,28 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
 
     // Same rule as approve: the rejecter is whoever the session says it is, never the body.
     await ctx.engine.reject(task.id, node.id, authCtx.user.id);
+    return { ok: true };
+  });
+
+  /**
+   * Deciding what happens to a node that crashed mid-action — docs/26_DECISIONS.md ADR-148.
+   *
+   * A mutating tool call, or a whole model-driven run, that a restart caught in flight parks at
+   * `needs_reconciliation` with the task PAUSED, because the engine cannot know whether the
+   * action completed. That state had no reader anywhere: no route, no screen, no engine method.
+   * A human decides here — `retry` repeats the work and re-enters the approval gate, `abandon`
+   * cancels the node — and it is `agent:approve` because the question is whether to repeat an
+   * action a human was asked about in the first place.
+   */
+  app.post<{ Params: { id: string } }>("/api/v1/agent/tasks/:id/reconcile", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "agent:approve");
+    const parsed = reconcileSchema.safeParse(request.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.message);
+    const { task, node } = await resolveDecisionTarget(ctx, authCtx, request.params.id, {
+      nodeId: parsed.data.nodeId,
+    });
+
+    await ctx.engine.reconcile(task.id, node.id, parsed.data.decision, authCtx.user.id);
     return { ok: true };
   });
 

@@ -76,6 +76,7 @@ and nothing is ever substituted with a fake result (ADR-050).
 | `POST` | `/api/v1/agent/tasks/:id/approve` | session or API key · `agent:approve` | global (300 / 1 minute) |
 | `POST` | `/api/v1/agent/tasks/:id/cancel` | session or API key · `agent:run` | global (300 / 1 minute) |
 | `GET` | `/api/v1/agent/tasks/:id/events` | session or API key · `project:read` | global (300 / 1 minute) |
+| `POST` | `/api/v1/agent/tasks/:id/reconcile` | session or API key · `agent:approve` | global (300 / 1 minute) |
 | `POST` | `/api/v1/agent/tasks/:id/reject` | session or API key · `agent:approve` | global (300 / 1 minute) |
 
 ## `/api/v1/api-keys`

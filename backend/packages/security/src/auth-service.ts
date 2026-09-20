@@ -732,7 +732,19 @@ export class AuthService {
 
   // --- projects -------------------------------------------------------------------------
 
-  async listProjectsForUser(userId: string): Promise<Array<{ id: string; name: string; organizationId: string; role: string }>> {
+  /**
+   * Each project the user can reach, with the permissions they hold ON it — ADR-148.
+   *
+   * The `permissions` array comes from `resolvePermissions`, the same function `authorizeProject`
+   * decides real requests with, so the browser cannot hold a different idea of what a user may do
+   * than the API enforces. It is returned rather than derived client-side from `role` because
+   * `role` is not the whole story: an organization owner with no project membership, or with a
+   * `viewer` one, is authorized through their ORG role, and a screen that read `role` alone would
+   * hide controls from a user the API would have obeyed.
+   */
+  async listProjectsForUser(
+    userId: string
+  ): Promise<Array<{ id: string; name: string; organizationId: string; role: string; permissions: Permission[] }>> {
     const rows = await this.db
       .select({
         id: projects.id,
@@ -757,6 +769,10 @@ export class AuthService {
         name: r.name,
         organizationId: r.organizationId,
         role: r.projectRole ?? (r.orgRole === null ? "viewer" : "admin"),
+        permissions: resolvePermissions(
+          (r.orgRole as OrgRole | null) ?? null,
+          (r.projectRole as ProjectRole | null) ?? null
+        ),
       }));
   }
 

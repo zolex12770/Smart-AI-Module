@@ -192,3 +192,34 @@ export function SystemAdminOnly({
   const { user } = useSession();
   return <>{user?.isSystemAdmin ? children : fallback}</>;
 }
+
+/**
+ * What the signed-in user may do in the SELECTED project — docs/26_DECISIONS.md ADR-148.
+ *
+ * The agent screen offered Approve, Reject and Cancel to everyone who could open a task, and the
+ * task is readable with `project:read` while those three need `agent:approve` and `agent:run`.
+ * A viewer saw three fully-enabled buttons on the approval gate the whole trust boundary rests
+ * on, pressed one, got a 403 nobody rendered, and watched the card not move.
+ *
+ * The permissions come from the API, computed by the same `resolvePermissions` the request path
+ * authorizes with, so this cannot drift from what the server will do. It is not a security
+ * control — the server refuses regardless — it is how the interface stops offering an action the
+ * person looking at it cannot take, and says who can.
+ */
+export function useProjectPermissions(): readonly string[] {
+  const { projects, projectId } = useSession();
+  return projects.find((p) => p.id === projectId)?.permissions ?? [];
+}
+
+export function Can({
+  permission,
+  children,
+  fallback = null,
+}: {
+  permission: string;
+  children: ReactNode;
+  fallback?: ReactNode;
+}) {
+  const permissions = useProjectPermissions();
+  return <>{permissions.includes(permission) ? children : fallback}</>;
+}

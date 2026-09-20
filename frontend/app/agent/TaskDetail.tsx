@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import type { Task, TaskNode } from "@ai-platform/shared";
-import { approveNode, cancelTask, rejectNode } from "../lib/api";
+import { approveNode, cancelTask, reconcileNode, rejectNode } from "../lib/api";
+import { Can } from "../lib/session-context";
 import { badgeClass, StatusBadge } from "../lib/status-badge";
 import { useTaskEvents, type TaskActivity } from "../lib/use-task-events";
 
@@ -27,13 +28,31 @@ export default function TaskDetail({
 }) {
   const { task, nodes, activity } = useTaskEvents(taskId, initialTask, initialNodes);
   const [busyNodeId, setBusyNodeId] = useState<string | null>(null);
+  /**
+   * A refusal has to be VISIBLE — docs/26_DECISIONS.md ADR-148.
+   *
+   * All three handlers were `await` with no catch, invoked as floating promises from `onClick`.
+   * A 403 (a viewer pressing Approve), a 404 (someone else decided this node first) or a dropped
+   * connection became an unhandled rejection in the console and nothing at all on screen: the
+   * card did not move and did not say why. ADR-123 fixed this exact silent-failure shape for
+   * chat send, on the screen where the stakes are lowest; this is the approval gate on
+   * destructive tool calls, which is the only kind that reaches it.
+   */
+  const [error, setError] = useState<string | null>(null);
+  // Kept apart from `error` so a refused Cancel is reported beside the Cancel button rather than
+  // inside the approval card, which may be far down the page or absent entirely.
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const waitingApproval = nodes.find((n) => n.status === "waiting_approval");
+  const needsReconciliation = nodes.find((n) => n.status === "needs_reconciliation");
 
   async function handleApprove(nodeId: string) {
     setBusyNodeId(nodeId);
+    setError(null);
     try {
       await approveNode(taskId, nodeId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusyNodeId(null);
     }
@@ -41,15 +60,35 @@ export default function TaskDetail({
 
   async function handleReject(nodeId: string) {
     setBusyNodeId(nodeId);
+    setError(null);
     try {
       await rejectNode(taskId, nodeId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyNodeId(null);
+    }
+  }
+
+  async function handleReconcile(nodeId: string, decision: "retry" | "abandon") {
+    setBusyNodeId(nodeId);
+    setError(null);
+    try {
+      await reconcileNode(taskId, nodeId, decision);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusyNodeId(null);
     }
   }
 
   async function handleCancel() {
-    await cancelTask(taskId);
+    setCancelError(null);
+    try {
+      await cancelTask(taskId);
+    } catch (e) {
+      setCancelError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   return (
@@ -64,12 +103,18 @@ export default function TaskDetail({
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <StatusBadge status={task.state} />
           {!TERMINAL_STATES.has(task.state) && (
-            <button className="btn btn-danger" onClick={handleCancel}>
-              Cancel
-            </button>
+            // `agent:run`, per docs/API.md. A viewer can open this page — the task is readable
+            // with `project:read` — and pressing Cancel would 403.
+            <Can permission="agent:run">
+              <button className="btn btn-danger" onClick={handleCancel}>
+                Cancel
+              </button>
+            </Can>
           )}
         </div>
       </div>
+
+      {cancelError && <p className="error-text">{cancelError}</p>}
 
       <div className="card">
         <strong>Request</strong>
@@ -135,14 +180,76 @@ export default function TaskDetail({
               </>
             );
           })()}
-          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <button className="btn" disabled={busyNodeId === waitingApproval.id} onClick={() => handleApprove(waitingApproval.id)}>
-              Approve
-            </button>
-            <button className="btn btn-danger" disabled={busyNodeId === waitingApproval.id} onClick={() => handleReject(waitingApproval.id)}>
-              Reject
-            </button>
-          </div>
+          <Can
+            permission="agent:approve"
+            fallback={
+              // Named rather than hidden: a viewer who sees a parked run needs to know it is
+              // waiting on somebody, not that the screen is broken.
+              <p className="page-subtitle" style={{ marginTop: 8 }}>
+                Waiting for a project editor or admin to decide — your role can read this task but
+                not approve or reject it.
+              </p>
+            }
+          >
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button className="btn" disabled={busyNodeId === waitingApproval.id} onClick={() => handleApprove(waitingApproval.id)}>
+                Approve
+              </button>
+              <button className="btn btn-danger" disabled={busyNodeId === waitingApproval.id} onClick={() => handleReject(waitingApproval.id)}>
+                Reject
+              </button>
+            </div>
+          </Can>
+          {error && <p className="error-text">{error}</p>}
+        </div>
+      )}
+
+      {needsReconciliation && (
+        <div className="card" style={{ borderColor: "var(--danger)" }}>
+          {/**
+           * A node the engine refuses to restart on its own — docs/26_DECISIONS.md ADR-148.
+           *
+           * A mutating tool call, or a whole model-driven run, that a restart caught in flight
+           * cannot be repeated safely: the engine does not know whether it completed. It parked
+           * here and the task PAUSED — and nothing could move either again, in the engine, the
+           * API or this screen. A pause a human cannot end is a leak that looks like caution.
+           */}
+          <strong>Interrupted — needs a decision</strong>
+          <p className="page-subtitle">
+            This step was in flight when the server restarted, so whether it finished is unknown.
+            It is not repeated automatically. Check the effect it would have had — a deleted file,
+            a sent request, a charge — and choose.
+          </p>
+          <p style={{ margin: "6px 0" }}>
+            Step: <code>{needsReconciliation.toolId ?? needsReconciliation.kind}</code>
+          </p>
+          <Can
+            permission="agent:approve"
+            fallback={
+              <p className="page-subtitle" style={{ marginTop: 8 }}>
+                Waiting for a project editor or admin to decide — your role can read this task but
+                not resolve an interrupted step.
+              </p>
+            }
+          >
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button
+                className="btn"
+                disabled={busyNodeId === needsReconciliation.id}
+                onClick={() => handleReconcile(needsReconciliation.id, "retry")}
+              >
+                Run it again
+              </button>
+              <button
+                className="btn btn-danger"
+                disabled={busyNodeId === needsReconciliation.id}
+                onClick={() => handleReconcile(needsReconciliation.id, "abandon")}
+              >
+                Abandon this step
+              </button>
+            </div>
+          </Can>
+          {error && <p className="error-text">{error}</p>}
         </div>
       )}
 

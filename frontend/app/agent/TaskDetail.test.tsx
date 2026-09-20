@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Task, TaskNode } from "@ai-platform/shared";
 import TaskDetail from "./TaskDetail";
 import type { TaskActivity } from "../lib/use-task-events";
@@ -29,6 +29,37 @@ const hookResult: { task: Task; nodes: TaskNode[]; activity: TaskActivity[] } = 
 vi.mock("../lib/use-task-events", () => ({
   useTaskEvents: () => hookResult,
 }));
+
+/**
+ * The session mock MIRRORS the real guard rather than rendering children unconditionally.
+ *
+ * A mock that always shows the children would make every assertion about who sees a control
+ * pass — which is the mistake ADR-144 was written about, one screen over.
+ */
+const permissions: { current: string[] } = { current: ["agent:run", "agent:approve"] };
+vi.mock("../lib/session-context", async () => {
+  const React = await import("react");
+  return {
+    Can: ({
+      permission,
+      children,
+      fallback = null,
+    }: {
+      permission: string;
+      children: React.ReactNode;
+      fallback?: React.ReactNode;
+    }) => React.createElement(React.Fragment, null, permissions.current.includes(permission) ? children : fallback),
+  };
+});
+
+/** The API client, so a refusal can be made to happen the way the server makes one. */
+const api = vi.hoisted(() => ({
+  approveNode: vi.fn(async () => undefined),
+  rejectNode: vi.fn(async () => undefined),
+  cancelTask: vi.fn(async () => undefined),
+  reconcileNode: vi.fn(async () => undefined),
+}));
+vi.mock("../lib/api", () => api);
 
 const task = (): Task =>
   ({
@@ -255,3 +286,146 @@ describe("TaskDetail coding tabs", () => {
     expect(screen.getByText(/No commands run yet/i)).toBeInTheDocument();
   });
 });
+
+/**
+ * A refusal is visible, and a control nobody can use is not offered — ADR-148.
+ *
+ * All three handlers awaited with no catch and were invoked as floating promises from `onClick`.
+ * A 403 (a viewer pressing Approve), a 404 (someone else decided the node first) or a dropped
+ * connection became an unhandled rejection and nothing on screen: the card did not move and did
+ * not say why. This is the approval gate on destructive tool calls.
+ */
+describe("TaskDetail decisions", () => {
+  afterEach(() => {
+    permissions.current = ["agent:run", "agent:approve"];
+    api.approveNode.mockReset().mockResolvedValue(undefined);
+    api.rejectNode.mockReset().mockResolvedValue(undefined);
+    api.cancelTask.mockReset().mockResolvedValue(undefined);
+    hookResult.activity = [];
+  });
+
+  const pending = { id: "call-1", name: "fs.delete_file", arguments: { path: "notes.md" } };
+
+  function renderParked() {
+    hookResult.task = task();
+    hookResult.nodes = [reasoningNode({ pendingCall: pending, reason: "destructive" })];
+    render(<TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={hookResult.nodes} />);
+  }
+
+  it("shows the API's refusal when Approve is rejected", async () => {
+    api.approveNode.mockRejectedValue(new Error("You do not have permission to approve agent actions."));
+    renderParked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/do not have permission to approve/i)).toBeInTheDocument()
+    );
+    // And the button is usable again, rather than stuck disabled after a failure.
+    expect(screen.getByRole("button", { name: "Approve" })).not.toBeDisabled();
+  });
+
+  it("shows the API's refusal when Reject is rejected", async () => {
+    api.rejectNode.mockRejectedValue(new Error("Node \"node-1\" is not awaiting approval."));
+    renderParked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+
+    await waitFor(() => expect(screen.getByText(/is not awaiting approval/i)).toBeInTheDocument());
+  });
+
+  it("shows the API's refusal when Cancel is rejected", async () => {
+    api.cancelTask.mockRejectedValue(new Error("Cancelling requires agent:run."));
+    renderParked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.getByText(/requires agent:run/i)).toBeInTheDocument());
+  });
+
+  it("offers a viewer no decision, and says who can make one", () => {
+    permissions.current = ["project:read"];
+    renderParked();
+
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reject" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    // Explained, not merely absent: a control that vanishes teaches the user the screen is broken.
+    expect(screen.getByText(/project editor or admin/i)).toBeInTheDocument();
+    // The run is still fully readable — hiding the decision must not hide the task.
+    expect(screen.getByText(/fs\.delete_file/)).toBeInTheDocument();
+  });
+
+  it("still offers an editor all three", () => {
+    renderParked();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+});
+
+/**
+ * The interrupted step, and the decision only a human can make — docs/26_DECISIONS.md ADR-148.
+ *
+ * A mutating tool call — or a whole model-driven run — caught by a restart parks at
+ * `needs_reconciliation` and the task PAUSES, because the engine cannot know whether the action
+ * completed. That state had no reader anywhere: no engine method, no route, no screen. A task
+ * that reached it was stuck for good, which is a leak that looks like caution.
+ */
+describe("TaskDetail reconciliation", () => {
+  afterEach(() => {
+    permissions.current = ["agent:run", "agent:approve"];
+    api.reconcileNode.mockReset().mockResolvedValue(undefined);
+    hookResult.activity = [];
+  });
+
+  const interrupted = (): TaskNode =>
+    ({
+      id: "node-9",
+      kind: "reasoning",
+      status: "needs_reconciliation",
+      toolId: null,
+      input: { goal: "Tidy the repository" },
+      output: { activity: [] },
+      modelProvider: null,
+      createdAt: 1,
+    }) as unknown as TaskNode;
+
+  function renderInterrupted() {
+    hookResult.task = { ...task(), state: "PAUSED" } as Task;
+    hookResult.nodes = [interrupted()];
+    render(<TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={hookResult.nodes} />);
+  }
+
+  it("offers both decisions, and sends the one that was pressed", async () => {
+    renderInterrupted();
+
+    expect(screen.getByText(/Interrupted — needs a decision/i)).toBeInTheDocument();
+    // It says WHY it is not simply retried, because that is the whole reason the step is here.
+    expect(screen.getByText(/whether it finished is unknown/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /run it again/i }));
+    await waitFor(() => expect(api.reconcileNode).toHaveBeenCalledWith("task-1", "node-9", "retry"));
+
+    fireEvent.click(screen.getByRole("button", { name: /abandon this step/i }));
+    await waitFor(() => expect(api.reconcileNode).toHaveBeenCalledWith("task-1", "node-9", "abandon"));
+  });
+
+  it("reports a refusal instead of doing nothing", async () => {
+    api.reconcileNode.mockRejectedValue(new Error("Node \"node-9\" is not waiting to be reconciled."));
+    renderInterrupted();
+
+    fireEvent.click(screen.getByRole("button", { name: /run it again/i }));
+    await waitFor(() => expect(screen.getByText(/not waiting to be reconciled/i)).toBeInTheDocument());
+  });
+
+  it("offers a viewer neither decision, and says who can make one", () => {
+    permissions.current = ["project:read"];
+    renderInterrupted();
+
+    expect(screen.queryByRole("button", { name: /run it again/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /abandon this step/i })).toBeNull();
+    expect(screen.getByText(/not resolve an interrupted step/i)).toBeInTheDocument();
+  });
+});
+

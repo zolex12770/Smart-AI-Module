@@ -27,6 +27,15 @@ export interface ProjectSummary {
   name: string;
   organizationId: string;
   role: string;
+  /**
+   * What this user may actually do in this project — ADR-148.
+   *
+   * Sent by the API from `resolvePermissions`, the same function that decides real requests, so
+   * a screen never has to guess from `role`. An organization owner holding a `viewer` project
+   * row is authorized through their org role; a UI that read `role` alone would hide controls
+   * from someone the API obeys. Older servers omit it, so readers treat it as possibly absent.
+   */
+  permissions?: string[];
 }
 
 const CSRF_COOKIE = "aip_csrf";
