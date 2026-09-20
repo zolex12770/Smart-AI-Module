@@ -254,7 +254,6 @@ describe("QuotaManager (real PGlite Postgres + PgUsageRecordRepository)", () => 
         estimatedCostUsd: null,
         requestId: "s1",
         idempotencyKey: null,
-        createdAt: new Date(),
       });
 
       const manager = new QuotaManager(usage, {
@@ -330,10 +329,19 @@ describe("QuotaManager (real PGlite Postgres + PgUsageRecordRepository)", () => 
 
   it("refuses speech, rather than silently allowing it, when the ledger cannot measure it", async () => {
     // Fail-closed, like the embedding budget: an operator who configured a ceiling asked for one.
+    /**
+     * The names the manager ACTUALLY calls — docs/26_DECISIONS.md ADR-152.
+     *
+     * This stub implemented `sumLlmTokensSince`/`countImagesSince`/`sumVideoSecondsSince`, which
+     * are the PROJECT-scoped aggregates. `QuotaUsageLedger` declares only the `…ForTenantSince`
+     * ones (ADR-126 moved every ceiling to the organization), so the object was not a ledger at
+     * all — it typechecked nowhere, because no backend test was typechecked by anything, and the
+     * fail-closed assertion below was passing for a reason unrelated to the one it names.
+     */
     const ledger: QuotaUsageLedger = {
-      sumLlmTokensSince: (p, s) => usage.sumLlmTokensSince(p, s),
-      countImagesSince: (p, s) => usage.countImagesSince(p, s),
-      sumVideoSecondsSince: (p, s) => usage.sumVideoSecondsSince(p, s),
+      sumLlmTokensForTenantSince: (p, s) => usage.sumLlmTokensForTenantSince(p, s),
+      countImagesForTenantSince: (p, s) => usage.countImagesForTenantSince(p, s),
+      sumVideoSecondsForTenantSince: (p, s) => usage.sumVideoSecondsForTenantSince(p, s),
     };
     const manager = new QuotaManager(ledger, { dailySpeechCharacterLimit: 100 });
     const result = await manager.checkSpeechCharacters(projectId, 1);

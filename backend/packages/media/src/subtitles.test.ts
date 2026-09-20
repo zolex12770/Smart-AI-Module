@@ -44,8 +44,8 @@ describe("rendered cue files stay parseable at the boundary", () => {
   // The whole point of the carry: a real cue built from measured durations must still render a
   // file a muxer will accept end to end, not just a well-formed single timestamp.
   const scenes = [
-    { narration: "First scene.", durationSeconds: 4.9999 },
-    { narration: "Second scene.", durationSeconds: 5.0001 },
+    { sceneIndex: 0, narration: "First scene.", durationSeconds: 4.9999 },
+    { sceneIndex: 1, narration: "Second scene.", durationSeconds: 5.0001 },
   ];
 
   it("SRT has a valid time line for every cue", () => {

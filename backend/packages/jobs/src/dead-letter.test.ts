@@ -176,8 +176,11 @@ describe("dead-letter queues and read-only job listing", () => {
 
     // The exact attack: address the LIVE queue by name and hand it the id of the job that just
     // completed on it.
-    expect(await queue.replayDeadLettered("p1", "live-work", jobId)).toBeNull();
-    expect(await queue.getDeadLettered("p1", "live-work", jobId)).toBeNull();
+    // `enqueue` returns null when a job was deduplicated; this one was not, and the assertions
+    // below are about the id being REFUSED, so it has to be a real one.
+    expect(jobId).toBeTruthy();
+    expect(await queue.replayDeadLettered("p1", "live-work", jobId!)).toBeNull();
+    expect(await queue.getDeadLettered("p1", "live-work", jobId!)).toBeNull();
 
     // Nothing ran a second time.
     await new Promise((resolve) => setTimeout(resolve, 1_000));

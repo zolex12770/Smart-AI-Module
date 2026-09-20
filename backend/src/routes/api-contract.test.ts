@@ -47,6 +47,37 @@ const errorMessage = (res: LightMyRequestResponse): string => {
   }
 };
 
+
+/**
+ * Every route the app really has, as "METHOD /path" — ADR-152.
+ *
+ * Fastify prints its router as a tree whose children carry only their own segment, so the full
+ * path is the concatenation of the ancestors' segments. `HEAD` is dropped: Fastify adds it
+ * automatically for every `GET` and documenting it would be documenting a framework detail.
+ */
+function registeredRoutes(app: FastifyInstance): string[] {
+  const out: string[] = [];
+  const stack: string[] = [];
+  for (const line of app.printRoutes({ commonPrefix: false }).split("\n")) {
+    const marker = /[├└]── /.exec(line);
+    if (!marker) continue;
+    const depth = Math.floor(marker.index / 4);
+    const body = line.slice(marker.index + marker[0].length);
+    const parsed = /^(\S*)\s*\(([^)]*)\)\s*$/.exec(body);
+    // A branch node with no methods of its own still contributes its segment to its children.
+    const segment = parsed ? parsed[1] : body.trim();
+    stack.length = depth;
+    stack.push(segment);
+    if (!parsed) continue;
+    const full = stack.join("");
+    for (const method of parsed[2].split(",").map((m) => m.trim())) {
+      if (method === "HEAD" || method === "OPTIONS" || method === "") continue;
+      out.push(`${method} ${full}`);
+    }
+  }
+  return out;
+}
+
 describe("docs/API.md against the running server", () => {
   let app: FastifyInstance;
   let db: PgliteDb;
@@ -100,11 +131,35 @@ describe("docs/API.md against the running server", () => {
     await closeTestApp(app, db, ctx);
   });
 
-  it("documents every route the server registers", () => {
+  it("parses the document at all", () => {
     // A parse that silently matched nothing would make every test below vacuous.
     expect(rows.length).toBeGreaterThanOrEqual(50);
     expect(rows.some((r) => r.auth === "public")).toBe(true);
     expect(rows.some((r) => r.auth.startsWith("system administrator"))).toBe(true);
+  });
+
+  it("documents every route the server registers, and registers every route it documents", () => {
+    /**
+     * Set equality against the REAL route table — docs/26_DECISIONS.md ADR-152.
+     *
+     * This assertion used to be `rows.length >= 50`. It never enumerated the server's routes, so
+     * it could not detect one that was missing from the document — and every other test in this
+     * file drives requests FROM the document, so an undocumented route was exercised by none of
+     * the auth, permission or rate-limit checks and the count stayed above fifty either way. The
+     * only thing enforcing completeness was a CI step, in a workflow this environment has never
+     * been able to run.
+     */
+    const registered = registeredRoutes(app);
+    // The walker itself must not silently find nothing.
+    expect(registered.length).toBeGreaterThanOrEqual(50);
+
+    const documented = new Set(rows.map((r) => `${r.method} ${r.path}`));
+    const live = new Set(registered);
+
+    const undocumented = [...live].filter((r) => !documented.has(r)).sort();
+    const phantom = [...documented].filter((r) => !live.has(r)).sort();
+
+    expect({ undocumented, phantom }).toEqual({ undocumented: [], phantom: [] });
   });
 
   it("lets an anonymous caller reach every public route, and refuses one with 401 everywhere else", async () => {

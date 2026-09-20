@@ -48,7 +48,7 @@ describe("a finished chat turn can form a memory", () => {
           finishReason: "stop",
         };
       },
-    } as typeof ctx.router;
+    } as unknown as typeof ctx.router;
   }
 
   async function sendChat(message: string) {
@@ -132,7 +132,7 @@ describe("a finished chat turn can form a memory", () => {
           finishReason: "stop",
         };
       },
-    } as typeof ctx.router;
+    } as unknown as typeof ctx.router;
 
     const res = await sendChat("hello");
     expect(res.statusCode).toBe(200);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PgliteDb } from "@ai-platform/database";
 import type { FastifyInstance } from "fastify";
-import type { DrizzleDb } from "@ai-platform/database";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import type {
   ChatMessage,
@@ -49,7 +49,7 @@ class RecordingProvider implements LLMProvider {
 
 describe("memory reaches the model (ADR-063)", () => {
   let app: FastifyInstance;
-  let db: DrizzleDb;
+  let db: PgliteDb;
   let ctx: AppContext;
   let auth: Awaited<ReturnType<typeof buildTestApp>>["auth"];
   let provider: RecordingProvider;

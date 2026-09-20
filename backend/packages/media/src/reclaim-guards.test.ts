@@ -69,6 +69,7 @@ describe("a re-claimed media job does not pay twice", () => {
   const countingSpeech = (calls: { n: number }): SpeechProvider => ({
     name: "counting-speech",
     isMock: false,
+    listVoices: async () => [],
     synthesize: async () => {
       calls.n += 1;
       return { bytes: Buffer.alloc(1024, 3), mimeType: "audio/wav", ext: "wav" };
@@ -82,7 +83,7 @@ describe("a re-claimed media job does not pay twice", () => {
       id,
       projectId: PROJECT,
       createdByUserId: USER,
-      request: { text: "hello there", voice: null, speed: 1, format: "wav" },
+      request: { text: "hello there", speed: 1 },
     });
 
     const calls = { n: 0 };
@@ -107,7 +108,7 @@ describe("a re-claimed media job does not pay twice", () => {
       id,
       projectId: PROJECT,
       createdByUserId: USER,
-      request: { text: "hello there", voice: null, speed: 1, format: "wav" },
+      request: { text: "hello there", speed: 1 },
     });
 
     const calls = { n: 0 };
@@ -164,7 +165,7 @@ describe("a re-claimed media job does not pay twice", () => {
       calls.n += 1;
       if (behaviour === "throw") throw new Error("provider exploded");
       const assetId = await store_(Buffer.alloc(2048, 9), "video/mp4", "mp4");
-      return { status: "succeeded", video: { assetId, durationSeconds: 4 } };
+      return { status: "succeeded", providerName: "counting-video", video: { assetId, width: 512, height: 288, durationSeconds: 4 } };
     },
   });
 
@@ -230,6 +231,7 @@ describe("a re-claimed media job does not pay twice", () => {
         projectRepo,
         sceneRepo: new PgVideoSceneRepository(db),
         assetStore: store,
+        assetRepo: new PgAssetRepository(db),
         ffmpegPath: join(tmpdir(), "definitely-not-ffmpeg"),
       },
       scope

@@ -34,8 +34,11 @@ describe("audio generation routes", () => {
     await closeTestApp(app, db, ctx);
   });
 
-  const post = (payload: unknown, headers = auth.headers) =>
-    app.inject({ method: "POST", url: "/api/v1/audio", headers, payload });
+  // `payload` is typed, and the call is awaited: `app.inject` returns a chainable object whose
+  // `Promise` overload only applies when it is awaited, so the untyped version made every
+  // `res.statusCode` in this file a type error nothing was checking (ADR-152).
+  const post = async (payload: Record<string, unknown>, headers = auth.headers) =>
+    await app.inject({ method: "POST", url: "/api/v1/audio", headers, payload });
 
   it("records a pending generation and queues the work, without synthesising inline", async () => {
     const res = await post({ text: "Hello from the platform." });

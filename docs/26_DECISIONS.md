@@ -2471,3 +2471,22 @@ The primitive lived in `agent-core`, so the only subsystems that could reach it 
 
 **Date:** 2026-09-20
 **Impact:** `backend/packages/security/src/sandbox.ts`, `backend/packages/tools/src/native/{patch,coding,terminal}.ts`, `backend/src/index.ts` + 7 tests.
+
+## ADR-153: The tests nothing was checking, and the checks that could not fail
+
+**Decision:** backend tests are typechecked, the cross-tenant workspace test uses one filesystem, the API contract asserts set equality against the real route table, the admin-gate check tests containment, the audit sink is one module, the migration script fails when it cannot run, and the metering assertion is made against something that was actually called.
+
+**No backend test was typechecked by anything.** Every backend `tsconfig.json` excludes `src/**/*.test.ts` so the build emits no test code, and vitest transpiles without checking types — so the two together checked nothing. Sixty-nine real errors were sitting in them. Most were stub drift, which is noise; one was not. `quota-manager.test.ts` built a `QuotaUsageLedger` out of `sumLlmTokensSince`/`countImagesSince`/`sumVideoSecondsSince` — the PROJECT-scoped aggregates — while the interface declares only the `…ForTenantSince` ones that ADR-126 moved the ceilings to. The object was not a ledger at all, and the fail-closed speech assertion it backs was passing for a reason unrelated to the one it names. `tsconfig.tests.json` typechecks them now and `npm run typecheck` runs it.
+
+**"Two tenants, one filesystem" was two tenants and two filesystems.** `test-app.ts` mkdtemps a fresh `sandboxRoot` on every `buildTestApp()`, and the cross-tenant workspace test built a second app to be the second tenant — so it asserted that an empty directory did not contain another directory's file. Replacing the route's `projectWorkspace(ctx.sandboxRoot, …)` with a bare `ctx.sandboxRoot`, which removes project scoping outright, left it green. It signs up a second tenant inside the same app now, and fails against that change.
+
+**"Documents every route the server registers" asserted `rows.length >= 50`.** It never enumerated the routes, so it could not detect one missing from the document — and since every other test in that file drives its requests FROM the document, an undocumented route was covered by none of the auth, permission or rate-limit checks either. It compares the parsed rows against Fastify's own route table in both directions now, and fails on the first undocumented route without waiting for a CI step this environment has never been able to run.
+
+**The admin-gate check asked whether a string appeared anywhere in the file.** In `tasks/page.tsx` the admin-only call is at line 190 and the guard at 235; in `platform/page.tsx`, 150 and 256. Neither relationship was checked, so a screen holding a guard around one control could offer a second ungated one — the exact defect ADR-144 was written for, one line apart. It locates the guard's JSX regions and requires the control that reaches the call to sit inside one; its negative cases run the real walker against fixtures rather than re-implementing it, which is how the previous version proved nothing about the function the real assertion depends on.
+
+**The audit sink existed twice.** ADR-139's sink lived inline in the composition root, and the harness kept a hand-written copy that had drifted: no truncation, no `serverId`, no `error`. The test named for ADR-139 was therefore asserting the copy's shape, and `truncateForAudit` was exercised by nothing — a repo-wide grep returned two lines, both in `index.ts`. One factory, imported by both, and a test that asserts the bytes that reach the column.
+
+**And the migration check announced success precisely when it had not run.** `GEN=$(npm run db:generate … || true)` swallowed drizzle-kit's exit code, and the drift verdict was a file count, so any failure of the generator reported "no schema drift". The required-table list was also typed out by hand and ended one table short — `audio_generations`, added after it was written, could have been missing from every migration and the step would still have said "all 22 application tables exist". The list is read out of the schema now, and a generator that cannot run is a failure rather than a pass.
+
+**Date:** 2026-09-20
+**Impact:** `backend/tsconfig.tests.json` (new), `backend/src/audit-sink.ts` (new), 21 test files, `scripts/verify-migrations.sh`, `frontend/app/lib/session-context.admin.test.tsx`.

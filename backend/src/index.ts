@@ -8,7 +8,6 @@ import {
   runMigrations,
   runPostgresMigrations,
   type DrizzleDb,
-  auditLog,
   PgConversationRepository,
   PgMessageRepository,
   PgTaskNodeRepository,
@@ -93,6 +92,7 @@ import { loadConfig, type AppConfig, resolveListenHost } from "./config.js";
 import { detectLocalRuntime, detectLocalSpeech, probeFfmpeg } from "./local-runtime.js";
 import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 import type { AppContext } from "./context.js";
+import { createToolAuditSink } from "./audit-sink.js";
 import { roleRuns, type RoleResponsibilities } from "./role.js";
 import { buildServer } from "./server.js";
 import { reapExpiredRateLimits } from "./plugins/rate-limit-store.js";
@@ -334,38 +334,11 @@ async function main() {
    * successful tool call into a failed one, and the registry's own sink contract says the same.
    */
   const toolRegistry = new ToolRegistry({
-    auditSink: (entry) => {
-      void db
-        .insert(auditLog)
-        .values({
-          id: uuid(),
-          userId: entry.userId,
-          projectId: entry.projectId,
-          action: entry.serverId ? "tool.call.mcp" : "tool.call",
-          resourceType: "tool",
-          resourceId: entry.toolId,
-          // The registry's outcomes are finer than these three, so the exact one is kept in
-          // `detail` and this is the coarse verdict an auditor filters on.
-          outcome: entry.ok ? "success" : entry.outcome === "disabled" ? "denied" : "failure",
-          method: "system",
-          ipAddress: null,
-          requestId: null,
-          detail: {
-            outcome: entry.outcome,
-            durationMs: entry.durationMs,
-            ...(entry.serverId ? { serverId: entry.serverId } : {}),
-            // The ARGUMENTS, because an audit trail that records only which tool ran cannot
-            // answer what it was asked to do. Truncated, since a write_file argument can be a
-            // whole file and this table is not a blob store.
-            arguments: truncateForAudit(entry.arguments),
-            ...(entry.error ? { error: entry.error.slice(0, 1_000) } : {}),
-          },
-          createdAt: new Date(),
-        })
-        .catch((error: unknown) => {
-          logger.warn({ err: String(error), tool: entry.toolId }, "failed to write a tool-call audit row");
-        });
-    },
+    // One sink, shared with the test harness (ADR-152) — the harness used to keep its own
+    // hand-written copy, which had drifted away from this one in three ways.
+    auditSink: createToolAuditSink(db, (err, toolId) => {
+      logger.warn({ err: String(err), tool: toolId }, "failed to write a tool-call audit row");
+    }),
   });
 
   const documents = new PgDocumentRepository(db);
@@ -1814,15 +1787,3 @@ async function runJob<T>(
  * whole payload would make the table grow with the traffic and make it slow to query, which is
  * the fastest way for an audit trail to stop being consulted.
  */
-function truncateForAudit(args: Record<string, unknown>): Record<string, unknown> {
-  const LIMIT = 500;
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(args)) {
-    if (typeof value === "string" && value.length > LIMIT) {
-      out[key] = `${value.slice(0, LIMIT)}… (${value.length} characters)`;
-    } else {
-      out[key] = value;
-    }
-  }
-  return out;
-}

@@ -72,18 +72,28 @@ else
 fi
 
 # --- the tables the application actually requires ---------------------------------------
+# The list is DERIVED from the schema, not typed out here (ADR-152). The hardcoded version ended
+# at `rate_limit_counters` and had never gained `audio_generations`, so the one table added after
+# it was written could have been missing from every migration and this step would still have
+# announced "all 22 application tables exist". A list maintained by hand checks the tables
+# somebody remembered, which is the set least likely to be wrong.
 if [ -n "${OUT:-}" ]; then
-  MISSING=""
-  for t in users organizations organization_members projects project_members sessions api_keys \
-           audit_log conversations messages tasks task_nodes task_transitions documents \
-           document_chunks memory_items assets image_generations video_projects video_scenes \
-           usage_records rate_limit_counters; do
-    echo "$OUT" | grep -q "\"$t\"" || MISSING="$MISSING $t"
-  done
-  if [ -z "$MISSING" ]; then
-    ok "all 22 application tables exist after migration"
+  # Newlines flattened first: most `pgTable(` calls put the table name on the next line.
+  TABLES=$(tr -d '\r' < backend/packages/database/src/schema/index.ts | tr '\n' ' ' \
+    | grep -oE 'pgTable\( *"[a-z_]+"' | sed -E 's/pgTable\( *"([a-z_]+)"/\1/' | sort -u)
+  COUNT=$(echo "$TABLES" | grep -c .)
+  if [ "$COUNT" -lt 20 ]; then
+    no "could not read the table list out of the schema (found $COUNT) — this check is not running"
   else
-    no "tables missing after migration:$MISSING"
+    MISSING=""
+    for t in $TABLES; do
+      echo "$OUT" | grep -q "\"$t\"" || MISSING="$MISSING $t"
+    done
+    if [ -z "$MISSING" ]; then
+      ok "all $COUNT tables declared in the schema exist after migration"
+    else
+      no "tables missing after migration:$MISSING"
+    fi
   fi
 fi
 
@@ -92,10 +102,19 @@ fi
 # test and then fails on the first real deployment.
 say "checking the schema against the checked-in migrations..."
 BEFORE=$(ls backend/packages/database/migrations/*.sql | wc -l)
-GEN=$(npm run db:generate --workspace=@ai-platform/database 2>&1 || true)
+# `|| true` used to swallow drizzle-kit's exit code (ADR-152). Any failure — a bad config, a
+# missing dev dependency, a parse error — left the file count unchanged, and the step then
+# reported PASS: it announced success precisely when it had not run.
+set +e
+GEN=$(npm run db:generate --workspace=@ai-platform/database 2>&1)
+GEN_STATUS=$?
+set -e
 AFTER=$(ls backend/packages/database/migrations/*.sql | wc -l)
 
-if [ "$BEFORE" -eq "$AFTER" ]; then
+if [ "$GEN_STATUS" -ne 0 ]; then
+  no "drizzle-kit could not generate: this check did not run, so drift is unknown"
+  echo "$GEN" | tail -10 | sed 's/^/        /'
+elif [ "$BEFORE" -eq "$AFTER" ]; then
   ok "no schema drift — the migrations describe the current schema"
 else
   no "schema drift: drizzle-kit generated a new migration, so the schema was edited without one"

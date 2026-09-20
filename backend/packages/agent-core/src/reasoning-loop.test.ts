@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { ValidationError, validateToolArguments, type ChatMessage, type ChatStreamEvent, type ToolSpec } from "@ai-platform/shared";
+import {
+  ValidationError,
+  validateToolArguments,
+  type ChatMessage,
+  type ChatStreamEvent,
+  type ToolCall,
+  type ToolSpec,
+} from "@ai-platform/shared";
 import { runReasoningLoop, type ToolExecutionOutcome } from "./reasoning-loop.js";
 
 /**
@@ -85,7 +92,10 @@ describe("runReasoningLoop", () => {
       { kind: "tools", calls: [{ id: "c1", name: "calculator", arguments: { expression: "17*23" } }] },
       { kind: "text", content: "17 times 23 is 391." },
     ]);
-    const executeTool = vi.fn(async (): Promise<ToolExecutionOutcome> => ({ ok: true, content: "391" }));
+    const executeTool = vi.fn(async (_input: { call: ToolCall }): Promise<ToolExecutionOutcome> => ({
+      ok: true,
+      content: "391",
+    }));
 
     const result = await runReasoningLoop(
       { streamChat: provider.streamChat, tools: [CALCULATOR], executeTool },

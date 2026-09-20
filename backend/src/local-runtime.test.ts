@@ -108,7 +108,9 @@ describe("detectLocalRuntime", () => {
         fetchImpl: fetchImpl as unknown as typeof fetch,
       });
       expect(detected?.baseUrl).toBe("http://10.0.0.5:11434/v1");
-      expect(String(fetchImpl.mock.calls[0][0])).toBe("http://10.0.0.5:11434/api/tags");
+      expect(String((fetchImpl.mock.calls[0] as unknown as [unknown])[0])).toBe(
+        "http://10.0.0.5:11434/api/tags"
+      );
     } finally {
       delete process.env.OLLAMA_HOST;
     }

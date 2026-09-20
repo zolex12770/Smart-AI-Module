@@ -1,8 +1,8 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PgliteDb } from "@ai-platform/database";
 import type { FastifyInstance } from "fastify";
-import type { DrizzleDb } from "@ai-platform/database";
 import { processDocumentIngestion, processDocumentScan, searchDocuments } from "@ai-platform/rag";
 import type { MalwareScanner, ScanVerdict } from "@ai-platform/scanning";
 import { buildTestApp, closeTestApp } from "../../test-app.js";
@@ -26,7 +26,7 @@ function upload(
 
 describe("files (RAG ingestion) + memory routes", () => {
   let app: FastifyInstance;
-  let db: DrizzleDb;
+  let db: PgliteDb;
   let ctx: AppContext;
   /** Session cookie + CSRF pair + x-project-id for the seeded test user (ADR-049).
    * Every request in these suites is authenticated and project-scoped, because every real

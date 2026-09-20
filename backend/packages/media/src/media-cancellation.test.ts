@@ -120,7 +120,14 @@ describe("cancelled media work never reaches the provider", () => {
     const provider: VideoProvider = {
       name: "never-called",
       isMock: false,
-      getCapabilities: () => ({ maxDurationSeconds: 30, supportsSeed: false, hasFastTier: true }),
+      getCapabilities: () => ({
+        maxDurationSeconds: 30,
+        supportsSeed: false,
+        hasFastTier: true,
+        // ADR-150: every provider states its own worst case, so the queue window can be
+        // derived from it rather than guessed at in the composition root.
+        worstCaseDeadlineMs: 60_000,
+      }),
       generateVideo: async () => {
         called = true;
         return {
@@ -132,7 +139,7 @@ describe("cancelled media work never reaches the provider", () => {
     };
 
     await processVideoScene(
-      { projectRepo, sceneRepo, assetStore: store, provider },
+      { projectRepo, sceneRepo, assetStore: store, provider, jobQueue: neverEnqueues() },
       { projectId: PROJECT, videoProjectId },
       scene.id
     );
@@ -240,7 +247,7 @@ describe("cancelled media work never reaches the provider", () => {
     );
     const scope = { projectId: PROJECT, videoProjectId };
     await sceneRepo.updateStatus(scope, scenes[0]!.id, "succeeded", {});
-    await sceneRepo.updateStatus(scope, scenes[1]!.id, "failed", { errorMessage: "the provider refused" });
+    await sceneRepo.updateStatus(scope, scenes[1]!.id, "failed", { lastError: "the provider refused" });
     await sceneRepo.updateStatus(scope, scenes[2]!.id, "cancelled", {});
 
     await checkProjectCompletion({ projectRepo, sceneRepo, jobQueue: neverEnqueues() }, scope);

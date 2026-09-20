@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PgliteDb } from "@ai-platform/database";
 import type { FastifyInstance } from "fastify";
-import type { DrizzleDb } from "@ai-platform/database";
 import { buildTestApp, closeTestApp } from "../../test-app.js";
 import type { AppContext } from "../../context.js";
 
 describe("image generation routes", () => {
   let app: FastifyInstance;
-  let db: DrizzleDb;
+  let db: PgliteDb;
   let ctx: AppContext;
   /** Session cookie + CSRF pair + x-project-id for the seeded test user (ADR-049).
    * Every request in these suites is authenticated and project-scoped, because every real
@@ -69,7 +69,7 @@ describe("image generation routes", () => {
     expect(res.json().error.code).toBe("CAPABILITY_UNAVAILABLE");
     expect(res.json().error.message).toMatch(/no image provider is configured/);
 
-    expect((await ctx.imageGenerations.list()).length).toBe(0);
+    expect((await ctx.imageGenerations.list(auth.projectId)).length).toBe(0);
   });
 
   it("POST /api/v1/videos refuses with a capability error when video generation is unavailable", async () => {

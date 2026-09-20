@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { PgliteDb } from "@ai-platform/database";
-import { buildTestApp, closeTestApp } from "../../test-app.js";
+import { buildTestApp, closeTestApp, TEST_PASSWORD } from "../../test-app.js";
+import { generateCsrfToken } from "@ai-platform/security";
+import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from "../../plugins/auth.js";
 import type { AppContext } from "../../context.js";
 
 /**
@@ -83,22 +85,48 @@ describe("the project workspace", () => {
   });
 
   it("keeps one project's workspace out of another's", async () => {
-    // Two tenants, one filesystem: the scope comes from the authenticated session, never the
-    // request, so there is nothing here for a caller to point at somebody else's workspace.
+    /**
+     * Two tenants, ONE filesystem — docs/26_DECISIONS.md ADR-152.
+     *
+     * This test used to build a second app with `buildTestApp()`, and `test-app.ts` mkdtemps a
+     * fresh `sandboxRoot` on every call — so the two tenants never shared a filesystem at all
+     * and the comment's premise was false. Replacing the route's
+     * `projectWorkspace(ctx.sandboxRoot, …)` with a bare `ctx.sandboxRoot`, which removes
+     * project scoping entirely, left it green: the second app was looking at an empty directory
+     * it had just created for itself.
+     *
+     * A second tenant inside the SAME app, over the same root, is the only version that can
+     * fail. It is created through the real signup path, so its session and project are real.
+     */
     await write("private.txt", "tenant one's file");
 
-    const other = await buildTestApp();
-    try {
-      const listed = await other.app.inject({
-        method: "GET",
-        url: "/api/v1/workspace/files",
-        headers: other.auth.headers,
-      });
-      const { files } = listed.json() as { files: Array<{ path: string }> };
-      expect(files.map((f) => f.path)).not.toContain("private.txt");
-    } finally {
-      await closeTestApp(other.app, other.db, other.ctx);
-    }
+    const other = await ctx.auth.signup({
+      email: `other-workspace-${Date.now()}@example.test`,
+      password: TEST_PASSWORD,
+      displayName: "Other",
+      organizationName: "Other Org",
+    });
+    const otherSession = await ctx.auth.login(other.user.email, TEST_PASSWORD);
+    const csrf = generateCsrfToken();
+    const otherHeaders = {
+      cookie: `${SESSION_COOKIE}=${otherSession.token}; ${CSRF_COOKIE}=${csrf}`,
+      [CSRF_HEADER]: csrf,
+      "x-project-id": other.projectId,
+    };
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/v1/workspace/files",
+      headers: otherHeaders,
+    });
+    expect(listed.statusCode).toBe(200);
+    const { files } = listed.json() as { files: Array<{ path: string }> };
+    expect(files.map((f) => f.path)).not.toContain("private.txt");
+
+    // And the first tenant still sees its own file, so this is isolation rather than an
+    // empty-listing bug that would satisfy the assertion above for the wrong reason.
+    const mine = await app.inject({ method: "GET", url: "/api/v1/workspace/files", headers: auth.headers });
+    expect((mine.json() as { files: Array<{ path: string }> }).files.map((f) => f.path)).toContain("private.txt");
   });
 
   it("reports an empty workspace as empty rather than as an error", async () => {

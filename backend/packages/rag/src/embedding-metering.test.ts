@@ -34,9 +34,13 @@ import { searchDocuments } from "./retrieve.js";
  * These assert the two halves that matter: the budget is consulted BEFORE the provider is called,
  * and what actually happened is recorded afterwards.
  */
-const DETERMINISTIC = {
+const DETERMINISTIC: ConstructorParameters<typeof EmbeddingService>[0] = {
   name: "test-embedder",
   model: "test-1",
+  // Required by `EmbeddingProvider`, and missing here until ADR-152 put backend tests under
+  // the typechecker: the vectors this stub returns are 8 wide, so saying anything else would
+  // have made the dimension tag on every stored chunk a lie.
+  dimensions: 8,
   isDeterministicFallback: false,
   embed: async (texts: string[]) => texts.map(() => Array.from({ length: 8 }, () => 0.1)),
 };
@@ -170,20 +174,42 @@ describe("embedding spend is metered", () => {
 
   it("meters a retrieval query when a meter is supplied, and not when it is not", async () => {
     const withMeter = meter();
+    // A counting embedder, so "nothing was metered" can be told apart from "nothing happened".
+    let embedCalls = 0;
+    const counting: ConstructorParameters<typeof EmbeddingService>[0] = {
+      ...DETERMINISTIC,
+      embed: async (texts: string[]) => {
+        embedCalls += 1;
+        return DETERMINISTIC.embed(texts);
+      },
+    };
     const deps = {
       chunkRepo: new PgDocumentChunkRepository(db),
       documentRepo: new PgDocumentRepository(db),
-      embeddings: new EmbeddingService(DETERMINISTIC),
+      embeddings: new EmbeddingService(counting),
     };
 
     await searchDocuments({ ...deps, embeddingMeter: withMeter }, { projectId: PROJECT, query: "harbour", topK: 3 });
     expect(withMeter.checks).toHaveLength(1);
     expect(withMeter.records).toHaveLength(1);
 
-    // The RAG route meters its own question, so it passes none here — one question, one charge.
-    const withoutMeter = meter();
+    /**
+     * The RAG route meters its own question, so it passes none here — one question, one charge.
+     *
+     * This asserted `withoutMeter.checks` on a mock that was never handed to `searchDocuments`
+     * at all (ADR-152): the assertion was over a freshly constructed object and held however
+     * the function behaved, including if it had started metering unconditionally. The only
+     * observable difference a meter-less call can have is the one asserted now — the search
+     * still happens, and the meter that WAS supplied a moment ago recorded exactly once.
+     */
+    const before = { checks: withMeter.checks.length, records: withMeter.records.length, embeds: embedCalls };
     await searchDocuments(deps, { projectId: PROJECT, query: "harbour", topK: 3 });
-    expect(withoutMeter.checks).toHaveLength(0);
+    // It really ran — the query was embedded — and nothing was metered for it. An exception or
+    // an early return would satisfy "nothing was metered" just as well, which is why the
+    // embedder is counted rather than the results.
+    expect(embedCalls).toBe(before.embeds + 1);
+    expect(withMeter.checks).toHaveLength(before.checks);
+    expect(withMeter.records).toHaveLength(before.records);
   });
 
   it("charges nothing for an empty query, because nothing is embedded", async () => {

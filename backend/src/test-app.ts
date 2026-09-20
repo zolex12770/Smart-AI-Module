@@ -5,7 +5,6 @@ import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { AgentEngine } from "@ai-platform/agent-core";
 import {
-  auditLog,
   createDb,
   runMigrations,
   PgAssetRepository,
@@ -37,6 +36,7 @@ import { AuthService, ProcessSandbox, TEST_SCRYPT_PARAMS, generateCsrfToken } fr
 import { createFilesystemTools, ToolRegistry } from "@ai-platform/tools";
 import { loadConfig } from "./config.js";
 import type { AppContext } from "./context.js";
+import { createToolAuditSink } from "./audit-sink.js";
 import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from "./plugins/auth.js";
 import { buildServer } from "./server.js";
 
@@ -107,30 +107,13 @@ export async function buildTestApp(): Promise<{
   const modelRouter = new ModelRouter(registry);
 
   /**
-   * The same audit sink the real composition root wires (ADR-139), so a route test can assert
-   * that a tool call really lands in `audit_log` rather than only that the sink was called.
+   * The REAL audit sink, imported rather than copied — ADR-139, ADR-152.
+   *
+   * The harness used to hold its own version of this, which had drifted: no truncation, no
+   * `serverId`, no `error`. The test named for ADR-139 therefore asserted the copy's shape,
+   * and `truncateForAudit` was exercised by nothing at all.
    */
-  const toolRegistry = new ToolRegistry({
-    auditSink: (entry) => {
-      void db
-        .insert(auditLog)
-        .values({
-          id: uuid(),
-          userId: entry.userId,
-          projectId: entry.projectId,
-          action: entry.serverId ? "tool.call.mcp" : "tool.call",
-          resourceType: "tool",
-          resourceId: entry.toolId,
-          outcome: entry.ok ? "success" : entry.outcome === "disabled" ? "denied" : "failure",
-          method: "system",
-          ipAddress: null,
-          requestId: null,
-          detail: { outcome: entry.outcome, durationMs: entry.durationMs, arguments: entry.arguments },
-          createdAt: new Date(),
-        })
-        .catch(() => undefined);
-    },
-  });
+  const toolRegistry = new ToolRegistry({ auditSink: createToolAuditSink(db, () => undefined) });
   for (const { definition, handler } of createFilesystemTools(sandboxRoot)) {
     toolRegistry.register(definition, handler);
   }

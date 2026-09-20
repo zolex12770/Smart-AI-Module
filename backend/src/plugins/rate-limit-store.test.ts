@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDb, runMigrations, type PgliteDb } from "@ai-platform/database";
 import { PgRateLimitStore, reapExpiredRateLimits } from "./rate-limit-store.js";
+import type { Logger } from "pino";
 
 /**
  * docs/26_DECISIONS.md ADR-071.
@@ -13,16 +14,24 @@ import { PgRateLimitStore, reapExpiredRateLimits } from "./rate-limit-store.js";
  */
 describe("PgRateLimitStore", () => {
   let db: PgliteDb;
+  /**
+   * Typed mocks, not `as never` — docs/26_DECISIONS.md ADR-152.
+   *
+   * `as never` on the whole object made every `vi.fn()` parameterless, so
+   * `expect(logger.error).toHaveBeenCalledWith({ error: … })` did not typecheck at all — which
+   * nothing noticed, because no backend test was typechecked by anything.
+   */
+  const loggerFn = () => vi.fn<(obj: unknown, msg?: string) => void>();
   const logger = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
+    info: loggerFn(),
+    warn: loggerFn(),
+    error: loggerFn(),
+    debug: loggerFn(),
     child: vi.fn(),
-  } as never;
+  };
 
   const store = (timeWindowMs = 60_000, namespace?: string) =>
-    new PgRateLimitStore({ db, logger, timeWindowMs, namespace });
+    new PgRateLimitStore({ db, logger: logger as unknown as Logger, timeWindowMs, namespace });
 
   /** Promise wrapper — the plugin's store contract is callback-based. */
   const incr = (s: PgRateLimitStore, key: string) =>
@@ -125,7 +134,7 @@ describe("PgRateLimitStore", () => {
     // construction path is exactly what happened, and because the throw was SYNCHRONOUS it
     // escaped the promise `.catch` and surfaced as a 500 on every single request — the precise
     // opposite of what a limiter that cannot count should do.
-    const broken = new PgRateLimitStore({ db: undefined as never, logger, timeWindowMs: 60_000 });
+    const broken = new PgRateLimitStore({ db: undefined as never, logger: logger as unknown as Logger, timeWindowMs: 60_000 });
     const result = await incr(broken, "1.2.3.4");
     expect(result.current).toBe(0);
     expect(logger.error).toHaveBeenCalled();

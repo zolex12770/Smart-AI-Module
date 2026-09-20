@@ -19,7 +19,8 @@ describe("terminal.run_command security", () => {
   let root: string;
   let workspace: string;
   const PROJECT_ID = "p1";
-  let runCommand: ToolHandler;
+  // Bound to a fixed invocation context below, so the tests call it with arguments alone.
+  let runCommand: (args: Record<string, unknown>) => ReturnType<ToolHandler>;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "terminal-test-"));

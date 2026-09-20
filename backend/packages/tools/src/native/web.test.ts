@@ -353,7 +353,7 @@ describe("fetchWebPage against a real server", () => {
 
   it("revalidates every redirect hop — a public URL that 302s to the metadata endpoint is refused", async () => {
     // The single most common SSRF bypass, and the reason redirects are followed by hand.
-    handler = (path) =>
+    handler = (path): { status: number; headers: Record<string, string>; body: string } =>
       path === "/redirect"
         ? { status: 302, headers: { location: "http://169.254.169.254/latest/meta-data/" }, body: "" }
         : { status: 200, headers: { "content-type": "text/plain" }, body: "should never be reached" };
@@ -370,14 +370,17 @@ describe("fetchWebPage against a real server", () => {
       ["/userinfo", "http://user:pw@example.com/", /embeds credentials/],
     ];
     for (const [path, location, expected] of cases) {
-      handler = (p) => (p === path ? { status: 302, headers: { location }, body: "" } : { status: 200, headers: { "content-type": "text/plain" }, body: "reached" });
+      handler = (p): { status: number; headers: Record<string, string>; body: string } =>
+        p === path
+          ? { status: 302, headers: { location }, body: "" }
+          : { status: 200, headers: { "content-type": "text/plain" }, body: "reached" };
       await expect(fetchWebPage(url(path), allowLoopback), path).rejects.toThrow(expected);
     }
   });
 
 
   it("follows a redirect that stays permitted, and reports the chain", async () => {
-    handler = (path) =>
+    handler = (path): { status: number; headers: Record<string, string>; body: string } =>
       path === "/from"
         ? { status: 302, headers: { location: "/to" }, body: "" }
         : { status: 200, headers: { "content-type": "text/plain" }, body: "arrived" };

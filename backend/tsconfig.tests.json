@@ -1,0 +1,24 @@
+{
+  // Typechecks what `tsconfig.json` deliberately excludes — docs/26_DECISIONS.md ADR-152.
+  //
+  // Every backend tsconfig excludes `src/**/*.test.ts` (and `src/test-app.ts`) so the build
+  // emits no test code, and vitest transpiles without typechecking. The result was that no
+  // backend test was typechecked by anything: real errors sat in them, including one in
+  // `quota-manager.test.ts` where a stub implemented the wrong `QuotaUsageLedger` method names,
+  // so a fail-closed quota test was exercising a ledger the production code does not call.
+  //
+  // `noEmit`, and not part of the build graph: this exists to be run, not to produce anything.
+  // Package sources resolve through their built `dist` exactly as they do at runtime.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"],
+    "jsx": "preserve"
+  },
+  "include": ["src/**/*.test.ts", "src/test-app.ts", "packages/**/src/**/*.test.ts"],
+  "exclude": ["**/dist/**", "**/node_modules/**"]
+}

@@ -236,7 +236,7 @@ describe("spend guards", () => {
       streamChat: async function* () {
         yield { type: "error" as const, message: leaky };
       },
-    } as typeof ctx.router;
+    } as unknown as typeof ctx.router;
 
     await seedRetrievableChunk();
     const res = await app.inject({

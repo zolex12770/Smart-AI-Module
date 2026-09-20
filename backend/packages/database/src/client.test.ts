@@ -28,7 +28,7 @@ describe("createDb (real embedded PGlite — regression check after the general 
     const db = await createDb(":memory:");
     // A real query through the general DrizzleDb-typed query builder, not just a construction check.
     const result = await db.execute("select 1 as one");
-    expect((result as { rows: Array<{ one: number }> }).rows[0].one).toBe(1);
+    expect((result as unknown as { rows: Array<{ one: number }> }).rows[0].one).toBe(1);
     await db.$client.close();
   });
 });

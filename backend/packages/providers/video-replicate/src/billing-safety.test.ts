@@ -59,7 +59,7 @@ describe("a failed poll must not orphan a running prediction", () => {
     ]);
 
     await provider(impl)
-      .generateVideo({ prompt: "a clip", durationSeconds: 2 }, async () => "asset-1")
+      .generateVideo({ prompt: "a clip", sceneIndex: 0, durationSeconds: 2 }, async () => "asset-1")
       .catch(() => undefined);
 
     // Before the fix this was [POST /predictions, GET, GET] with zero cancels, and the
@@ -79,7 +79,7 @@ describe("a failed poll must not orphan a running prediction", () => {
     ]);
 
     const error = await provider(impl)
-      .generateVideo({ prompt: "a clip", durationSeconds: 2 }, async () => "asset-1")
+      .generateVideo({ prompt: "a clip", sceneIndex: 0, durationSeconds: 2 }, async () => "asset-1")
       .catch((e: unknown) => e);
 
     expect(String(error)).not.toContain("cancel endpoint unreachable");
@@ -107,7 +107,7 @@ describe("the deadline must bound the body read, not just the headers", () => {
     const started = Date.now();
 
     await provider(impl, { requestTimeoutMs: 80, deadlineMs: 200 })
-      .generateVideo({ prompt: "a clip", durationSeconds: 2 }, async () => "asset-1")
+      .generateVideo({ prompt: "a clip", sceneIndex: 0, durationSeconds: 2 }, async () => "asset-1")
       .catch(() => undefined);
 
     // Generously bounded: the point is that it SETTLES, not that it settles in exactly 80ms.
@@ -130,7 +130,7 @@ describe("CDN failures are not diagnosed as API failures", () => {
     ]);
 
     const error = await provider(impl)
-      .generateVideo({ prompt: "a clip", durationSeconds: 2 }, async () => "asset-1")
+      .generateVideo({ prompt: "a clip", sceneIndex: 0, durationSeconds: 2 }, async () => "asset-1")
       .catch((e: unknown) => e);
 
     const message = String(error);

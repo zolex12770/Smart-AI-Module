@@ -88,4 +88,41 @@ describe("a tool call leaves a row in audit_log", () => {
     const paths = rows.map((r) => (r.detail as { arguments?: { path?: string } }).arguments?.path).sort();
     expect(paths).toEqual(["one.txt", "two.txt"]);
   });
+
+  it("truncates a long argument in the stored row, and says it did", async () => {
+    /**
+     * `truncateForAudit` was unexercised — docs/26_DECISIONS.md ADR-152.
+     *
+     * The sink lived inline in the composition root and the harness kept a hand-written copy
+     * that had drifted: no truncation, no `serverId`, no `error`. So this file, which is the one
+     * named for ADR-139, was asserting the COPY's shape, and a repo-wide grep for
+     * `truncateForAudit` returned two lines, both inside `index.ts`. Both now import one factory,
+     * and this asserts on the bytes that reach the column.
+     */
+    const long = "x".repeat(2_000);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/workspace/files",
+      headers: auth.headers,
+      payload: { path: "long.txt", content: long },
+    });
+    expect(res.statusCode).toBeLessThan(300);
+
+    const tool = await ctx.toolRegistry.call(
+      "fs.write_file",
+      { path: "long.txt", content: long },
+      { projectId: auth.projectId, userId: auth.userId }
+    );
+    expect(tool.ok).toBe(true);
+
+    const rows = await waitForRows(1);
+    const detail = rows[rows.length - 1].detail as { arguments: Record<string, unknown> };
+    const stored = String(detail.arguments.content);
+    // Bounded, and honest about being bounded: a trail that quietly drops data is worse than
+    // one that says it did.
+    expect(stored.length).toBeLessThan(long.length);
+    expect(stored).toMatch(/… \(2000 characters\)$/);
+    // And the argument that was short enough is stored whole.
+    expect(detail.arguments.path).toBe("long.txt");
+  });
 });
