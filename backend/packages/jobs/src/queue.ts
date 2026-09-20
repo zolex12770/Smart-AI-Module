@@ -475,16 +475,33 @@ export class JobQueue {
      */
     if (!isDeadLetterQueue(deadLetterQueue)) return null;
 
+    /**
+     * Consuming the dead letter IS the claim — docs/26_DECISIONS.md ADR-151.
+     *
+     * This was a SELECT, then a `send`, then a `cancel`, with nothing atomic between them: two
+     * replays of one dead letter both read `state = 'created'`, both sent, and only then did
+     * either cancel. Two paid jobs from one incident — and the queue's own docstring records
+     * that pg-boss's default `standard` policy ignores `singletonKey`, so nothing deduplicated
+     * them downstream either. The route has no serialisation of its own; it is behind a rate
+     * limit of ten a minute, which bounds the damage and does not prevent it. The covering test
+     * awaited the first replay before starting the second, so it could never see this.
+     *
+     * One statement now does the state change and returns the payload, so exactly one caller
+     * can win: `state in ('created','retry')` is part of the UPDATE's predicate, and the second
+     * concurrent replay matches no row and gets null. The job is cancelled BEFORE the work is
+     * sent, which is the safe order — the failure mode becomes "an incident that was not
+     * replayed", visible in the dead-letter list, rather than "paid work that ran twice".
+     */
     const [row] = await this.query<{ data: Record<string, unknown> }>(
-      `select data from pgboss.job where name = $1 and id = $2 and data->>'projectId' = $3
-         and state in ('created', 'retry')`,
+      `update pgboss.job set state = 'cancelled', completed_on = now()
+         where name = $1 and id = $2 and data->>'projectId' = $3
+           and state in ('created', 'retry')
+       returning data`,
       [deadLetterQueue, jobId, projectId]
     );
     if (!row) return null;
 
-    const replayedId = await this.boss.send(sourceQueueNameFor(deadLetterQueue), row.data);
-    await this.boss.cancel(deadLetterQueue, jobId);
-    return replayedId;
+    return await this.boss.send(sourceQueueNameFor(deadLetterQueue), row.data);
   }
 
   /**

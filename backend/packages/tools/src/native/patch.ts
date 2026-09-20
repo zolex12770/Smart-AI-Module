@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 /**
  * A real unified-diff applier — docs/26_DECISIONS.md ADR-062.
@@ -191,9 +192,15 @@ export interface AppliedFile {
 export function applyUnifiedDiff(
   diff: string,
   resolvePath: (relativePath: string) => string,
-  fs: { readFileSync: typeof readFileSync; writeFileSync: typeof writeFileSync; rmSync?: (p: string) => void } = {
+  fs: {
+    readFileSync: typeof readFileSync;
+    writeFileSync: typeof writeFileSync;
+    rmSync?: (p: string) => void;
+    mkdirSync?: (p: string, options: { recursive: true }) => void;
+  } = {
     readFileSync,
     writeFileSync,
+    mkdirSync,
   }
 ): AppliedFile[] {
   const patches = parseUnifiedDiff(diff);
@@ -251,10 +258,59 @@ export function applyUnifiedDiff(
     });
   }
 
-  // Every hunk matched — only now does anything touch disk.
-  for (const item of staged) {
-    if (item.content === null) fs.rmSync?.(item.absolute);
-    else fs.writeFileSync(item.absolute, item.content, "utf8");
+  /**
+   * Every hunk matched — only now does anything touch disk, and the write phase must not be
+   * the part that half-applies the diff (docs/26_DECISIONS.md ADR-151).
+   *
+   * The atomicity this function promises ("nothing is written unless every hunk in every file
+   * applied") covered only the MATCHING phase. The write loop had no pre-flight and no unwind,
+   * and nothing in this package created directories — so a two-file diff whose second stanza
+   * created `newdir/b.txt` wrote the first file, threw ENOENT on the second, and returned
+   * `ok: false` over a workspace that had already been changed. The failure a model then reads
+   * is "nothing happened", and the next patch it writes is against a file that moved.
+   *
+   * The parent directory of every created file is made first, which is what the workspace write
+   * route already does; and the whole loop unwinds on any other failure, restoring what was
+   * there before, so a mid-write error leaves the tree as it found it.
+   */
+  const undo: Array<() => void> = [];
+  try {
+    for (const item of staged) {
+      // Captured BEFORE the write, so the unwind restores content rather than guessing at it.
+      const priorContent = ((): string | null => {
+        try {
+          return fs.readFileSync(item.absolute, "utf8");
+        } catch {
+          return null;
+        }
+      })();
+
+      if (item.content === null) {
+        fs.rmSync?.(item.absolute);
+        if (priorContent !== null) undo.push(() => fs.writeFileSync(item.absolute, priorContent, "utf8"));
+        continue;
+      }
+
+      if (priorContent === null) {
+        // A created file may name a directory that does not exist yet. `recursive` makes this a
+        // no-op for the ordinary case where it does.
+        fs.mkdirSync?.(dirname(item.absolute), { recursive: true });
+        undo.push(() => fs.rmSync?.(item.absolute));
+      } else {
+        undo.push(() => fs.writeFileSync(item.absolute, priorContent, "utf8"));
+      }
+      fs.writeFileSync(item.absolute, item.content, "utf8");
+    }
+  } catch (err) {
+    // Best effort, in reverse: a failure to unwind must not replace the real error with its own.
+    for (const step of undo.reverse()) {
+      try {
+        step();
+      } catch {
+        /* nothing better to do; the original error is what the caller needs */
+      }
+    }
+    throw err;
   }
   return staged.map((s) => s.result);
 }

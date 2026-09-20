@@ -157,6 +157,19 @@ export interface AgentEngineDeps {
   runTestCommand?: VerificationContext["runTestCommand"];
   /** Backs `model_judge` verification (ADR-075). Last-resort; absent means that method fails. */
   judgeOutput?: VerificationContext["judge"];
+  /**
+   * Who this process is, for the execution lease — docs/26_DECISIONS.md ADR-052, wired by
+   * ADR-151. Defaults to a per-instance uuid, which is what a deployment wants: the lease
+   * exists to stop two API instances dispatching the same task, so the identity must be the
+   * process, not the machine and not the deployment.
+   */
+  instanceId?: string;
+  /**
+   * How long a claimed lease is good for before another instance may take it. Short enough that
+   * an instance killed mid-dispatch does not strand a task for long, long enough that the
+   * renewal below has several chances to land before it lapses.
+   */
+  leaseTtlMs?: number;
 }
 
 /** The authenticated principal a task runs as — resolved by the route, never client-supplied. */
@@ -196,9 +209,15 @@ export class AgentEngine {
   private readonly backoff: RetryBackoff;
   private scheduler: NodeJS.Timeout | undefined;
 
+  /** This process's identity for the execution lease (ADR-052, wired by ADR-151). */
+  private readonly instanceId: string;
+  private readonly leaseTtlMs: number;
+
   constructor(private readonly deps: AgentEngineDeps) {
     this.events.setMaxListeners(100);
     this.backoff = { ...DEFAULT_RETRY_BACKOFF, ...deps.retryBackoff };
+    this.instanceId = deps.instanceId ?? `engine-${uuid()}`;
+    this.leaseTtlMs = deps.leaseTtlMs ?? 60_000;
   }
 
   subscribe(taskId: string, listener: (event: TaskEvent) => void): () => void {
@@ -1622,12 +1641,54 @@ export class AgentEngine {
 
   private async runExclusive(taskId: string, fn: () => Promise<void>): Promise<void> {
     const prior = this.locks.get(taskId) ?? Promise.resolve();
-    const next = prior.then(fn, fn);
+    const guarded = () => this.withLease(taskId, fn);
+    const next = prior.then(guarded, guarded);
     this.locks.set(
       taskId,
       next.catch(() => undefined)
     );
     return next;
+  }
+
+  /**
+   * The execution lease, taken at last — docs/26_DECISIONS.md ADR-052, wired by ADR-151.
+   *
+   * `claimLease`, `renewLease` and `releaseLease` shipped with careful single-statement SQL and
+   * a schema comment stating "A process may only dispatch a task whose lease it holds… This is
+   * what makes two API instances against one database safe". A repo-wide grep for all three
+   * names returned the repository that defines them and nothing else: no caller, not even a
+   * test. `tasks.lease_owner` was permanently NULL, `tasks_lease_idx` indexed an always-NULL
+   * column, and two instances dispatched every task twice — the comment described a mechanism
+   * that was never switched on.
+   *
+   * `runExclusive` is the one place the engine dispatches from, so this is where the lease
+   * belongs: the in-process mutex orders work within an instance and the lease excludes other
+   * instances. Refusing when another live instance holds it is the point — that instance is
+   * running the task. An instance that DIES holding one is bounded twice over: the lease expires
+   * on the database's clock, and the sweep (ADR-151) fails its timed-out nodes.
+   */
+  private async withLease(taskId: string, fn: () => Promise<void>): Promise<void> {
+    const claimed = await this.deps.taskRepo.claimLease(taskId, this.instanceId, this.leaseTtlMs);
+    // Another live instance owns this task. Not an error, and not something to retry into: the
+    // owner is mid-dispatch and will carry on.
+    if (!claimed) return;
+
+    // Renewed at a third of the TTL, so two consecutive failures still leave a chance before it
+    // lapses. A renewal that fails because the lease was lost is correctly a no-op: the owner
+    // check in the UPDATE means this process cannot extend an ownership it no longer has.
+    const renew = setInterval(() => {
+      void this.deps.taskRepo.renewLease(taskId, this.instanceId, this.leaseTtlMs).catch(() => undefined);
+    }, Math.max(1_000, Math.floor(this.leaseTtlMs / 3)));
+    (renew as unknown as { unref?: () => void }).unref?.();
+
+    try {
+      await fn();
+    } finally {
+      clearInterval(renew);
+      // Released rather than left to expire: the next dispatch of this task, on any instance,
+      // should not have to wait out a TTL for work that has finished.
+      await this.deps.taskRepo.releaseLease(taskId, this.instanceId).catch(() => undefined);
+    }
   }
 
   private async updateNode(

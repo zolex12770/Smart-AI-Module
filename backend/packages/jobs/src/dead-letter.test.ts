@@ -202,6 +202,36 @@ describe("dead-letter queues and read-only job listing", () => {
     expect(await queue.replayDeadLettered("p1", dead.deadLetterQueue, dead.id)).toBeNull();
   }, 40_000);
 
+  it("replays a dead letter once when several replays race", async () => {
+    /**
+     * docs/26_DECISIONS.md ADR-151. The guard above was a SELECT, then a send, then a cancel,
+     * with nothing atomic between them — so two replays of one dead letter both read
+     * `state = 'created'`, both sent, and only then did either cancel. Two paid jobs from one
+     * incident, and pg-boss's default policy ignores `singletonKey`, so nothing deduplicated
+     * them downstream either.
+     *
+     * The test above cannot see it: it awaits the first replay before starting the second,
+     * which is the one ordering the bug does not occur in. This one does not await between them.
+     */
+    await queue.ensureQueueWithDeadLetter("race-once", { retryLimit: 0, expireInSeconds: 5 });
+    await queue.registerWorker<{ projectId: string }>("race-once", async () => {
+      throw new Error("always fails");
+    });
+
+    await queue.enqueue("race-once", { projectId: "p1" });
+    await waitFor(async () => (await queue.listDeadLetteredForProject("p1")).length > 0, 20_000);
+    const dead = (await queue.listDeadLetteredForProject("p1")).find((d) => d.sourceQueue === "race-once");
+    expect(dead).toBeDefined();
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => queue.replayDeadLettered("p1", dead!.deadLetterQueue, dead!.id))
+    );
+
+    // Exactly one caller may win. Before the fix all five sent, and five paid jobs came from
+    // one incident.
+    expect(results.filter(Boolean)).toHaveLength(1);
+  }, 40_000);
+
   it("hands back a dead letter's payload for pricing, scoped to its project", async () => {
     await queue.ensureQueueWithDeadLetter("priced", { retryLimit: 0, expireInSeconds: 5 });
     await queue.registerWorker<{ projectId: string; generationId: string }>("priced", async () => {

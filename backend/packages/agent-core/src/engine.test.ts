@@ -747,3 +747,119 @@ describe("AgentEngine model-call metering", () => {
     expect(nodes[0].errorMessage).toMatch(/Daily token limit of 100/);
   });
 });
+
+/**
+ * The execution lease, actually taken — docs/26_DECISIONS.md ADR-052, wired by ADR-151.
+ *
+ * `claimLease`, `renewLease` and `releaseLease` shipped with careful single-statement SQL and a
+ * schema comment reading "A process may only dispatch a task whose lease it holds… This is what
+ * makes two API instances against one database safe". A repo-wide grep for all three names
+ * returned the repository that defines them and nothing else — no caller, not even a test — so
+ * `tasks.lease_owner` was permanently NULL, `tasks_lease_idx` indexed an always-NULL column, and
+ * two instances dispatched every task twice. The comment described a mechanism nobody switched
+ * on, which is worse than no mechanism: it is a safety claim that reads as tested.
+ */
+describe("the execution lease", () => {
+  let harness: Harness;
+
+  beforeEach(async () => {
+    harness = await setupHarness();
+  });
+
+  afterEach(async () => {
+    harness.engine.stopScheduler();
+    await harness.db.$client.close();
+    rmSync(harness.sandboxRoot, { recursive: true, force: true });
+  });
+
+  const seedRunnableTask = async () => {
+    const { tasks, taskNodes, projectId, userId, workspaceDir } = harness;
+    writeFileSync(join(workspaceDir, "leased.txt"), "hello from the lease test");
+    const task = await tasks.create({
+      id: `lease-task-${Math.random().toString(36).slice(2, 8)}`,
+      projectId,
+      createdByUserId: userId,
+      taskType: "echo_chat",
+      input: { path: "leased.txt" },
+    });
+    await tasks.updateState(task.id, "EXECUTING");
+    const node = await taskNodes.create(task.id, {
+      id: `lease-node-${task.id}`,
+      type: "atomic",
+      kind: "tool_call",
+      dependsOn: [],
+      input: { path: "leased.txt" },
+      toolId: "fs.read_file",
+      timeoutMs: 30_000,
+      verificationMethod: "schema_check",
+      verificationSpec: { requiredKeys: ["content"] },
+      approvalRequired: false,
+    });
+    return { task, node };
+  };
+
+  const secondInstance = () =>
+    new AgentEngine({
+      taskRepo: harness.tasks,
+      nodeRepo: harness.taskNodes,
+      transitionRepo: harness.taskTransitions,
+      toolRegistry: harness.toolRegistry,
+      modelRouter: harness.modelRouter,
+      workspaceRoot: harness.sandboxRoot,
+      instanceId: "instance-b",
+    });
+
+  it("does not dispatch a task another live instance holds", async () => {
+    const { task, node } = await seedRunnableTask();
+
+    // Instance A is mid-dispatch: it holds the lease, taken through the same SQL the engine uses.
+    expect(await harness.tasks.claimLease(task.id, "instance-a", 60_000)).toBe(true);
+
+    await secondInstance().resumeAll();
+    // Settled immediately, not eventually: the point is that nothing was started.
+    await new Promise((r) => setTimeout(r, 200));
+
+    const after = await harness.taskNodes.get(harness.projectId, node.id);
+    expect(after?.status).toBe("pending");
+    // And instance A still owns it — a refused dispatch must not steal the lease either.
+    const row = await harness.tasks.getUnscoped(task.id);
+    expect(row?.state).toBe("EXECUTING");
+  });
+
+  it("dispatches it once that instance's lease is released", async () => {
+    // The other half: a guard that refuses everything is indistinguishable from a broken engine.
+    const { task, node } = await seedRunnableTask();
+    expect(await harness.tasks.claimLease(task.id, "instance-a", 60_000)).toBe(true);
+    await harness.tasks.releaseLease(task.id, "instance-a");
+
+    const engineB = secondInstance();
+    await engineB.resumeAll();
+
+    const finished = await waitForNodeStatus(harness, node.id, ["completed", "failed"]);
+    expect(finished.status).toBe("completed");
+  });
+
+  it("takes over a task whose owner died, once the lease has lapsed", async () => {
+    // A lease is a deadline, not a latch: an instance killed mid-dispatch must not strand the
+    // task forever, which is the whole reason `claimLease` treats an expired lease as free.
+    const { task, node } = await seedRunnableTask();
+    // Claimed and already expired — what a crashed instance leaves behind a minute later.
+    expect(await harness.tasks.claimLease(task.id, "dead-instance", -1_000)).toBe(true);
+
+    await secondInstance().resumeAll();
+
+    const finished = await waitForNodeStatus(harness, node.id, ["completed", "failed"]);
+    expect(finished.status).toBe("completed");
+  });
+
+  it("releases the lease when the dispatch finishes", async () => {
+    // Otherwise the next dispatch of this task, on any instance, waits out a TTL for work that
+    // has already finished.
+    const { task, node } = await seedRunnableTask();
+    await secondInstance().resumeAll();
+    await waitForNodeStatus(harness, node.id, ["completed", "failed"]);
+
+    const row = await harness.tasks.getUnscoped(task.id);
+    expect(row?.leaseOwner ?? null).toBeNull();
+  });
+});

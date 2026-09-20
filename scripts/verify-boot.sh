@@ -125,6 +125,14 @@ boot_case "prod/api, process sandbox" 8795 exit "process isolation|SANDBOX_ALLOW
   SANDBOX_RUNTIME=process SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=false
 
 echo
+echo "== 6. PRODUCTION api role with a bucket and an UNWRITABLE local asset path =="
+echo "   (ADR-151: boot used to mkdir ASSETS_ROOT unconditionally, on a filesystem the"
+echo "    Terraform itself calls read-only, for a directory the cloud store never opens)"
+# "package.json/assets" cannot be created: the parent is a regular file, so mkdirSync throws
+# ENOTDIR — the same shape as EROFS on a read-only container root, and reproducible anywhere.
+boot_case "prod/api, bucket + unwritable ASSETS_ROOT" 8796 up   NODE_ENV=production ROLE=api LLM_BASE_URL=http://127.0.0.1:9/v1 LLM_MODEL=local-test   SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true   ASSETS_BUCKET=verify-boot-bucket ASSETS_ROOT=./package.json/assets
+
+echo
 echo "=================================================="
 echo "  boot verification: $PASS passed, $FAIL failed"
 echo "=================================================="

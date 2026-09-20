@@ -377,6 +377,9 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
             // means a provider that only streams them still produces a complete `done` event
             // and a complete stored message.
             const streamedToolCalls: ToolCall[] = [];
+            // What the client has already been shown. Needed only by the mid-stream failure
+            // path (ADR-151), which has to persist the half of the answer the user can see.
+            let streamedText = "";
             /** Set once the turn finished, so a disconnect *after* a completed answer is not
              * also logged as a cancellation of it. */
             let completed = false;
@@ -409,6 +412,53 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
 
                 if (event.type === "tool_call") {
                   streamedToolCalls.push(event.call);
+                }
+                if (event.type === "token") streamedText += event.delta;
+
+                /**
+                 * A mid-stream provider failure is a FAILURE — docs/26_DECISIONS.md ADR-151.
+                 *
+                 * Once a provider has committed, the router cannot fail over — some of its
+                 * answer is already on the client's screen — so it converts a later throw into
+                 * an in-band `error` event and returns rather than throwing. This loop treated
+                 * that like any other non-terminal event: it was forwarded and the iteration
+                 * continued, the `for await` then ended normally, `completed` stayed false and
+                 * the signal was not aborted, so neither the cancellation branch below nor the
+                 * catch ran. The span kept `gen_ai.system: "unknown"` and an OK status, no error
+                 * line was logged, and the partial answer the user could see was never stored.
+                 * An outage that cut every stream in half read as a clean day in the traces.
+                 *
+                 * It is terminal here now, and it takes the error path rather than the success
+                 * one: the exception is recorded, the log line says `status: "error"`, and what
+                 * the model did manage to say is persisted, because the user can see it and a
+                 * transcript that omits it does not describe the conversation they had.
+                 */
+                if (event.type === "error") {
+                  span.recordException(new Error(event.message));
+                  span.setStatus({ code: SpanStatusCode.ERROR, message: event.message });
+                  request.log.error(
+                    {
+                      request_id: request.id,
+                      project_id: projectId,
+                      latency_ms: Date.now() - startedAt,
+                      status: "error",
+                      fell_back_from: fellBackFrom,
+                    },
+                    "provider failed partway through the stream"
+                  );
+                  if (streamedText.length > 0) {
+                    await ctx.messages.add({
+                      conversationId: conversation.id,
+                      projectId,
+                      role: "assistant",
+                      // The marker is part of the stored text on purpose: `messages` has no
+                      // metadata column, and a later turn reading this transcript must not be
+                      // told a truncated answer was the whole one.
+                      content: `${streamedText}\n\n[This response was cut off: the model provider failed partway through it.]`,
+                    });
+                  }
+                  send(event);
+                  break;
                 }
 
                 if (event.type !== "done") {

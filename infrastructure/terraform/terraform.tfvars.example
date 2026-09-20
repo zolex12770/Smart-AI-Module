@@ -11,7 +11,16 @@ web_image = "us-central1-docker.pkg.dev/your-gcp-project-id/ai-platform/web:late
 # Prefer TF_VAR_db_password (an env var) over writing this here even in a gitignored file.
 # db_password = "..."
 
-# Optional — leave blank/unset to deploy on the mock LLM provider, same as local dev.
+# REQUIRED: at least one of these, or the llm_base_url + llm_model pair below (ADR-151).
+# The deployed image runs with NODE_ENV=production, where the mock provider may not run and a
+# chat-serving process with no provider refuses to start — so "leave them unset", which this
+# file used to suggest, produced a service that exited 1 on every revision while the apply
+# reported success. The api service has a precondition that says so at plan time.
 # anthropic_api_key = "..."
 # openai_api_key    = "..."
 # google_api_key    = "..."
+
+# ...or a self-hosted OpenAI-compatible runtime (ADR-056), which needs no hosted account.
+# llm_base_url = "https://llm.internal.example/v1"
+# llm_model    = "qwen2.5:7b"
+# llm_api_key  = "..."

@@ -263,8 +263,23 @@ async function main() {
 
   const sandboxRoot = resolve(config.SANDBOX_ROOT);
   mkdirSync(sandboxRoot, { recursive: true });
+  /**
+   * Only when a local asset store will actually be built — docs/26_DECISIONS.md ADR-151.
+   *
+   * ADR-138 fixed the line above (SANDBOX_ROOT on a read-only container root) and left this one,
+   * three lines below it, doing the same thing. A Cloud Run container's root filesystem is
+   * read-only apart from /tmp — this repository asserts that in three places, including the
+   * Terraform that sets SANDBOX_ROOT=/tmp/sandbox — and nothing set ASSETS_ROOT at all, so it
+   * kept its `./data/assets` default under the image's WORKDIR. `.dockerignore` excludes every
+   * `data` directory, so it does not exist in the image and the mkdir has to create two levels
+   * of it, throwing EROFS before the sandbox guard and before `app.listen`.
+   *
+   * And it was for nothing: with ASSETS_BUCKET set — which every deployed unit has — the store
+   * is `CloudStorageAssetStore` and the directory is never opened. The local directory is
+   * created only when the local store is the one that will be used.
+   */
   const assetsRoot = resolve(config.ASSETS_ROOT);
-  mkdirSync(assetsRoot, { recursive: true });
+  if (!config.ASSETS_BUCKET) mkdirSync(assetsRoot, { recursive: true });
 
   // --- command execution isolation (ADR-055) ---------------------------------------------
   // Every command the agent chooses to run goes through this one object. `createSandbox`
@@ -1400,6 +1415,19 @@ async function main() {
   // non-terminal or in-flight state by a previous process before serving new requests.
   await engine.resumeAll();
 
+  /**
+   * The sweep runs on a timer, not once at boot — docs/26_DECISIONS.md ADR-151.
+   *
+   * `startScheduler` had no caller anywhere: `grep -rn startScheduler` returned its own
+   * definition and nothing else. `sweep()` is the only consumer of `listDueForRetry` and
+   * `listTimedOut`, so `task_nodes.next_attempt_at` — a column, an index and a whole retry
+   * backoff mechanism — was read exactly once per process, by the single pass at the end of
+   * `resumeAll`. A node that became due one second later waited for the next restart, and a
+   * node whose process died mid-call was never timed out at all. In a long-running deployment
+   * that is forever.
+   */
+  engine.startScheduler();
+
 
   const ctx: AppContext = {
     db,
@@ -1517,6 +1545,9 @@ async function main() {
   // Run sends exactly that signal to an instance it decides to stop mid-rollout, so the
   // window was not hypothetical.
   installGracefulShutdown(logger, [
+    // First: stop starting new work. A sweep that fires while the database is closing would
+    // fail for a reason that has nothing to do with the node it was dispatching.
+    { name: "agent-scheduler", close: async () => engine.stopScheduler() },
     { name: "mcp", close: () => mcpManager.stopAll() },
     { name: "http", close: () => app.close() },
     { name: "jobs", close: () => jobQueue.stop() },

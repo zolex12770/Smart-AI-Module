@@ -32,10 +32,45 @@ variable "db_password" {
 }
 
 variable "anthropic_api_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+  # NOT optional in the sense the old description claimed — docs/26_DECISIONS.md ADR-151.
+  #
+  # It said "leave unset to run on the mock LLM provider, exactly like local dev". The image
+  # sets NODE_ENV=production, `providers.ts` refuses to register the mock provider there, and
+  # `index.ts` then throws "This process serves chat but no LLM provider is configured, and the
+  # mock provider may not run in production" — so following this file's own example produced a
+  # service whose every revision exited 1 before it listened, while `terraform apply` reported
+  # success. This is the same shape as ADR-138, which fixed the sandbox guard and left the
+  # provider guard three lines above it unsupplied.
+  #
+  # At least one of the three keys, or llm_base_url + llm_model, must be set. The precondition
+  # on the api service in main.tf enforces that at plan time rather than at the third failed
+  # revision.
+  description = "One of the LLM credentials. Stored in Secret Manager and mounted into the API service if non-empty. At least one provider — a hosted key here, or llm_base_url + llm_model — is REQUIRED: the deployed image runs with NODE_ENV=production, where the mock provider may not run and a chat-serving process with no provider refuses to start."
+}
+
+# A self-hosted or OpenAI-compatible runtime, which is the provider-neutral path ADR-056 exists
+# for and the one a deployment with no hosted account needs. Not secret: a base URL is not a
+# credential, and llm_api_key covers the case where the endpoint wants one.
+variable "llm_base_url" {
+  type        = string
+  default     = ""
+  description = "Optional. An OpenAI-compatible /v1 base URL (vLLM, Ollama, LM Studio, a gateway). Set together with llm_model."
+}
+
+variable "llm_model" {
+  type        = string
+  default     = ""
+  description = "Optional. The model name that endpoint serves. Set together with llm_base_url."
+}
+
+variable "llm_api_key" {
   type        = string
   sensitive   = true
   default     = ""
-  description = "Optional. Stored in Secret Manager and mounted into the API service if non-empty. Leave unset to run on the mock LLM provider, exactly like local dev (docs/26_DECISIONS.md ADR-006/010)."
+  description = "Optional. Bearer token for llm_base_url, when that endpoint requires one."
 }
 
 variable "openai_api_key" {

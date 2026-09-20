@@ -141,10 +141,28 @@ resource "google_secret_manager_secret_version" "database_url" {
   secret_data = "postgresql://${google_sql_user.app.name}:${var.db_password}@/${google_sql_database.app.name}?host=/cloudsql/${google_sql_database_instance.postgres.connection_name}"
 }
 
-# Optional LLM provider keys — only created if actually supplied, matching ADR-010's
-# "real adapters register only when their key is present" behavior all the way through to
-# infrastructure: an empty var means the deployed API runs on the mock provider, exactly
-# like local dev with no .env entries.
+# LLM provider keys — only created if actually supplied, matching ADR-010's "real adapters
+# register only when their key is present" behavior all the way through to infrastructure.
+#
+# An empty var does NOT mean "the deployed API runs on the mock provider" (ADR-151). It did say
+# that, and it was never true: the image sets NODE_ENV=production, where the mock provider is
+# refused and a chat-serving process with no provider throws at boot. At least one provider must
+# be configured; the api service below has a precondition that fails the plan otherwise, rather
+# than letting a successful apply produce a service that cannot start.
+resource "google_secret_manager_secret" "llm_api_key" {
+  count     = var.llm_api_key != "" ? 1 : 0
+  secret_id = "ai-platform-llm-api-key"
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "llm_api_key" {
+  count       = var.llm_api_key != "" ? 1 : 0
+  secret      = google_secret_manager_secret.llm_api_key[0].id
+  secret_data = var.llm_api_key
+}
+
 resource "google_secret_manager_secret" "anthropic_api_key" {
   count     = var.anthropic_api_key != "" ? 1 : 0
   secret_id = "ai-platform-anthropic-api-key"
@@ -323,6 +341,14 @@ resource "google_cloud_run_v2_service" "api" {
         value = "/tmp/sandbox"
       }
       env {
+        # ADR-151 — belt and braces beside the ASSETS_BUCKET below. Boot no longer creates this
+        # directory when a bucket is configured (the local store is not built then), but the
+        # default value points inside the image's read-only WORKDIR, and a path that cannot be
+        # written must not be one an operator can reach by unsetting one other variable.
+        name  = "ASSETS_ROOT"
+        value = "/tmp/assets"
+      }
+      env {
         # ADR-112 — how many proxies' X-Forwarded-For entries to trust. Cloud Run's front end
         # appends the caller's address, so 1 takes that entry and ignores anything the caller
         # wrote; an external HTTPS load balancer in front makes it 2. Not verified against a live
@@ -399,6 +425,59 @@ resource "google_cloud_run_v2_service" "api" {
           }
         }
       }
+
+      # A self-hosted OpenAI-compatible runtime (ADR-056), which is the provider-neutral path
+      # and the only one available to a deployment with no hosted account. Added by ADR-151:
+      # infrastructure/ could configure no LLM provider of any kind, so the one path the docs
+      # call the default was unreachable from Terraform.
+      dynamic "env" {
+        for_each = var.llm_base_url != "" ? [1] : []
+        content {
+          name  = "LLM_BASE_URL"
+          value = var.llm_base_url
+        }
+      }
+      dynamic "env" {
+        for_each = var.llm_model != "" ? [1] : []
+        content {
+          name  = "LLM_MODEL"
+          value = var.llm_model
+        }
+      }
+      dynamic "env" {
+        for_each = nonsensitive(var.llm_api_key != "") ? [1] : []
+        content {
+          name = "LLM_API_KEY"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.llm_api_key[0].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * The plan fails rather than the revisions — docs/26_DECISIONS.md ADR-151.
+   *
+   * The image sets NODE_ENV=production; `providers.ts` refuses to register the mock provider
+   * there, and `index.ts` throws "This process serves chat but no LLM provider is configured"
+   * before it listens. So a deployment that followed this repository's own tfvars example — "
+   * leave unset to run on the mock provider" — produced a service whose every revision exited
+   * 1, with `terraform apply` reporting success. A precondition turns that into a plan-time
+   * error naming the variables to set.
+   */
+  lifecycle {
+    precondition {
+      condition = (
+        var.anthropic_api_key != "" ||
+        var.openai_api_key != "" ||
+        var.google_api_key != "" ||
+        (var.llm_base_url != "" && var.llm_model != "")
+      )
+      error_message = "The api service serves chat and the deployed image runs with NODE_ENV=production, where the mock LLM provider may not run — set one of anthropic_api_key, openai_api_key, google_api_key, or both llm_base_url and llm_model."
     }
   }
 
@@ -499,6 +578,14 @@ resource "google_cloud_run_v2_worker_pool" "worker" {
         # not the acknowledgement.
         name  = "SANDBOX_ROOT"
         value = "/tmp/sandbox"
+      }
+      env {
+        # ADR-151 — belt and braces beside the ASSETS_BUCKET below. Boot no longer creates this
+        # directory when a bucket is configured (the local store is not built then), but the
+        # default value points inside the image's read-only WORKDIR, and a path that cannot be
+        # written must not be one an operator can reach by unsetting one other variable.
+        name  = "ASSETS_ROOT"
+        value = "/tmp/assets"
       }
       env {
         # ADR-040 — the worker WRITES assets (image/video jobs, the ffmpeg render) and the
