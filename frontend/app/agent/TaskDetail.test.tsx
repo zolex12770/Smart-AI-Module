@@ -272,8 +272,10 @@ describe("TaskDetail coding tabs", () => {
     );
 
     expect(screen.getByText(/Commands run \(1\)/)).toBeInTheDocument();
-    expect(screen.getByText(/npm test/)).toBeInTheDocument();
-    expect(screen.getByText(/all passed/)).toBeInTheDocument();
+    expect(screen.getAllByText(/npm test/).length).toBeGreaterThan(0);
+    // Twice, on purpose: the Activity card reads the same persisted log now that ADR-148 stopped
+    // it being coding-only, and the Commands tab shows the command's output in full.
+    expect(screen.getAllByText(/all passed/).length).toBe(2);
   });
 
   it("says nothing has happened rather than showing an empty tab as a result", () => {
@@ -426,6 +428,61 @@ describe("TaskDetail reconciliation", () => {
     expect(screen.queryByRole("button", { name: /run it again/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /abandon this step/i })).toBeNull();
     expect(screen.getByText(/not resolve an interrupted step/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * A finished autonomous run explains itself — docs/26_DECISIONS.md ADR-134, reached by ADR-148.
+ *
+ * The events endpoint replays `state` and `node`, never activity, so a task opened after it
+ * finished had an empty live feed and the Activity card did not render at all. The rows were on
+ * the node the whole time and `persistedActivityOf` was already written — but only the coding
+ * variant read it. On the autonomous screen, the primary one, an operator saw the plan and the
+ * answer and no record of which tools ran with what arguments.
+ */
+describe("TaskDetail activity after the run", () => {
+  afterEach(() => {
+    hookResult.activity = [];
+  });
+
+  it("reads a finished autonomous run's activity off the node", () => {
+    hookResult.task = { ...task(), state: "COMPLETED" } as Task;
+    hookResult.activity = [];
+    hookResult.nodes = [
+      {
+        id: "node-1",
+        kind: "reasoning",
+        status: "completed",
+        toolId: null,
+        input: { goal: "Tidy the repository" },
+        output: {
+          content: "Done.",
+          activity: [
+            { kind: "tool_call", callId: "c1", name: "fs.read_file", arguments: { path: "notes.txt" } },
+            { kind: "tool_result", callId: "c1", ok: true, content: "read me first" },
+          ],
+        },
+        modelProvider: null,
+        createdAt: 1,
+      } as unknown as TaskNode,
+    ];
+
+    // variant="agent" — what /agent/[id] actually renders.
+    render(<TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={hookResult.nodes} />);
+
+    expect(screen.getByText("Activity")).toBeInTheDocument();
+    expect(screen.getByText(/fs\.read_file/)).toBeInTheDocument();
+  });
+
+  it("shows no Activity card for a run that did nothing", () => {
+    // The card must not appear empty: "no activity" and "activity not loaded" look identical,
+    // and an empty card would claim the run made no tool calls when the log simply is not there.
+    hookResult.task = { ...task(), state: "COMPLETED" } as Task;
+    hookResult.activity = [];
+    hookResult.nodes = [];
+
+    render(<TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={[]} />);
+    expect(screen.queryByText("Activity")).toBeNull();
   });
 });
 

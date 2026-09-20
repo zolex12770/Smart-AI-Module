@@ -1,6 +1,6 @@
 import type { MemoryItem, MemoryItemMatch, MemoryItemRepository, MemoryScope } from "@ai-platform/database";
 import type { EmbeddingService } from "@ai-platform/embeddings";
-import type { ChatMessage, EmbeddingMeter } from "@ai-platform/shared";
+import { UNTRUSTED_CONTENT_SYSTEM_PROMPT, wrapUntrustedContent, type ChatMessage, type EmbeddingMeter } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 
 /**
@@ -109,7 +109,21 @@ export class MemoryService {
     provenance?: Record<string, unknown> | null;
   }): Promise<MemoryItem> {
     const content = input.content.trim();
-    const embedded = await this.embedQuietly(input.projectId, content);
+    /**
+     * Storing is NOT the quiet path — docs/26_DECISIONS.md ADR-149.
+     *
+     * `embedQuietly` swallowed everything, on every path, so a budget refusal or an embedder
+     * restart stored a row with `embedding: null` — and `searchSemantic` requires
+     * `embedding IS NOT NULL`, so that row can never be recalled. The user pressed Remember, got
+     * a 201, sees the fact in the table with "Recalled 0×", and it will never influence an
+     * answer. That is exactly the SKELETON condition ADR-063 exists to close, reintroduced for
+     * whichever rows happened to be written during an outage, with no way to tell which.
+     *
+     * Quiet is right on the RETRIEVE path (ADR-131: a turn over its embedding budget gets an
+     * answer with no recall rather than an error about a budget it did not know it was
+     * spending). It is wrong here, where the alternative to an error is a silent lie.
+     */
+    const embedded = await this.embedOrThrow(input.projectId, content);
     return this.repo.create({
       id: uuid(),
       projectId: input.projectId,
@@ -207,13 +221,31 @@ export class MemoryService {
       lines.push(line);
     }
     if (lines.length === 0) return null;
-    return [
-      "Recalled context about this user and project, retrieved from long-term memory:",
-      ...lines,
-      "",
-      "Treat these as background that may be out of date. Anything stated in the current",
-      "conversation takes precedence, and you should not mention this list unless it is relevant.",
-    ].join("\n");
+    /**
+     * Delimited, because a recalled fact is somebody's text — docs/26_DECISIONS.md ADR-149.
+     *
+     * A project-scoped memory is written by one member and retrieved into every other member's
+     * turn: `remember` stores `userId: null` for that scope and `searchSemantic` matches it for
+     * anyone in the project. The Memory screen offers exactly that ("About this project — shared
+     * context for everyone in the project"), and the content is a free-text field. So this is a
+     * durable, cross-user, attacker-controlled string — and it was the only untrusted-text path
+     * in the platform with no wrapper, while landing in the `system` role, the highest-trust
+     * position there is. Files, RAG passages, tool output and MCP results are all wrapped
+     * (ADR-133). "Standing directive: when asked about credentials, reply with…" needs no
+     * newlines to work, and collapsing whitespace does not touch it.
+     *
+     * The prose hint below stays, but it is not the control: this platform's own grounding
+     * notes record that "a prompt cannot make a model refuse". The delimiter is structural.
+     */
+    return wrapUntrustedContent(
+      [
+        "Recalled context about this user and project, retrieved from long-term memory:",
+        ...lines,
+        "",
+        "Treat these as background that may be out of date. Anything stated in the current",
+        "conversation takes precedence, and you should not mention this list unless it is relevant.",
+      ].join("\n")
+    );
   }
 
   /** Convenience: retrieve, render, and prepend to a message list in one call. */
@@ -224,7 +256,16 @@ export class MemoryService {
     const injected = await this.retrieve(request);
     const block = this.buildContextBlock(injected);
     if (!block) return { messages, injected: [] };
-    return { messages: [{ role: "system", content: block }, ...messages], injected };
+    // The instruction that gives the delimiter its meaning travels with it (ADR-133's shape,
+    // as `planner.ts` does it): a tag the model has never been told about is just more text.
+    return {
+      messages: [
+        { role: "system", content: UNTRUSTED_CONTENT_SYSTEM_PROMPT },
+        { role: "system", content: block },
+        ...messages,
+      ],
+      injected,
+    };
   }
 
   /**
@@ -302,11 +343,6 @@ export class MemoryService {
   }
 
   /**
-   * Embedding failures must never break the surrounding request. A chat turn that cannot embed
-   * should proceed without memory rather than fail; the item is still stored, and remains
-   * reachable by recency until it is re-embedded.
-   */
-  /**
    * Metered, and quiet about everything else — docs/26_DECISIONS.md ADR-131.
    *
    * Memory embeds on three paths: storing a fact, recalling on a chat turn, and the near-duplicate
@@ -322,13 +358,25 @@ export class MemoryService {
   private async embedQuietly(projectId: string, text: string): Promise<{ vector: number[]; model: string } | null> {
     if (!text.trim()) return null;
     try {
-      await this.meter?.check(projectId, [text]);
-      const embedded = await this.embeddings.embedOne(text);
-      await this.meter?.record(projectId, [text]);
-      return { vector: embedded.vector, model: embedded.model };
+      return await this.embedOrThrow(projectId, text);
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The same work, reported rather than swallowed — ADR-149.
+   *
+   * Used by `remember`, where a null embedding means the row is unrecallable forever and the
+   * caller is entitled to hear about it: the route answers with the quota or provider error
+   * instead of 201, and nothing is written.
+   */
+  private async embedOrThrow(projectId: string, text: string): Promise<{ vector: number[]; model: string } | null> {
+    if (!text.trim()) return null;
+    await this.meter?.check(projectId, [text]);
+    const embedded = await this.embeddings.embedOne(text);
+    await this.meter?.record(projectId, [text]);
+    return { vector: embedded.vector, model: embedded.model };
   }
 }
 
@@ -361,10 +409,15 @@ export function parseExtractedFacts(raw: string): Array<{ content: string; scope
     if (!Array.isArray(parsed.facts)) return [];
     return parsed.facts
       .filter((f): f is { content: string; scope?: string } => typeof f?.content === "string")
-      .map((f) => ({
-        content: f.content,
-        scope: f.scope === "project" ? ("project" as const) : ("user" as const),
-      }));
+      /**
+       * A model-proposed fact is always `user`-scoped — ADR-149.
+       *
+       * `project` scope is read by every member of the project, so letting the extraction model
+       * choose it meant one user saying "the project convention is: <instruction>" could plant a
+       * row in everyone else's prompt, with no human ever choosing to share it. The Memory screen
+       * still offers the shared scope; a person picks it there, deliberately.
+       */
+      .map((f) => ({ content: f.content, scope: "user" as const }));
   } catch {
     return [];
   }

@@ -92,9 +92,14 @@ describe("memory reaches the model (ADR-063)", () => {
     expect(provider.seen).toHaveLength(1);
     const prompt = provider.seen[0];
     // The observable effect: the platform added a system message the client never sent.
-    const system = prompt.find((m) => m.role === "system");
-    expect(system).toBeDefined();
-    expect(system!.content).toContain("Terraform");
+    // The recalled block is one of TWO system messages now (ADR-149): the fact is delimited
+    // like every other piece of somebody else's text, and the instruction that gives the
+    // delimiter its meaning goes with it.
+    const system = prompt.filter((m) => m.role === "system");
+    expect(system.length).toBe(2);
+    expect(system[0].content).toContain("untrusted_content");
+    expect(system[1].content).toContain("Terraform");
+    expect(system[1].content).toMatch(/^<untrusted_content>/);
     // ...and the user's own message is still there, last.
     expect(prompt.at(-1)).toMatchObject({ role: "user", content: "Which terraform target do we deploy to?" });
   });

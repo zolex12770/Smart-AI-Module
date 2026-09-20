@@ -43,6 +43,18 @@ export default function TaskDetail({
   // inside the approval card, which may be far down the page or absent entirely.
   const [cancelError, setCancelError] = useState<string | null>(null);
 
+  /**
+   * The live feed while it is running, the persisted log afterwards — ADR-134, fixed by ADR-148.
+   *
+   * The events endpoint replays `state` and `node`, never activity, so a task opened after it
+   * finished had an empty feed and the Activity card simply did not render. The rows were on the
+   * node the whole time — `persistedActivityOf` was already written — but only the coding
+   * variant read them, so the autonomous screen, the primary one, showed an operator the plan
+   * and the answer and no record of which tools ran with what arguments. That is the black box
+   * ADR-134 says it closed.
+   */
+  const entries = activity.length > 0 ? activity : persistedActivityOf(nodes);
+
   const waitingApproval = nodes.find((n) => n.status === "waiting_approval");
   const needsReconciliation = nodes.find((n) => n.status === "needs_reconciliation");
 
@@ -253,13 +265,13 @@ export default function TaskDetail({
         </div>
       )}
 
-      {activity.length > 0 && (
+      {entries.length > 0 && (
         <div className="card">
           {/* What the model is doing, as it does it (ADR-134). Before this a ten-minute run was
               a spinner and then an answer. */}
           <strong>Activity</strong>
           <div className="plan-steps" style={{ marginTop: 8 }}>
-            {activity.map((entry, i) => (
+            {entries.map((entry, i) => (
               <div key={i} className="plan-step">
                 {entry.kind === "tool_call" && (
                   <span style={{ flex: 1 }}>
