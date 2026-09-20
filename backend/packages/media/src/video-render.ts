@@ -76,6 +76,12 @@ export interface VideoRenderDeps {
    * two of them write the same project.
    */
   ffmpegTimeoutMs?: number;
+  /**
+   * Wall-clock ceiling for the WHOLE render (ADR-150), shared by every ffmpeg step. Must stay
+   * under the queue's `expireInSeconds`, or pg-boss re-claims the render before the worker has
+   * given up and two of them compose the same project.
+   */
+  renderBudgetMs?: number;
 }
 
 /**
@@ -84,6 +90,24 @@ export interface VideoRenderDeps {
  * well below `video.render`'s claim window.
  */
 export const DEFAULT_FFMPEG_TIMEOUT_MS = 900_000;
+
+/**
+ * The ceiling for a WHOLE render — docs/26_DECISIONS.md ADR-150.
+ *
+ * `DEFAULT_FFMPEG_TIMEOUT_MS` bounds one invocation, and the queue's claim window was sized
+ * against it as though a render were one invocation. It is not: `processVideoRender` normalises
+ * every scene, pads every scene, builds an audio segment per scene, and then concats, muxes and
+ * subtitles — 2N+4 to 3N+4 ffmpeg calls, each independently allowed the full 900s. With
+ * `targetDurationSeconds` up to 1800 and `sceneClipSeconds` as low as 2, N reaches 900. The
+ * worst case ran into days against a twenty-minute window, so pg-boss re-claimed the render and
+ * a second worker composed the same project — two ffmpegs writing one output, both eventually
+ * calling it succeeded.
+ *
+ * One hour, shared by every step, with the queue window sized above it so the worker always
+ * gives up first. A render that cannot finish inside it fails, loudly, which is the honest
+ * outcome; being composed twice was not.
+ */
+export const DEFAULT_RENDER_BUDGET_MS = 3_600_000;
 
 /**
  * What the composed render produced besides the video — ADR-081.
@@ -127,13 +151,48 @@ export async function processVideoRender(
   scope: VideoProjectScope
 ): Promise<VideoRenderOutcome> {
   const ffmpegPath = deps.ffmpegPath ?? "ffmpeg";
-  // Bound once so no step can be added later that forgets the deadline (ADR-128).
-  const ffmpeg = (args: string[]) => runFfmpeg(ffmpegPath, args, deps.ffmpegTimeoutMs ?? DEFAULT_FFMPEG_TIMEOUT_MS);
+  /**
+   * One deadline for the whole render, not one per call — ADR-150.
+   *
+   * Every step draws from the same budget, so the elapsed work is bounded by it however many
+   * steps a long-form render turns out to need. A single step is still capped separately, so one
+   * wedged ffmpeg cannot silently eat the hour that the remaining scenes needed.
+   */
+  const budgetMs = deps.renderBudgetMs ?? DEFAULT_RENDER_BUDGET_MS;
+  const deadline = Date.now() + budgetMs;
+  const perCallMs = deps.ffmpegTimeoutMs ?? DEFAULT_FFMPEG_TIMEOUT_MS;
+  const ffmpeg = (args: string[]) => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error(
+        `The render exceeded its total budget of ${Math.round(budgetMs / 1000)}s and was stopped before ` +
+          `the queue could hand it to a second worker.`
+      );
+    }
+    return runFfmpeg(ffmpegPath, args, Math.min(remaining, perCallMs));
+  };
   const project = await deps.projectRepo.get(scope.projectId, scope.videoProjectId);
   if (!project) {
     throw new Error(
       `video.render job referenced unknown project "${scope.videoProjectId}" in project "${scope.projectId}".`
     );
+  }
+
+  /**
+   * Already rendered — ADR-128's guard, which the render did not have (ADR-150).
+   *
+   * `grep -n "renderStatus ===" video-render.ts` returned nothing. A re-claim re-composed a
+   * project that was already finished: the same ffmpeg work again, a second final asset stored
+   * against the tenant, and the row rewritten to point at whichever finished last.
+   */
+  if (project.renderStatus === "succeeded") {
+    return {
+      renderStatus: "succeeded",
+      assetId: project.renderAssetId,
+      audioStatus: "included",
+      subtitleAssetId: project.subtitleAssetId,
+      subtitleVttAssetId: project.subtitleVttAssetId,
+    };
   }
 
   await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, { renderStatus: "processing" });

@@ -11,8 +11,22 @@ import { RequireSession, useSession } from "../lib/session-context";
  * audit finding. Spend that nobody can see is spend nobody controls.
  */
 interface UsageResponse {
+  /**
+   * ORGANIZATION-wide, because that is what the limits are enforced against — ADR-126/ADR-150.
+   *
+   * This screen showed per-project totals under per-deployment limits and said so in its own
+   * subtitle. The ceilings draw against the tenant, so a user watched "412,000 of 500,000" and
+   * was refused at 500,000 across all their projects: the meter and the refusal were measuring
+   * different things, and only one of them could stop a request.
+   */
   usage: {
     llm: { tokensToday: number; tokensThisMonth: number; estimatedCostUsdThisMonth: number | null; pricedCallsOnly: boolean };
+    images: { generatedToday: number };
+    video: { secondsGeneratedThisMonth: number };
+  };
+  /** This project's share of it. Deliberately not compared against a limit: nothing enforces one. */
+  projectUsage?: {
+    llm: { tokensToday: number; tokensThisMonth: number };
     images: { generatedToday: number };
     video: { secondsGeneratedThisMonth: number };
   };
@@ -65,11 +79,14 @@ function UsageView() {
   }
   if (!data) return <p className="page-state">Loading usage…</p>;
 
-  const { usage, limits } = data;
+  const { usage, limits, projectUsage } = data;
   return (
     <section>
       <h1>Usage</h1>
-      <p className="page-subtitle">Everything this project has spent, for the selected project only.</p>
+      <p className="page-subtitle">
+        Everything this organization has spent. The limits below are enforced across every project
+        it owns (ADR-126), so these are the numbers a request is actually refused against.
+      </p>
 
       <div className="usage-grid">
         <Meter label="Tokens today" used={usage.llm.tokensToday} limit={limits.dailyTokenLimit} />
@@ -81,6 +98,25 @@ function UsageView() {
           limit={limits.monthlyVideoSecondsLimit}
         />
       </div>
+
+      {projectUsage && (
+        <>
+          <h2>This project&apos;s share</h2>
+          <p className="auth-hint">
+            What the selected project contributed to the totals above. It has no limit of its own.
+          </p>
+          <div className="usage-grid">
+            <Meter label="Tokens today" used={projectUsage.llm.tokensToday} limit={null} />
+            <Meter label="Tokens this month" used={projectUsage.llm.tokensThisMonth} limit={null} />
+            <Meter label="Images today" used={projectUsage.images.generatedToday} limit={null} />
+            <Meter
+              label="Video seconds this month"
+              used={projectUsage.video.secondsGeneratedThisMonth}
+              limit={null}
+            />
+          </div>
+        </>
+      )}
 
       <h2>Estimated cost this month</h2>
       <p className="usage-cost">

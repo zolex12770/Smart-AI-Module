@@ -36,6 +36,21 @@ export interface VideoProviderCapabilities {
   maxDurationSeconds: number;
   supportsSeed: boolean;
   hasFastTier: boolean;
+  /**
+   * The provider's own worst-case wall clock for one scene — docs/26_DECISIONS.md ADR-150.
+   *
+   * `video.generate_scene`'s claim window was a fixed 900s, justified in the composition root by
+   * "it sits above the provider's own 10-minute deadline so the provider always gives up first".
+   * That is true of the Replicate provider and false of the one a local deployment actually gets:
+   * `ImageMotionVideoProvider` generates a still first and then runs ffmpeg, so its worst case is
+   * the image deadline PLUS the ffmpeg deadline — 1200s by default, comfortably past the window.
+   * The claim then expires mid-generation, a second worker starts, and the billed provider runs
+   * twice for one scene.
+   *
+   * Stated by the provider rather than assumed by the caller, so a provider that changes its
+   * timeout cannot silently invalidate the window sized against it.
+   */
+  worstCaseDeadlineMs: number;
 }
 
 export interface VideoProvider {

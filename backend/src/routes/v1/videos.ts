@@ -69,6 +69,9 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
           // as every other model call. Absent only when no chat provider is configured, which is
           // exactly when the deterministic planner should take over.
           scriptModel: ctx.router,
+          // ADR-150: the storyboard is a real model call, so it is budgeted and recorded like
+          // every other one. It was neither.
+          modelCallMeter: ctx.modelCallMeter,
         },
         {
           ...scope,

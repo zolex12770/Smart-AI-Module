@@ -54,6 +54,25 @@ export async function processAudioGeneration(
     return { status: "cancelled", assetId: null, durationSeconds: null };
   }
 
+  /**
+   * Already finished — docs/26_DECISIONS.md ADR-128, extended here by ADR-150.
+   *
+   * ADR-128 wrote this guard for images and said exactly why: pg-boss re-claims a job whose
+   * `expireInSeconds` elapses, on the assumption the worker died, and a worker that is merely
+   * SLOW is indistinguishable from a dead one. The guard was then added to one of the four
+   * processors. Audio's claim window is a fixed 300s while a local Piper synthesis of a long
+   * script has no such bound, so a re-claim calls the synthesiser a second time — and the usage
+   * row's `audio.generate:<id>` idempotency key deduplicates the RECORD, not the work, so the
+   * second call is paid for and invisible.
+   */
+  if (generation.status === "succeeded" || generation.status === "cancelled") {
+    return {
+      status: generation.status,
+      assetId: generation.resultAssetId ?? null,
+      durationSeconds: generation.durationSeconds ?? null,
+    };
+  }
+
   await deps.generationRepo.updateStatus(projectId, generationId, "processing", { incrementAttempt: true });
 
   try {

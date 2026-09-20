@@ -30,8 +30,9 @@ import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { LocalAssetStore, PiperSpeechProvider } from "@ai-platform/media";
 import { McpManager } from "@ai-platform/mcp";
-import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
+import { estimatePromptTokens, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { QuotaManager } from "@ai-platform/quota";
+import { QuotaExceededError } from "@ai-platform/shared";
 import { AuthService, ProcessSandbox, TEST_SCRYPT_PARAMS, generateCsrfToken } from "@ai-platform/security";
 import { createFilesystemTools, ToolRegistry } from "@ai-platform/tools";
 import { loadConfig } from "./config.js";
@@ -176,6 +177,14 @@ export async function buildTestApp(): Promise<{
         })
       : null;
 
+  // One repository instance, shared by the context and by the meters below, so a test that reads
+  // the ledger sees what the meters wrote. The meters read `ctx.quota` at CALL time rather than
+  // closing over this one, because several tests swap `ctx.quota` for a manager with real limits
+  // after the app is built — a meter bound to the original would ignore them and the test would
+  // pass against an ungated path.
+  const usageRepo = new PgUsageRecordRepository(db);
+  const testQuota = new QuotaManager(usageRepo, {});
+
   const ctx: AppContext = {
     db,
     router: modelRouter,
@@ -207,10 +216,61 @@ export async function buildTestApp(): Promise<{
     imageGenerations: new PgImageGenerationRepository(db),
     videoProjects: new PgVideoProjectRepository(db),
     videoScenes: new PgVideoSceneRepository(db),
-    usage: new PgUsageRecordRepository(db),
+    usage: usageRepo,
     // No limits configured by default — route tests exercise the unlimited (opt-in) path;
     // a dedicated quota test constructs its own QuotaManager with real limits.
-    quota: new QuotaManager(new PgUsageRecordRepository(db), {}),
+    quota: testQuota,
+    /**
+     * The real meters, over the real repositories — docs/26_DECISIONS.md ADR-150.
+     *
+     * The harness could have stubbed these, and then the rows the storyboard and the narration
+     * write would exist only in production. They are the same shape the composition root builds,
+     * so a test can assert that a video really wrote its `llm` and `speech` usage rows.
+     */
+    modelCallMeter: {
+      async check(projectId, prompt) {
+        const result = await ctx.quota.checkLlmTokens(projectId, estimatePromptTokens(prompt));
+        if (!result.allowed) throw new QuotaExceededError(result.reason ?? "Token quota exceeded.");
+      },
+      async record(projectId, call, options) {
+        await usageRepo.create({
+          id: uuid(),
+          projectId,
+          userId: options?.userId ?? null,
+          kind: "llm",
+          provider: call.provider,
+          model: call.model,
+          inputTokens: call.inputTokens,
+          outputTokens: call.outputTokens,
+          units: null,
+          estimatedCostUsd: null,
+          requestId: options?.requestId ?? null,
+          idempotencyKey: options?.idempotencyKey ?? null,
+        });
+      },
+    },
+    speechMeter: {
+      async check(projectId, characters) {
+        const result = await ctx.quota.checkSpeechCharacters(projectId, characters);
+        if (!result.allowed) throw new QuotaExceededError(result.reason ?? "Speech quota exceeded.");
+      },
+      async record(projectId, characters, options) {
+        await usageRepo.create({
+          id: uuid(),
+          projectId,
+          userId: options?.userId ?? null,
+          kind: "speech",
+          provider: speech?.name ?? "unknown",
+          model: speech?.name ?? "unknown",
+          inputTokens: null,
+          outputTokens: null,
+          units: characters,
+          estimatedCostUsd: null,
+          requestId: options?.requestId ?? null,
+          idempotencyKey: options?.idempotencyKey ?? null,
+        });
+      },
+    },
     // No scanner by default (the fail-open path); tests that exercise scanning set ctx.scanner
     // themselves — route handlers read it at request time.
     scanner: null,

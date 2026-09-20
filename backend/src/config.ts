@@ -309,6 +309,16 @@ const envSchema = z.object({
   DAILY_SPEECH_CHARACTER_LIMIT: z.coerce.number().int().positive().optional(),
   MONTHLY_SPEECH_CHARACTER_LIMIT: z.coerce.number().int().positive().optional(),
   MONTHLY_VIDEO_SECONDS_LIMIT: z.coerce.number().int().positive().optional(),
+  /**
+   * Embedding spend, budgeted apart from chat — docs/26_DECISIONS.md ADR-131, wired by ADR-150.
+   *
+   * `QuotaLimits` has carried these two fields since ADR-131 and no environment variable could
+   * supply them, so the composition root constructed the manager without them and
+   * `checkEmbeddingTokens` returned `allowed: true` in every real deployment. The meter was
+   * built, called from all four embedding paths, tested — and could not refuse anything.
+   */
+  DAILY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
+  MONTHLY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
 })
   /**
    * A half-configured video provider is refused on boot — ADR-085.

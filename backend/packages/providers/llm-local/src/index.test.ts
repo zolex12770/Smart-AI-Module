@@ -226,6 +226,35 @@ describe("LocalEmbeddingProvider", () => {
     await expect(provider.embed(["a", "b"])).rejects.toBeInstanceOf(ProviderError);
   });
 
+  it("gives up on a runtime that accepts the connection and never answers", async () => {
+    /**
+     * docs/26_DECISIONS.md ADR-150. This call had no signal and no timeout, while
+     * `document.ingest` gave the whole job a 120-second claim window and the ingest path sends
+     * an entire document's chunks in ONE request. An Ollama restart, a model still loading or a
+     * machine under swap therefore parked the worker forever: pg-boss expired the claim, a
+     * second worker embedded the same document, and the first never came back.
+     */
+    const fetchImpl = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          // A real fetch rejects when its signal aborts. Nothing else ever settles this.
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        })
+    ) as unknown as typeof fetch;
+    const provider = new LocalEmbeddingProvider({
+      baseUrl: "http://x/v1",
+      model: "m",
+      dimensions: 1,
+      fetchImpl,
+      timeoutMs: 50,
+    });
+
+    const started = Date.now();
+    await expect(provider.embed(["a"])).rejects.toThrow(/did not complete within/i);
+    // It really stopped waiting, rather than the promise happening to settle.
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
   it("returns nothing for no input without calling the runtime", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const provider = new LocalEmbeddingProvider({ baseUrl: "http://x/v1", model: "m", dimensions: 1, fetchImpl });

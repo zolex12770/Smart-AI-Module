@@ -12,7 +12,15 @@ A `CostEstimator` in `packages/model-router` computes an estimated cost **before
 
 ## QuotaManager
 
-Per-user and per-project quotas (`daily_token_limit`, `monthly_token_limit`, `daily_image_limit`, `monthly_video_seconds_limit`, configurable in `settings`, FR-063) are checked **before** enqueueing a job or making a model call, not after — a request that would exceed quota is rejected synchronously with a clear error, never allowed to start and fail/bill partway through. Usage is decremented from the same `usage_records` table that powers the usage dashboard ([[15_API_ARCHITECTURE]] `/api/v1/usage`), so quota state and displayed usage can never disagree.
+Per-ORGANIZATION quotas (`daily_token_limit`, `monthly_token_limit`, `daily_image_limit`, `monthly_video_seconds_limit`, configurable in `settings`, FR-063) are checked **before** enqueueing a job or making a model call, not after — a request that would exceed quota is rejected synchronously with a clear error, never allowed to start and fail/bill partway through. Usage is decremented from the same `usage_records` table that powers the usage dashboard ([[15_API_ARCHITECTURE]] `/api/v1/usage`), so quota state and displayed usage can never disagree.
+
+**The scope is the organization, not the project** — ADR-126, and ADR-150 for the dashboard. Every
+limit was per project and any user can create projects, so `DAILY_TOKEN_LIMIT=100000` meant a
+hundred thousand tokens *per project* and the ceiling was a button away from being raised. The
+checks draw against the tenant now. `/api/v1/usage` reports the organization total as `usage` and
+this project's share as `projectUsage`: for one release it reported only the project figure under
+organization limits, so the meter a user watched could not predict the refusal they were about to
+get.
 
 ## Usage recording
 

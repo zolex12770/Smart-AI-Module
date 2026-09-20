@@ -57,6 +57,18 @@ export interface UsageRecordRepository {
    * treated as $0 of real spend vs. "no data," so this can undercount when pricing is missing
    * — an honest limitation surfaced in the /api/v1/usage response itself, not hidden. */
   sumLlmCostUsdSince(projectId: string, since: Date): Promise<number>;
+  /**
+   * The same three totals across the whole ORGANIZATION the project belongs to — ADR-150.
+   *
+   * These are what `QuotaManager` enforces against (ADR-126 moved the ceilings to the tenant,
+   * because a per-project limit made "create a project" a button that bought more budget), and
+   * they were reachable only from the quota package's own `QuotaUsageLedger` view of this
+   * repository. `/api/v1/usage` therefore showed per-project totals under organization limits,
+   * so the dashboard and the enforcement disagreed with each other.
+   */
+  sumLlmTokensForTenantSince(projectId: string, since: Date): Promise<number>;
+  countImagesForTenantSince(projectId: string, since: Date): Promise<number>;
+  sumVideoSecondsForTenantSince(projectId: string, since: Date): Promise<number>;
 }
 
 export class PgUsageRecordRepository implements UsageRecordRepository {

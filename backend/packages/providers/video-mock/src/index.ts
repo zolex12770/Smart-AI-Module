@@ -29,7 +29,8 @@ export class MockVideoProvider implements VideoProvider {
   }
 
   getCapabilities(): VideoProviderCapabilities {
-    return { maxDurationSeconds: MAX_DURATION_SECONDS, supportsSeed: true, hasFastTier: true };
+    // Synthetic frames, no network and no subprocess: it is done in milliseconds.
+    return { maxDurationSeconds: MAX_DURATION_SECONDS, supportsSeed: true, hasFastTier: true, worstCaseDeadlineMs: 30_000 };
   }
 
   async generateVideo(

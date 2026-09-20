@@ -30,6 +30,49 @@ export interface EmbeddingMeter {
 }
 
 /**
+ * LLM spend for a model call made outside the chat route — ADR-150.
+ *
+ * The video storyboard is one: every `POST /api/v1/videos` runs a real model call through the
+ * router, and the route checked only video-seconds. No `checkLlmTokens`, no usage row — so the
+ * one model call the platform makes on a user's behalf outside chat was both unbudgeted and
+ * invisible in the ledger the dashboard reads.
+ *
+ * The PROMPT is passed to `check`, not a token count, for the same reason `EmbeddingMeter` takes
+ * texts: the estimator lives in the model router, and the media package has no other reason to
+ * depend on it.
+ */
+export interface ModelCallMeter {
+  /** Refuse before spending. Throws when the budget is spent. */
+  check(projectId: string, prompt: string): Promise<void>;
+  record(
+    projectId: string,
+    call: { provider: string; model: string; inputTokens: number; outputTokens: number },
+    options?: { userId?: string | null; requestId?: string; idempotencyKey?: string | null }
+  ): Promise<void>;
+}
+
+/**
+ * Speech spend, for the paths that synthesise outside the speech route — ADR-150.
+ *
+ * `processVideoScene` synthesises a narration track per scene, and nothing checked or recorded
+ * it: `grep -rn "usage|quota|Meter" backend/packages/media/src` returned two prose comments and
+ * no code. A long-form video is a per-scene synthesiser call for as many scenes as the user
+ * asked for, so the one media path that can spend the most speech was the one path outside the
+ * budget — and it wrote no `kind: "speech"` row either, so the spend was invisible as well as
+ * unlimited. Same shape as `EmbeddingMeter`: the media package stays free of the usage schema
+ * and the composition root owns pricing.
+ */
+export interface SpeechMeter {
+  /** Refuse before synthesising. Throws when the budget is spent. */
+  check(projectId: string, characters: number): Promise<void>;
+  record(
+    projectId: string,
+    characters: number,
+    options?: { userId?: string | null; requestId?: string; idempotencyKey?: string | null }
+  ): Promise<void>;
+}
+
+/**
  * The TEXTS are passed, not a token count, so the estimator lives in one place.
  *
  * `rag` and `memory` would otherwise each need the token estimator — which lives in the model

@@ -40,11 +40,21 @@ function scopeOf(authCtx: AuthContext): string {
  * silently undercounting.
  *
  * The `limits` block reports the configured ceilings, which are read from environment
- * configuration and so are the same numbers for every project on the deployment — what is
- * per-project is the *usage measured against them*, since every aggregate above and every
- * `QuotaManager` check now filters on the project id. Per-project limit *values* would be
- * configuration this platform does not yet store anywhere, so the response says what is
- * actually enforced rather than implying a per-project number that does not exist.
+ * configuration and so are the same numbers for every project on the deployment.
+ *
+ * The usage measured against them is the ORGANIZATION's — docs/26_DECISIONS.md ADR-150.
+ *
+ * This route reported per-project totals under per-deployment limits, and the paragraph here
+ * used to say every `QuotaManager` check "now filters on the project id". ADR-126 stopped that:
+ * spend ceilings draw against the tenant, because every limit being per project made a project
+ * a button that bought more budget. The dashboard was never moved, so a user watched "412,000 of
+ * 500,000 tokens" and was refused at 500,000 across all their projects — the screen and the
+ * enforcement were measuring different things, and only one of them could stop a request.
+ *
+ * Both figures are reported now: `usage` is the organization total the limits are enforced
+ * against, and `projectUsage` is this project's share of it, which is what a member of one
+ * project actually wants to know. Naming them apart is the point — a single ambiguous number is
+ * how the two drifted for an entire release.
  */
 export function registerUsageRoute(app: FastifyInstance, ctx: AppContext): void {
   app.get("/api/v1/usage", async (request) => {
@@ -52,7 +62,23 @@ export function registerUsageRoute(app: FastifyInstance, ctx: AppContext): void 
     const projectId = scopeOf(authCtx);
     const limits = ctx.quota.getLimits();
     const now = new Date();
-    const [tokensToday, tokensThisMonth, imagesToday, videoSecondsThisMonth, estimatedCostUsdThisMonth] = await Promise.all([
+    const [
+      // The tenant aggregates — the same ones `QuotaManager` checks against (ADR-126).
+      orgTokensToday,
+      orgTokensThisMonth,
+      orgImagesToday,
+      orgVideoSecondsThisMonth,
+      // And this project's share, kept as a secondary figure.
+      tokensToday,
+      tokensThisMonth,
+      imagesToday,
+      videoSecondsThisMonth,
+      estimatedCostUsdThisMonth,
+    ] = await Promise.all([
+      ctx.usage.sumLlmTokensForTenantSince(projectId, startOfDay(now)),
+      ctx.usage.sumLlmTokensForTenantSince(projectId, startOfMonth(now)),
+      ctx.usage.countImagesForTenantSince(projectId, startOfDay(now)),
+      ctx.usage.sumVideoSecondsForTenantSince(projectId, startOfMonth(now)),
       ctx.usage.sumLlmTokensSince(projectId, startOfDay(now)),
       ctx.usage.sumLlmTokensSince(projectId, startOfMonth(now)),
       ctx.usage.countImagesSince(projectId, startOfDay(now)),
@@ -62,11 +88,25 @@ export function registerUsageRoute(app: FastifyInstance, ctx: AppContext): void 
 
     return {
       projectId,
+      /** Organization-wide, because that is what the limits below are enforced against. */
       usage: {
-        llm: { tokensToday, tokensThisMonth, estimatedCostUsdThisMonth, pricedCallsOnly: true },
+        llm: {
+          tokensToday: orgTokensToday,
+          tokensThisMonth: orgTokensThisMonth,
+          estimatedCostUsdThisMonth,
+          pricedCallsOnly: true,
+        },
+        images: { generatedToday: orgImagesToday },
+        video: { secondsGeneratedThisMonth: orgVideoSecondsThisMonth },
+      },
+      /** This project's share of it. Never compared against `limits` — nothing enforces it. */
+      projectUsage: {
+        llm: { tokensToday, tokensThisMonth },
         images: { generatedToday: imagesToday },
         video: { secondsGeneratedThisMonth: videoSecondsThisMonth },
       },
+      /** Which scope `usage` describes, said in the payload rather than only in a docstring. */
+      usageScope: "organization" as const,
       limits: {
         dailyTokenLimit: limits.dailyTokenLimit ?? null,
         monthlyTokenLimit: limits.monthlyTokenLimit ?? null,

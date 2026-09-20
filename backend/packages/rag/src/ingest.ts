@@ -181,7 +181,34 @@ async function loadDocumentBytes(deps: IngestDeps, document: Document): Promise<
  * Scope comes from `document.projectId`: the row was fetched under the caller's tenant scope,
  * so it *is* the caller's project, and nothing here invents one.
  */
-export async function processDocumentIngestion(deps: IngestDeps, document: Document): Promise<void> {
+export async function processDocumentIngestion(
+  deps: IngestDeps,
+  document: Document,
+  options?: {
+    /**
+     * Identifies this unit of spend, so a redelivered job cannot be charged twice (ADR-150).
+     * The worker passes the enqueueing request's id; callers with no job behind them omit it.
+     */
+    spendKey?: string;
+  }
+): Promise<void> {
+  /**
+   * What identifies THIS spend — docs/26_DECISIONS.md ADR-150.
+   *
+   * The charge was keyed `embedding:ingest:<id>:<version>` under a comment saying "a retry of the
+   * same version must not double-charge". The successful pass bumps that version twenty lines
+   * later (`replaceForDocument(..., { bumpVersion: true })`) and the worker re-reads the row on
+   * every attempt — so a redelivered job read version+1, embedded the whole document again, and
+   * wrote a SECOND charge under a key that had never been seen. The key was doing the opposite of
+   * what it was written for.
+   *
+   * The caller passes the id of the request that enqueued the job: stable across every
+   * redelivery of one job, and different for a genuine re-ingest, which is exactly the
+   * distinction the version was failing to draw. Without one, the version read AT ENTRY is used,
+   * which at least cannot be moved by this pass.
+   */
+  const spendKey = options?.spendKey ?? `embedding:ingest:${document.id}:${document.version}`;
+
   try {
     const bytes = await loadDocumentBytes(deps, document);
     // `filename` is the basename in both flows (the path flow derives it from sourcePath),
@@ -211,7 +238,7 @@ export async function processDocumentIngestion(deps: IngestDeps, document: Docum
       userId: document.uploadedByUserId ?? null,
       // Keyed on the document AND its ingest generation: a retry of the same version must not
       // double-charge, but a genuine re-ingest after a new upload is new spend.
-      idempotencyKey: `embedding:ingest:${document.id}:${document.version}`,
+      idempotencyKey: spendKey,
     });
     const rows: NewDocumentChunk[] = chunks.map((content, i) => ({
       id: uuid(),

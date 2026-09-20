@@ -165,6 +165,8 @@ export interface VideoProjectRepository {
   releaseRenderSlot(videoProjectId: string): Promise<void>;
   /** Cooperative cancellation — records the request; the workers settle the rows (docs/07 §1.5). */
   requestCancel(projectId: string, id: string): Promise<boolean>;
+  /** Spends a cancellation request so an explicit retry can resume the project (ADR-150). */
+  clearCancelRequest(projectId: string, id: string): Promise<void>;
   /** Project-scoped read — undefined for another tenant's id (ADR-049 IDOR defence). */
   get(projectId: string, id: string): Promise<VideoProject | undefined>;
   list(projectId: string): Promise<VideoProject[]>;
@@ -288,6 +290,19 @@ export class PgVideoProjectRepository implements VideoProjectRepository {
       .update(videoProjects)
       .set({ renderRequestedAt: null, updatedAt: new Date() })
       .where(eq(videoProjects.id, videoProjectId));
+  }
+
+  /**
+   * Spends a cancellation request so a retry can proceed — ADR-150.
+   *
+   * Scoped to the tenant like every other write here: a video project id from another
+   * organization matches nothing rather than being un-cancelled.
+   */
+  async clearCancelRequest(projectId: string, id: string): Promise<void> {
+    await this.db
+      .update(videoProjects)
+      .set({ cancelRequestedAt: null, updatedAt: new Date() })
+      .where(and(eq(videoProjects.id, id), eq(videoProjects.projectId, projectId)));
   }
 
   async requestCancel(projectId: string, id: string): Promise<boolean> {

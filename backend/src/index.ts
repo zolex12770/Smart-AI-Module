@@ -32,11 +32,11 @@ import {
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MemoryService } from "@ai-platform/memory";
 import { fromPglite, JobQueue, type JobQueueOptions } from "@ai-platform/jobs";
-import { LocalEmbeddingProvider } from "@ai-platform/llm-local";
+import { DEFAULT_EMBED_TIMEOUT_MS, LocalEmbeddingProvider } from "@ai-platform/llm-local";
 import { McpManager, parseMcpServerConfigs } from "@ai-platform/mcp";
 import {
   CloudStorageAssetStore,
-  DEFAULT_FFMPEG_TIMEOUT_MS,
+  DEFAULT_RENDER_BUDGET_MS,
   LocalAssetStore,
   OpenAiSpeechProvider,
   PiperSpeechProvider,
@@ -72,6 +72,8 @@ import {
   QuotaExceededError,
   signupRequestSchema,
   type EmbeddingMeter,
+  type ModelCallMeter,
+  type SpeechMeter,
   type EmbeddingProvider,
 } from "@ai-platform/shared";
 import {
@@ -410,6 +412,10 @@ async function main() {
   const quota = new QuotaManager(usage, {
     dailyTokenLimit: config.DAILY_TOKEN_LIMIT,
     monthlyTokenLimit: config.MONTHLY_TOKEN_LIMIT,
+    // ADR-150: these two existed in `QuotaLimits` and in no environment, so every
+    // `checkEmbeddingTokens` call in the platform answered "allowed" whatever the spend.
+    dailyEmbeddingTokenLimit: config.DAILY_EMBEDDING_TOKEN_LIMIT,
+    monthlyEmbeddingTokenLimit: config.MONTHLY_EMBEDDING_TOKEN_LIMIT,
     dailyImageLimit: config.DAILY_IMAGE_LIMIT,
     dailySpeechCharacterLimit: config.DAILY_SPEECH_CHARACTER_LIMIT,
     monthlySpeechCharacterLimit: config.MONTHLY_SPEECH_CHARACTER_LIMIT,
@@ -448,6 +454,63 @@ async function main() {
         inputTokens: tokens,
         outputTokens: null,
         units: texts.length,
+        estimatedCostUsd: null,
+        requestId: options?.requestId ?? null,
+        idempotencyKey: options?.idempotencyKey ?? null,
+      });
+    },
+  };
+
+  /**
+   * The same shape as `embeddingMeter`, for the two spends that had no meter at all — ADR-150.
+   *
+   * The video storyboard is a real model call on every `POST /api/v1/videos`, and the narration
+   * inside every scene job is a real synthesiser call. Neither was checked against a budget and
+   * neither wrote a usage row, so the dashboard under-reported every video by one model call
+   * plus one synthesis per scene — and a project at its limit could still spend both.
+   */
+  const modelCallMeter: ModelCallMeter = {
+    async check(projectId, prompt) {
+      const result = await quota.checkLlmTokens(projectId, estimatePromptTokens(prompt));
+      if (!result.allowed) throw new QuotaExceededError(result.reason ?? "Token quota exceeded.");
+    },
+    async record(projectId, call, options) {
+      await usage.create({
+        id: uuid(),
+        projectId,
+        userId: options?.userId ?? null,
+        kind: "llm",
+        provider: call.provider,
+        model: call.model,
+        inputTokens: call.inputTokens,
+        outputTokens: call.outputTokens,
+        units: null,
+        estimatedCostUsd: estimateLlmCostUsd(call.provider, call.model, {
+          inputTokens: call.inputTokens,
+          outputTokens: call.outputTokens,
+        }),
+        requestId: options?.requestId ?? null,
+        idempotencyKey: options?.idempotencyKey ?? null,
+      });
+    },
+  };
+
+  const speechMeter: SpeechMeter = {
+    async check(projectId, characters) {
+      const result = await quota.checkSpeechCharacters(projectId, characters);
+      if (!result.allowed) throw new QuotaExceededError(result.reason ?? "Speech quota exceeded.");
+    },
+    async record(projectId, characters, options) {
+      await usage.create({
+        id: uuid(),
+        projectId,
+        userId: options?.userId ?? null,
+        kind: "speech",
+        provider: speech?.name ?? "unknown",
+        model: speech?.name ?? "unknown",
+        inputTokens: null,
+        outputTokens: null,
+        units: characters,
         estimatedCostUsd: null,
         requestId: options?.requestId ?? null,
         idempotencyKey: options?.idempotencyKey ?? null,
@@ -532,7 +595,16 @@ async function main() {
   // retries stopped at `failed`, was archived on the maintenance schedule and then deleted —
   // silent data loss, and for `document.scan` in particular it left the document stuck in
   // `scanning` with no surviving record of why.
-  await jobQueue.ensureQueueWithDeadLetter("document.ingest", { retryLimit: 2, expireInSeconds: 120 });
+  // Above the embedding provider's own deadline (ADR-150), for the reason ADR-128 gives for
+  // every other queue: the provider must always give up first. This was a flat 120s while
+  // `LocalEmbeddingProvider.embed` had no timeout at all and `ingest.ts` sends a whole
+  // document's chunks in one request — so a runtime that accepted the connection and stopped
+  // answering parked the worker forever, the claim expired, and a second worker embedded the
+  // same document while the first never came back.
+  await jobQueue.ensureQueueWithDeadLetter("document.ingest", {
+    retryLimit: 2,
+    expireInSeconds: Math.ceil(DEFAULT_EMBED_TIMEOUT_MS / 1000) + 120,
+  });
   // ADR-042: more retries, backoff — the common failure is clamd not (yet) reachable (e.g. the
   // sidecar still loading its database), which resolves on its own; a scan that never runs
   // leaves the document `scanning`, never `ready`.
@@ -571,14 +643,21 @@ async function main() {
   // workers would poll — and pay for — the same prediction, and the scene would thrash until
   // its retries ran out. It sits above the provider's own 10-minute deadline so the provider
   // always gives up first, with room left for the download and the cancel.
-  await jobQueue.ensureQueueWithDeadLetter("video.generate_scene", { retryLimit: 1, expireInSeconds: 900 });
-  // Above the render's own ffmpeg deadline (ADR-128), for the same reason: a render that ran
-  // past 300s was re-claimed while its ffmpeg was still writing, so two of them composed the
-  // same project at once. ffmpeg is now killed at DEFAULT_FFMPEG_TIMEOUT_MS; this sits above it
-  // with room for the upload and the database write that follow.
+  //
+  // The window is sized once the provider is known (ADR-150) — see below, after
+  // `selectVideoProvider`, because the number depends on which provider this deployment got.
+  // Above the WHOLE render's budget (ADR-150), not above one ffmpeg call.
+  //
+  // This was `DEFAULT_FFMPEG_TIMEOUT_MS + 300`, which is the right shape for a render that is one
+  // ffmpeg invocation. A render is 2N+4 of them — normalise and pad every scene, an audio segment
+  // per scene, then concat, mux and subtitle — each of which was independently allowed the full
+  // 900s. A long-form project reaches N=900, so the elapsed work ran far past the twenty-minute
+  // window, pg-boss re-claimed the job, and two workers composed the same project. The render
+  // now shares one hour across all its steps and the window sits above THAT, so the worker
+  // always gives up first.
   await jobQueue.ensureQueueWithDeadLetter("video.render", {
     retryLimit: 1,
-    expireInSeconds: Math.ceil(DEFAULT_FFMPEG_TIMEOUT_MS / 1000) + 300,
+    expireInSeconds: Math.ceil(DEFAULT_RENDER_BUDGET_MS / 1000) + 300,
   });
 
   // `queue_depth` (docs/20_OBSERVABILITY.md §2.1) — the gauge that answers "are the workers
@@ -669,6 +748,27 @@ async function main() {
   // (ADR-121); with no real image provider there is nothing to animate and the mock is used.
   const videoProvider = selectVideoProvider(config, imageProvider, ffmpegAvailable);
   const videoGenerationAvailable = videoProvider !== null;
+
+  /**
+   * The scene queue's claim window, sized against the provider this deployment actually got —
+   * docs/26_DECISIONS.md ADR-150.
+   *
+   * It was a fixed 900s, justified by "it sits above the provider's own 10-minute deadline so the
+   * provider always gives up first". True of Replicate. False of `ImageMotionVideoProvider`,
+   * which is what a machine with no video token gets: it generates a still with the image
+   * provider and THEN runs ffmpeg over it, so its worst case is the image deadline plus the
+   * ffmpeg deadline — 1200s by default. Past the window, the claim expires mid-generation,
+   * pg-boss hands the scene to a second worker, and the billed provider runs twice for one
+   * scene, with the usage row's idempotency key deduplicating the record rather than the work.
+   *
+   * Asked of the provider rather than assumed here, so a provider that changes its own timeout
+   * cannot silently invalidate the window sized against it.
+   */
+  const videoSceneDeadlineMs = videoProvider?.getCapabilities().worstCaseDeadlineMs ?? 600_000;
+  await jobQueue.ensureQueueWithDeadLetter("video.generate_scene", {
+    retryLimit: 1,
+    expireInSeconds: Math.ceil(videoSceneDeadlineMs / 1000) + 300,
+  });
 
   logger.info(
     {
@@ -786,7 +886,10 @@ async function main() {
             assetRepo: assets,
             assetStore,
           },
-          document
+          document,
+          // ADR-150: the request that enqueued this job identifies the spend. A pg-boss
+          // redelivery carries the same one; a genuine re-ingest is a new request.
+          { spendKey: requestId ? `embedding:ingest:${document.id}:${requestId}` : undefined }
         );
       });
     });
@@ -945,6 +1048,9 @@ async function main() {
                   // Narration for this scene (ADR-079). Undefined when unconfigured, and the
                   // scene then stays honestly silent rather than carrying a silent audio asset.
                   ...(speech ? { speech } : {}),
+                  // ADR-150: the narration is a real synthesiser call, budgeted and recorded
+                  // like the one the audio route makes. It was neither.
+                  speechMeter,
                   logger,
                 },
                 { projectId, videoProjectId },
@@ -1342,6 +1448,8 @@ async function main() {
     videoScenes,
     usage,
     quota,
+    modelCallMeter,
+    speechMeter,
     scanner,
     uploadScanRequired: config.UPLOAD_SCAN_REQUIRED,
     imageGenerationAvailable,

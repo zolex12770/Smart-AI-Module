@@ -5,7 +5,7 @@ import type {
   VideoSceneRepository,
   VideoSceneScope,
 } from "@ai-platform/database";
-import type { VideoProjectRequest, VideoProvider } from "@ai-platform/shared";
+import type { ModelCallMeter, SpeechMeter, VideoProjectRequest, VideoProvider } from "@ai-platform/shared";
 import type { JobQueue } from "@ai-platform/jobs";
 import { writeVideoScript, type ScriptModel } from "./video-script.js";
 import type { SpeechProvider } from "./speech.js";
@@ -56,7 +56,17 @@ export interface CreateVideoProjectOptions {
 }
 
 export async function createVideoProject(
-  deps: Pick<VideoOrchestrationDeps, "projectRepo" | "sceneRepo"> & { scriptModel?: ScriptModel },
+  deps: Pick<VideoOrchestrationDeps, "projectRepo" | "sceneRepo"> & {
+    scriptModel?: ScriptModel;
+    /**
+     * Budget and ledger for the storyboard call — ADR-150.
+     *
+     * `POST /api/v1/videos` checked video-seconds and nothing else, so the storyboard spent real
+     * LLM tokens against no budget and wrote no usage row: the dashboard and the monthly total
+     * were both short by one model call per video, on the one path outside chat that makes one.
+     */
+    modelCallMeter?: ModelCallMeter;
+  },
   input: CreateVideoProjectOptions
 ): Promise<VideoProject> {
   /**
@@ -69,7 +79,25 @@ export async function createVideoProject(
    * provider — recording WHICH happened on the project, because a mechanical decomposition that
    * looks authored is exactly the kind of fake completion this platform refuses.
    */
+  // Asked before, recorded after — the rule every other metered path follows (ADR-131).
+  await deps.modelCallMeter?.check(input.projectId, input.request.prompt);
   const script = await writeVideoScript({ model: deps.scriptModel }, input.request);
+  if (script.provider && script.usage) {
+    await deps.modelCallMeter?.record(
+      input.projectId,
+      {
+        provider: script.provider,
+        model: script.model ?? "unknown",
+        inputTokens: script.usage.inputTokens,
+        outputTokens: script.usage.outputTokens,
+      },
+      {
+        userId: input.createdByUserId,
+        // One storyboard per video project: a retry of the create cannot charge twice.
+        idempotencyKey: `llm:video.storyboard:${input.videoProjectId}`,
+      }
+    );
+  }
   const project = await deps.projectRepo.create({
     id: input.videoProjectId,
     projectId: input.projectId,
@@ -155,6 +183,22 @@ export async function orchestrateVideoProject(
   // the completion check below.
   if (project.status === "succeeded") return;
 
+  /**
+   * A retry spends the cancellation request — docs/26_DECISIONS.md ADR-150.
+   *
+   * `cancelRequestedAt` had exactly two writers: `create` (null) and `requestCancel` (now).
+   * Nothing ever cleared it. So a project that was cancelled could never be retried: this
+   * function re-enqueues every scene that is not `succeeded` — which includes the `cancelled`
+   * ones — and each worker then reads the same stale flag and cancels the scene again. The
+   * project's own errorMessage says "Re-run orchestration…" and the screen offers a Retry
+   * button, so the product led the user into a loop that could not terminate.
+   *
+   * Retrying IS the explicit request to resume, so the earlier request to stop is spent here.
+   */
+  if (project.cancelRequestedAt) {
+    await deps.projectRepo.clearCancelRequest(scope.projectId, scope.videoProjectId);
+  }
+
   // A render that terminally failed still holds the slot it claimed. This function is the
   // explicit-retry entry point (`POST /api/v1/videos/:id/retry`), so hand the slot back —
   // otherwise it is a one-shot latch and the completion check below could never enqueue the
@@ -195,6 +239,13 @@ export interface VideoSceneProcessingDeps extends VideoOrchestrationDeps {
    * muxing silence and calling it a voice-over.
    */
   speech?: SpeechProvider;
+  /**
+   * Budget and ledger for the narration this job synthesises — ADR-150.
+   *
+   * Absent in tests and in any deployment with no quota configured; present in the composition
+   * root, where it gates the synthesis and writes the `kind: "speech"` row that was missing.
+   */
+  speechMeter?: SpeechMeter;
   logger?: { warn(obj: unknown, msg: string): void };
 }
 
@@ -222,6 +273,18 @@ export async function processVideoScene(
     await deps.sceneRepo.updateStatus(scope, sceneId, "cancelled", { lastError: "Cancelled before generation started." });
     return;
   }
+
+  /**
+   * Already finished — ADR-128's guard, which images had and scenes did not (ADR-150).
+   *
+   * A re-claimed scene job called the billed video provider a second time. `video.generate_scene`
+   * gets a fixed 900s window justified by "it sits above the provider's own 10-minute deadline so
+   * the provider always gives up first" — true of the Replicate provider, false of the one a
+   * local deployment actually gets: `ImageMotionVideoProvider` generates an IMAGE first and then
+   * runs ffmpeg, and neither of those is inside 900s in the worst case. The usage row's
+   * `video.scene:<id>` key deduplicates the charge record rather than preventing the charge.
+   */
+  if (scene.status === "succeeded" || scene.status === "cancelled") return;
 
   await deps.sceneRepo.updateStatus(scope, sceneId, "processing");
 
@@ -255,6 +318,10 @@ export async function processVideoScene(
       const narration = (scene.narration ?? "").trim();
       if (deps.speech && narration !== "") {
         try {
+          // Asked before, recorded after — the same rule the embedding paths follow (ADR-131).
+          // A refusal throws, and is caught by the same handler that catches a synthesiser
+          // failure: the scene keeps its clip and renders silently rather than failing.
+          await deps.speechMeter?.check(scope.projectId, narration.length);
           const audio = await deps.speech.synthesize({ text: narration });
           audioAssetId = await deps.assetStore.store(
             scope.projectId,
@@ -263,6 +330,11 @@ export async function processVideoScene(
             audio.ext,
             "video"
           );
+          // Keyed on the scene, so a retry of the same scene does not charge twice.
+          await deps.speechMeter?.record(scope.projectId, narration.length, {
+            requestId,
+            idempotencyKey: `video.scene.narration:${sceneId}`,
+          });
         } catch (error) {
           deps.logger?.warn(
             {
@@ -284,6 +356,18 @@ export async function processVideoScene(
       lastError: err instanceof Error ? err.message : String(err),
       incrementRetry: true,
     });
+    /**
+     * Rethrown, so the queue sees a failure — ADR-150.
+     *
+     * This catch recorded the scene as failed and returned normally, so pg-boss marked the job
+     * COMPLETED. `ensureQueueWithDeadLetter("video.generate_scene", { retryLimit: 1 })` therefore
+     * never retried anything and the dead-letter queue never received a video scene: a provider
+     * outage lost every scene of every project in it, permanently and silently, while the image
+     * and audio processors rethrow for exactly this reason. Completion still runs first, so a
+     * project whose last scene failed settles into `partially_succeeded` rather than hanging.
+     */
+    await checkProjectCompletion(deps, scope, requestId);
+    throw err;
   }
 
   await checkProjectCompletion(deps, scope, requestId);

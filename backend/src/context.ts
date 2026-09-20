@@ -23,6 +23,7 @@ import type { McpManager } from "@ai-platform/mcp";
 import type { QuotaManager } from "@ai-platform/quota";
 import type { MalwareScanner } from "@ai-platform/scanning";
 import type { ToolRegistry } from "@ai-platform/tools";
+import type { ModelCallMeter, SpeechMeter } from "@ai-platform/shared";
 import type { MemoryService } from "@ai-platform/memory";
 import type { AuthService } from "@ai-platform/security";
 import type { ExecutionSandbox } from "@ai-platform/security";
@@ -68,6 +69,16 @@ export interface AppContext {
   videoScenes: VideoSceneRepository;
   usage: UsageRecordRepository;
   quota: QuotaManager;
+  /**
+   * Budget and ledger for the model calls made outside chat — docs/26_DECISIONS.md ADR-150.
+   *
+   * Today that is the video storyboard, which `POST /api/v1/videos` ran against no budget and
+   * recorded nowhere. Handed to the media package as an interface so it stays free of the usage
+   * schema and the token estimator, exactly as `EmbeddingMeter` is handed to rag and memory.
+   */
+  modelCallMeter: ModelCallMeter;
+  /** The same, for speech synthesised inside a video scene job (ADR-150). */
+  speechMeter: SpeechMeter;
   /** Null when no scanner is configured (docs/26_DECISIONS.md ADR-042). The upload route
    * only checks presence; the worker role is what actually talks to it. */
   scanner: MalwareScanner | null;

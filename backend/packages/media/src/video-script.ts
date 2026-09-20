@@ -29,9 +29,18 @@ export interface ScriptedScene extends PlannedScene {
   narration: string | null;
 }
 
+/** What the storyboard call cost, for the caller's ledger — ADR-150. */
+export interface ScriptUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export interface VideoScript {
   title: string;
   scenes: ScriptedScene[];
+  /** The provider that wrote it, and what it cost. Null on the deterministic path. */
+  provider?: string | null;
+  usage?: ScriptUsage | null;
   /**
    * `model` when a model really wrote it; `deterministic` when it fell back. Persisted on the
    * project so the distinction survives into the API and the UI — a caller must be able to tell
@@ -136,7 +145,10 @@ export async function writeVideoScript(
 
     const parsed = parseScriptJson(raw, planned.length);
     if (!parsed) {
-      return deterministic(planned, "The model did not return a usable storyboard JSON object.");
+      // The call happened and the tokens were spent, so the cost is carried out even though the
+      // storyboard is the mechanical one (ADR-150). Reporting a fallback as free would understate
+      // the bill in exactly the case a model is behaving badly and being retried.
+      return { ...deterministic(planned, "The model did not return a usable storyboard JSON object."), provider: raw.provider, usage: raw.usage };
     }
 
     return {
@@ -152,6 +164,8 @@ export async function writeVideoScript(
       })),
       scriptSource: "model",
       model: raw.model,
+      provider: raw.provider,
+      usage: raw.usage,
       fallbackReason: null,
       scenesWritten: parsed.scenesWritten,
     };
@@ -173,6 +187,9 @@ export async function writeVideoScript(
 function deterministic(planned: PlannedScene[], reason: string): VideoScript {
   return {
     title: "Untitled",
+    // No model call reached a terminal event on this path, so there is nothing to charge for.
+    provider: null,
+    usage: null,
     // `narration: null`, not an empty string: the audio stage must be able to tell "there is no
     // script" from "this scene is deliberately silent", and only one of those is a reason to
     // report the narration stage as skipped.
@@ -190,10 +207,18 @@ async function completeText(
   model: ScriptModel,
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
   signal?: AbortSignal
-): Promise<{ text: string; model: string }> {
+): Promise<{ text: string; model: string; provider: string; usage: ScriptUsage }> {
   for await (const event of model.streamChat({ messages }, { signal })) {
     if (event.type === "done") {
-      return { text: event.message.content ?? "", model: event.model };
+      // The provider and the token counts are carried out (ADR-150) so the caller can write the
+      // usage row this call never had: the storyboard spends real LLM tokens on every video and
+      // `grep -rn "usage|quota" backend/packages/media/src` returned two prose comments.
+      return {
+        text: event.message.content ?? "",
+        model: event.model,
+        provider: event.provider,
+        usage: { inputTokens: event.usage.inputTokens, outputTokens: event.usage.outputTokens },
+      };
     }
     if (event.type === "error") throw new Error(event.message);
   }

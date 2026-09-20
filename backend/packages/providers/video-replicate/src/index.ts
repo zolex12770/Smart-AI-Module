@@ -93,7 +93,7 @@ const POLL_BACKOFF_FACTOR = 1.5;
  * `video.generate_scene` queue's `expireInSeconds` in backend: a provider that gave up after
  * the queue had already re-claimed the job would leave two workers polling one prediction.
  */
-const DEFAULT_DEADLINE_MS = 10 * 60_000;
+export const DEFAULT_DEADLINE_MS = 10 * 60_000;
 /** Per-HTTP-request, not per-generation: a single poll that hangs must not eat the deadline. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
@@ -206,6 +206,8 @@ export class ReplicateVideoProvider implements VideoProvider {
       // switch — the hardware a model runs on is fixed by whoever published it. A router that
       // believed otherwise would keep selecting an option that does not exist.
       hasFastTier: false,
+      // One HTTP prediction, bounded by this provider's own deadline (ADR-150).
+      worstCaseDeadlineMs: this.deadlineMs,
     };
   }
 

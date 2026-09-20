@@ -277,6 +277,16 @@ function truncate(text: string, max = 300): string {
 }
 
 /**
+ * The ceiling for one embedding request — ADR-150.
+ *
+ * Ninety seconds: `nomic-embed-text` embeds a document's chunks in a second or two once the
+ * model is resident, and a cold load on a CPU is the slow case this has to survive. It is
+ * deliberately below `document.ingest`'s claim window, so the provider always gives up first
+ * and pg-boss never hands the same document to a second worker while the first is still waiting.
+ */
+export const DEFAULT_EMBED_TIMEOUT_MS = 90_000;
+
+/**
  * Embeddings from the same runtime (`/v1/embeddings`). Ollama, vLLM and LM Studio all expose
  * it, which is what lets the platform have real semantic retrieval with no hosted provider.
  */
@@ -291,6 +301,8 @@ export class LocalEmbeddingProvider {
       apiKey?: string;
       name?: string;
       fetchImpl?: typeof fetch;
+      /** Wall-clock ceiling for one embedding request (ADR-150). */
+      timeoutMs?: number;
     }
   ) {
     this.name = options.name ?? "local";
@@ -306,14 +318,43 @@ export class LocalEmbeddingProvider {
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
     const fetchImpl = this.options.fetchImpl ?? fetch;
-    const res = await fetchImpl(`${this.options.baseUrl.replace(/\/+$/, "")}/embeddings`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(this.options.apiKey ? { Authorization: `Bearer ${this.options.apiKey}` } : {}),
-      },
-      body: JSON.stringify({ model: this.options.model, input: texts }),
-    });
+    /**
+     * Bounded — docs/26_DECISIONS.md ADR-150.
+     *
+     * This call had no signal, no controller and no timeout, while `document.ingest` gives the
+     * whole job a 120-second claim window and `ingest.ts` sends an ENTIRE document's chunks in
+     * one request. A runtime that accepted the connection and then stopped answering — an Ollama
+     * restart, a model still loading, a machine under swap — left the worker parked forever: the
+     * claim expired, pg-boss handed the document to a second worker, and the first one never
+     * came back. This is the default embedding provider on any machine running Ollama.
+     */
+    const timeoutMs = this.options.timeoutMs ?? DEFAULT_EMBED_TIMEOUT_MS;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // Unref'd where the runtime supports it, so a pending timer cannot hold the process open.
+    (timer as unknown as { unref?: () => void }).unref?.();
+    let res: Response;
+    try {
+      res = await fetchImpl(`${this.options.baseUrl.replace(/\/+$/, "")}/embeddings`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(this.options.apiKey ? { Authorization: `Bearer ${this.options.apiKey}` } : {}),
+        },
+        body: JSON.stringify({ model: this.options.model, input: texts }),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new ProviderError(
+          `Local embedding request did not complete within ${Math.round(timeoutMs / 1000)}s ` +
+            `(${texts.length} input(s) to "${this.options.model}").`
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!res.ok) {
       throw new ProviderError(`Local embedding request failed (${res.status}): ${truncate(await safeText(res))}`);
     }
