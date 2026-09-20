@@ -207,7 +207,28 @@ export function applyUnifiedDiff(
   const staged: Array<{ absolute: string; content: string | null; result: AppliedFile }> = [];
 
   for (const patch of patches) {
-    const relative = patch.isDeletedFile ? patch.oldPath : patch.newPath;
+    /**
+     * Deletion has exactly one door, and it is the gated one — docs/26_DECISIONS.md ADR-152.
+     *
+     * `code.apply_patch` is `write_local`, which `PERMISSION_LEVEL_DEFAULTS` maps to
+     * `requiresApproval: "never"`; `fs.delete_file` is `destructive` → `"always"`, and its own
+     * docstring says it "exists specifically to exercise and prove the approval gate". A
+     * `+++ /dev/null` stanza went straight past that gate: no hunks are matched for a deletion,
+     * the file need not exist, nothing is verified, and `rmSync(p, { force: true })` removed it.
+     * One tool advertised the very operation the other one is gated for.
+     *
+     * Refused here rather than gated per-call, because gating the whole tool would stop every
+     * ordinary edit for a human decision and teach approvers to click through. The model is
+     * told which tool to use instead, so this is a redirection rather than a dead end.
+     */
+    if (patch.isDeletedFile) {
+      throw new PatchError(
+        `This diff deletes "${patch.oldPath}". Deleting a file is a destructive action that needs ` +
+          `human approval, so it does not go through a patch: call "fs.delete_file" with that path ` +
+          `instead. Everything else in this diff was left unapplied.`
+      );
+    }
+    const relative = patch.newPath;
     const absolute = resolvePath(relative);
 
     if (patch.isDeletedFile) {

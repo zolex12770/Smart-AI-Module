@@ -179,12 +179,40 @@ describe("applyUnifiedDiff", () => {
     expect(fs.files["/w/new.txt"]).toBe("hello\nworld\n");
   });
 
-  it("deletes a file from a /dev/null target", () => {
+  it("refuses to delete a file, and names the gated tool that can", () => {
+    /**
+     * docs/26_DECISIONS.md ADR-152. `code.apply_patch` is `write_local`, which defaults to
+     * `requiresApproval: "never"`, while `fs.delete_file` is `destructive` -> `"always"` and its
+     * own docstring says it "exists specifically to exercise and prove the approval gate". A
+     * `+++ /dev/null` stanza went straight past that gate — no hunks matched, the file need not
+     * exist, and `rmSync(p, { force: true })` removed it. This test asserted that behaviour.
+     */
     const fs = fakeFs({ "/w/gone.txt": "bye\n" });
     const diff = ["--- a/gone.txt", "+++ /dev/null", "@@ -1 +0,0 @@", "-bye"].join("\n");
-    const applied = applyUnifiedDiff(diff, (rel) => `/w/${rel}`, fs);
-    expect(applied[0].action).toBe("deleted");
-    expect(fs.removed).toEqual(["/w/gone.txt"]);
+    expect(() => applyUnifiedDiff(diff, (rel) => `/w/${rel}`, fs)).toThrow(/fs\.delete_file/);
+    // The file is untouched, and nothing else in the diff was applied either.
+    expect(fs.removed).toEqual([]);
+    expect(fs.files["/w/gone.txt"]).toBe("bye\n");
+  });
+
+  it("refuses the whole diff when only one stanza deletes", () => {
+    // The refusal is not per-file: a diff that edits one file and deletes another must leave
+    // the workspace exactly as it found it, or the model is left reasoning about a half state.
+    const fs = fakeFs({ "/w/keep.txt": "one\n", "/w/gone.txt": "bye\n" });
+    const diff = [
+      "--- a/keep.txt",
+      "+++ b/keep.txt",
+      "@@ -1 +1 @@",
+      "-one",
+      "+two",
+      "--- a/gone.txt",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-bye",
+    ].join("\n");
+    expect(() => applyUnifiedDiff(diff, (rel) => `/w/${rel}`, fs)).toThrow(/fs\.delete_file/);
+    expect(fs.files["/w/keep.txt"]).toBe("one\n");
+    expect(fs.removed).toEqual([]);
   });
 
   it("refuses to patch a file that does not exist, with an actionable message", () => {

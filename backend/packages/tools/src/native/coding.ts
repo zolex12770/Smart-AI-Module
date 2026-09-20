@@ -81,7 +81,7 @@ export function createCodingTools(root: string): NativeToolEntry[] {
         [
           "Apply a unified diff to the workspace. This is how you edit code.",
           "Supply a standard `--- a/path` / `+++ b/path` diff with `@@` hunks; several files may be changed in one call.",
-          "Create a file with `--- /dev/null`, delete one with `+++ /dev/null`.",
+          "Create a file with `--- /dev/null`. This tool does NOT delete files — deleting one is a destructive action that needs human approval, so call `fs.delete_file` for that.",
           "The patch is applied atomically: if any hunk does not match, NOTHING is written and you get an error describing which hunk failed — read the file again and produce a fresh diff rather than retrying the same one.",
         ].join(" "),
         {

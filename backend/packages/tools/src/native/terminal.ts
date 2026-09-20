@@ -27,6 +27,8 @@ export interface CommandSandbox {
     timedOut: boolean;
     cancelled: boolean;
     truncated: boolean;
+    /** Present when the child never started at all (ADR-152). */
+    spawnError?: string;
   }>;
 }
 
@@ -218,6 +220,21 @@ export function createTerminalTools(root: string, sandbox: CommandSandbox): Nati
       }
       if (result.cancelled) {
         return { ok: false, error: `Command "${command}" was cancelled before it finished.` };
+      }
+      /**
+       * A process that never started is a tool FAILURE — docs/26_DECISIONS.md ADR-152.
+       *
+       * This tool's own description tells the model that a non-zero exit does not mean the call
+       * failed, and that a spawn error does. A spawn error nonetheless arrived here as
+       * `exitCode: null` with empty streams and was reported as `ok: true, exitCode: -1` — so a
+       * missing binary, a bad cwd and a program that failed silently all looked the same, and
+       * the model's next move was wrong whichever it actually was.
+       */
+      if (result.spawnError) {
+        return {
+          ok: false,
+          error: `Command "${command}" could not be started: ${result.spawnError}`,
+        };
       }
 
       return {

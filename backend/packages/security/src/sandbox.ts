@@ -59,6 +59,18 @@ export interface SandboxRunResult {
   truncated: boolean;
   durationMs: number;
   isolation: "docker" | "process";
+  /**
+   * Set when the child never started — docs/26_DECISIONS.md ADR-152.
+   *
+   * The `error` event was mapped to `resolveExit(null)`, and nothing on this shape told the
+   * caller apart from an ordinary exit: `timedOut`, `cancelled` and `truncated` all stayed
+   * false and both streams stayed empty. `terminal.run_command` then answered `ok: true` with
+   * `exitCode: -1` — while its own description tells the model "a non-zero exit does not by
+   * itself mean this tool call failed; only a rejected command or a SPAWN ERROR does". A model
+   * reading exit -1 with no output has no way to tell a missing binary from a program that
+   * failed silently, and its next move is wrong either way.
+   */
+  spawnError?: string;
 }
 
 export interface ExecutionSandbox {
@@ -96,11 +108,45 @@ export function assertContained(root: string, workdir: string): string {
 
 abstract class BaseSandbox implements ExecutionSandbox {
   abstract readonly isolation: "docker" | "process";
+  /**
+   * The deployment's ceilings, under the per-call ones — docs/26_DECISIONS.md ADR-152.
+   *
+   * `SANDBOX_TIMEOUT_MS` and `SANDBOX_MEMORY_MB` were validated in `config.ts`, documented in
+   * `.env.example`, and read by nothing: `createSandbox` took only `{ root, runtime, image }`,
+   * so every run used `DEFAULT_LIMITS` and an operator who lowered the ceiling changed nothing.
+   */
+  protected configuredLimits: Partial<SandboxLimits> = {};
   protected abstract spawnChild(request: SandboxRunRequest, limits: SandboxLimits): ChildProcess;
 
   async run(request: SandboxRunRequest): Promise<SandboxRunResult> {
-    const limits: SandboxLimits = { ...DEFAULT_LIMITS, ...request.limits };
+    // Order matters: a per-call limit (a node's own `timeoutMs`) is more specific than the
+    // deployment's default, and the defaults are the floor under both.
+    const limits: SandboxLimits = { ...DEFAULT_LIMITS, ...this.configuredLimits, ...request.limits };
     const startedAt = Date.now();
+
+    /**
+     * An already-aborted signal is checked BEFORE the spawn — ADR-152.
+     *
+     * The abort listener was added after `spawnChild`, and adding one to a signal that has
+     * already aborted never fires it. So a run whose signal was aborted before `run` was called
+     * spawned the process anyway, ran it to completion, and reported `cancelled: false` with its
+     * real exit code — measured at 3.0s for a three-second command, with its output returned as
+     * though nothing had been cancelled. `search.ts` already had this guard; this is the same
+     * one, on the path that can start a process.
+     */
+    if (request.signal?.aborted) {
+      return {
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        cancelled: true,
+        truncated: false,
+        durationMs: 0,
+        isolation: this.isolation,
+      };
+    }
+
     const child = this.spawnChild(request, limits);
 
     let stdout = "";
@@ -139,8 +185,13 @@ abstract class BaseSandbox implements ExecutionSandbox {
     };
     request.signal?.addEventListener("abort", onAbort, { once: true });
 
+    let spawnError: string | undefined;
     const exitCode = await new Promise<number | null>((resolveExit) => {
-      child.once("error", () => resolveExit(null));
+      child.once("error", (err: Error) => {
+        // Carried out, rather than flattened into "exited with no code" (ADR-152).
+        spawnError = err.message;
+        resolveExit(null);
+      });
       child.once("close", (code) => resolveExit(code));
     });
 
@@ -156,6 +207,7 @@ abstract class BaseSandbox implements ExecutionSandbox {
       truncated,
       durationMs: Date.now() - startedAt,
       isolation: this.isolation,
+      ...(spawnError ? { spawnError } : {}),
     };
   }
 }
@@ -243,15 +295,32 @@ export function processSandboxArgs(
 export class ProcessSandbox extends BaseSandbox {
   readonly isolation = "process" as const;
 
-  constructor(private readonly root: string) {
+  constructor(
+    private readonly root: string,
+    limits: Partial<SandboxLimits> = {}
+  ) {
     super();
+    this.configuredLimits = limits;
   }
 
-  protected spawnChild(request: SandboxRunRequest, _limits: SandboxLimits): ChildProcess {
+  protected spawnChild(request: SandboxRunRequest, limits: SandboxLimits): ChildProcess {
     const workdir = assertContained(this.root, request.workdir);
     return spawn(request.command, processSandboxArgs(request.command, request.args, workdir), {
       cwd: workdir,
-      env: { ...baseEnv(), ...(request.env ?? {}) },
+      /**
+       * The memory ceiling, as far as process isolation can carry it — ADR-152.
+       *
+       * `memoryMb` was a documented knob that only the Docker path could enforce (`--memory`),
+       * and ProcessSandbox took the resolved limits as `_limits` and ignored them entirely. A
+       * node child's heap can be bounded from the outside, so it is: this caps the V8 old space,
+       * not the process's total RSS, which is the honest limit of what process isolation can do
+       * and is why `SANDBOX_RUNTIME=docker` remains the real containment story.
+       */
+      env: {
+        ...baseEnv(),
+        NODE_OPTIONS: `--max-old-space-size=${limits.memoryMb}`,
+        ...(request.env ?? {}),
+      },
       shell: false,
       // Own process group so a timeout can kill the whole tree, not just the direct child.
       detached: process.platform !== "win32",
@@ -322,9 +391,11 @@ export class DockerSandbox extends BaseSandbox {
   constructor(
     private readonly root: string,
     private readonly image: string,
-    private readonly dockerPath = "docker"
+    private readonly dockerPath = "docker",
+    limits: Partial<SandboxLimits> = {}
   ) {
     super();
+    this.configuredLimits = limits;
   }
 
   protected spawnChild(request: SandboxRunRequest, limits: SandboxLimits): ChildProcess {
@@ -348,6 +419,11 @@ export async function createSandbox(options: {
   runtime: "docker" | "process";
   image?: string;
   dockerPath?: string;
+  /**
+   * The deployment's ceilings (ADR-152). Merged over `DEFAULT_LIMITS` and under any per-call
+   * limit, so an operator's cap applies to every run that does not name its own.
+   */
+  limits?: Partial<SandboxLimits>;
 }): Promise<ExecutionSandbox> {
   if (options.runtime === "docker") {
     const ok = await dockerAvailable(options.dockerPath ?? "docker");
@@ -357,9 +433,9 @@ export async function createSandbox(options: {
           "process-level isolation, which does not provide the network/filesystem containment docker does."
       );
     }
-    return new DockerSandbox(options.root, options.image ?? "node:22-alpine", options.dockerPath);
+    return new DockerSandbox(options.root, options.image ?? "node:22-alpine", options.dockerPath, options.limits);
   }
-  return new ProcessSandbox(options.root);
+  return new ProcessSandbox(options.root, options.limits);
 }
 
 export async function dockerAvailable(dockerPath = "docker"): Promise<boolean> {

@@ -107,12 +107,20 @@ test.describe("tenant isolation", () => {
 });
 
 test.describe("usage", () => {
-  test("the usage screen renders real project-scoped figures", async ({ page }) => {
+  test("the usage screen renders the figures the limits are enforced against", async ({ page }) => {
     await signUp(page, `usage-${unique()}@example.com`);
     await page.getByRole("link", { name: "Usage" }).click();
     await page.waitForURL("**/usage");
     await expect(page.getByRole("heading", { name: /usage/i })).toBeVisible();
-    await expect(page.getByText(/tokens today/i)).toBeVisible();
+
+    // TWO "tokens today" meters, and that is the point (ADR-150): the headline figures are the
+    // organization totals the ceilings are actually checked against, and this project's share
+    // is reported beside them rather than instead of them. The screen used to show only the
+    // project figure under organization limits, so the meter could not predict the refusal.
+    await expect(page.getByText(/tokens today/i)).toHaveCount(2);
+    await expect(page.getByText(/everything this organization has spent/i)).toBeVisible();
+    await expect(page.getByRole("heading", { name: /this project.s share/i })).toBeVisible();
+    await expect(page.getByText(/no limit of its own/i)).toBeVisible();
   });
 });
 

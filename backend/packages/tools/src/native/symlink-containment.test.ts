@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -49,9 +49,22 @@ describe("sandbox containment resolves symlinks (ADR-088)", () => {
   let hasSymlinks = true;
 
   const ctx = { projectId: "p1", userId: "u1" };
+  /**
+   * Where the TOOLS resolve — docs/26_DECISIONS.md ADR-090, and why ADR-152 rewrote these tests.
+   *
+   * Every handler resolves against `projectWorkspace(root, context)`, so with `projectId: "p1"`
+   * the effective root is `<root>/p1`. The three end-to-end cases below planted their symlink at
+   * `<root>/…`, one directory ABOVE anything the tool can address — so the read hit ENOENT on a
+   * path that was not a link, the write created an ordinary new file inside the workspace, and
+   * all three assertions held no matter what the resolver did. The helper-level tests above are
+   * correct as they stand: they call `resolveSandboxedPath(root, …)` directly.
+   */
+  let workspace: string;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "sbx-root-"));
+    workspace = join(root, ctx.projectId);
+    mkdirSync(workspace, { recursive: true });
     outside = mkdtempSync(join(tmpdir(), "sbx-outside-"));
     writeFileSync(join(outside, "host-secret.txt"), "TOP SECRET HOST FILE CONTENTS");
     try {
@@ -121,6 +134,16 @@ describe("sandbox containment resolves symlinks (ADR-088)", () => {
 
   it("blocks the escape through the REAL tool, not just the helper", async () => {
     if (!hasSymlinks) return;
+    // Planted inside the project workspace, which is the only place the tool can reach.
+    try {
+      symlinkSync(outside, join(workspace, "escape"), "junction");
+    } catch {
+      return;
+    }
+    // The link really is reachable and really does lead outside: without this the assertion
+    // below would pass against a path that simply does not exist, which is how it used to pass.
+    expect(existsSync(join(workspace, "escape", "host-secret.txt"))).toBe(true);
+
     const [readTool] = createFilesystemTools(root).filter((t) => t.definition.id === "fs.read_file");
     // Whether the tool throws or returns ok:false, the one unacceptable outcome is the host
     // file's contents coming back.
@@ -151,9 +174,12 @@ describe("sandbox containment resolves symlinks (ADR-088)", () => {
     async () => {
       const plantedAt = join(outside, "planted-by-the-agent.txt");
       // The link exists; its target does not. An agent can create exactly this with the write
-      // tools it already holds.
-      symlinkSync(plantedAt, join(root, "dangling.txt"), "file");
+      // tools it already holds. Inside the WORKSPACE, so the tool can address it (ADR-152).
+      symlinkSync(plantedAt, join(workspace, "dangling.txt"), "file");
       expect(existsSync(plantedAt)).toBe(false);
+      // The link is where the tool will look: `lstat` succeeds on it even though its target
+      // does not exist, which is what makes this the dangling case rather than a missing file.
+      expect(lstatSync(join(workspace, "dangling.txt")).isSymbolicLink()).toBe(true);
 
       const [writeTool] = createFilesystemTools(root).filter((t) => t.definition.id === "fs.write_file");
       const outcome = await writeTool
@@ -168,12 +194,14 @@ describe("sandbox containment resolves symlinks (ADR-088)", () => {
 
   it.skipIf(!FILE_SYMLINKS_SUPPORTED)("refuses to READ through a dangling FILE link", async () => {
     const target = join(outside, "host-secret.txt"); // exists, from beforeEach
-    const link = join(root, "read-me.txt");
+    const link = join(workspace, "read-me.txt");
     // Created while the target is absent, then the target appears: containment must depend on
     // where the link LEADS, not on what existed when it was made.
     symlinkSync(join(outside, "not-yet.txt"), link, "file");
     writeFileSync(join(outside, "not-yet.txt"), "TOP SECRET HOST FILE CONTENTS");
     expect(existsSync(target)).toBe(true);
+    // Reachable from inside the workspace, and leading outside it.
+    expect(existsSync(link)).toBe(true);
 
     const [readTool] = createFilesystemTools(root).filter((t) => t.definition.id === "fs.read_file");
     const outcome = await readTool

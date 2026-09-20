@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -113,6 +113,90 @@ describe("ProcessSandbox", () => {
     });
     expect(result.cancelled).toBe(true);
     expect(result.timedOut).toBe(false);
+  });
+
+
+  it("does not start a process whose signal has already aborted", async () => {
+    /**
+     * docs/26_DECISIONS.md ADR-152. The abort listener was added AFTER `spawnChild`, and adding
+     * one to a signal that has already aborted never fires it — so a run cancelled before it
+     * started spawned the process anyway, ran it to completion, and reported `cancelled: false`
+     * with its real exit code. Measured at 3.0s for a three-second command, with its output
+     * returned as though nothing had been cancelled.
+     */
+    const marker = join(root, "it-ran.txt");
+    const script = join(root, "writes.mjs");
+    writeFileSync(script, `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\n`);
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const started = Date.now();
+    const result = await sandbox.run({
+      command: process.execPath,
+      args: [script],
+      workdir: root,
+      signal: controller.signal,
+    });
+
+    expect(result.cancelled).toBe(true);
+    expect(result.exitCode).toBeNull();
+    // The load-bearing assertion: the process never ran, rather than running and being
+    // mislabelled afterwards.
+    expect(existsSync(marker)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("reports a command that could not be started as a failure, not as exit -1", async () => {
+    // A spawn error arrived as `exitCode: null` with empty streams and nothing else set, so it
+    // was indistinguishable from an ordinary exit — and `terminal.run_command` answered
+    // `ok: true, exitCode: -1`, while its own description tells the model that a spawn error
+    // IS a tool failure (ADR-152).
+    const result = await sandbox.run({
+      command: join(root, "no-such-binary-anywhere"),
+      args: [],
+      workdir: root,
+    });
+
+    expect(result.spawnError).toBeTruthy();
+    expect(result.exitCode).toBeNull();
+    // And it is not confused with the other two failure modes.
+    expect(result.timedOut).toBe(false);
+    expect(result.cancelled).toBe(false);
+  });
+
+  it("applies the deployment's configured limits to a run that names none", async () => {
+    // `SANDBOX_TIMEOUT_MS` and `SANDBOX_MEMORY_MB` were validated in config.ts, documented in
+    // .env.example, and read by nothing: every run used DEFAULT_LIMITS, so an operator who
+    // lowered the ceiling changed nothing at all (ADR-152).
+    const limited = new ProcessSandbox(root, { timeoutMs: 300 });
+    const script = join(root, "slow.mjs");
+    writeFileSync(script, "setTimeout(() => {}, 10_000);\n");
+
+    const started = Date.now();
+    const result = await limited.run({ command: process.execPath, args: [script], workdir: root });
+
+    expect(result.timedOut).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("still lets a single run ask for more than the configured default", async () => {
+    // Per-call limits are more specific than the deployment's, so a node with its own timeout
+    // keeps it — otherwise threading the config would have silently capped the agent's own
+    // `timeoutMs`, which is a different bug in the same place.
+    const limited = new ProcessSandbox(root, { timeoutMs: 300 });
+    const script = join(root, "brief.mjs");
+    writeFileSync(script, "setTimeout(() => {}, 700);\n");
+
+    const result = await limited.run({
+      command: process.execPath,
+      args: [script],
+      workdir: root,
+      limits: { timeoutMs: 8_000 },
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.exitCode).toBe(0);
   });
 
   it("refuses a workspace outside the sandbox root, following symlinks", () => {

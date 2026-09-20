@@ -289,6 +289,9 @@ async function main() {
     root: sandboxRoot,
     runtime: config.SANDBOX_RUNTIME,
     image: config.SANDBOX_IMAGE,
+    // ADR-152 — these two were validated here, documented in .env.example, and read by nothing,
+    // so an operator who lowered the ceiling changed nothing at all.
+    limits: { timeoutMs: config.SANDBOX_TIMEOUT_MS, memoryMb: config.SANDBOX_MEMORY_MB },
   });
   // Role-scoped, for the same reason the provider gate is: this guard asks "will THIS process
   // execute a command a model chose?", and only a process running the agent engine does. The
