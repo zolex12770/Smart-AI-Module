@@ -2554,3 +2554,20 @@ The request is written by the API role and read by the worker role, so it is pol
 
 **Date:** 2026-09-21
 **Impact:** `shared/src/video.ts`, `backend/packages/media/src/{cancellation-watch.ts (new),video-orchestration,video-render}.ts`, `backend/src/index.ts`, `frontend/app/videos/[id]/page.tsx` + 9 tests.
+
+## ADR-158: Four knobs and guarantees that were documented and not connected
+
+**Decision:** an MCP tool call carries its own timeout, the project cap takes an advisory lock, deleting a memory is scoped to its owner and erases the content, and the retrieval threshold can be set.
+
+**The MCP tool call had no timeout.** `client.callTool` was invoked with no options object, so it took the SDK's `DEFAULT_REQUEST_TIMEOUT_MSEC` of 60 seconds — while `ToolRegistry` believes it is enforcing `definition.timeoutMs`, and every other request in that file passes one. Letting the SDK's own timer fire first does two things: the effective bound becomes the one the registry configured, and the SDK sends the protocol's `notifications/cancelled` to the remote, so a slow third-party server is told to stop rather than left running against a caller that has given up.
+
+**A count-then-insert is not exclusive because it is in a transaction.** The project cap's comment said the shared transaction meant "two concurrent creates cannot both read one under the limit and both proceed". Under READ COMMITTED — Postgres's default, and what this runs at — that is precisely what they can do: neither sees the other's uncommitted row, both count N, both insert. A transaction-scoped advisory lock on the organization makes the pair genuinely exclusive with no isolation-level change and no retry loop.
+
+The test that covers it **passes with the lock removed**, and is kept anyway. The suite runs on PGlite, a single embedded connection, so two transactions cannot interleave and the case the lock exists for is not reproducible here at all. The test asserts the invariant — five racing callers, two winners, three rows — and the lock itself is reasoned from Postgres's semantics and is unverified until the platform runs against a real multi-connection server. That is recorded in docs/27_RISKS_AND_LIMITATIONS.md rather than left for a reader to assume from a green tick.
+
+**Deleting a memory was neither scoped nor a deletion.** `softDelete` took only the project, while `searchSemantic` scopes reads with `or(userId = caller, userId IS NULL)` — so any member could delete another member's user-scoped memory by id, and the screen that lists them shows only your own, which is exactly the shape that hides a cross-user write. And docs/08 §7 asks for "deletion that actually stops influencing retrieval" AND a hard delete of the content; the code cited the first half as its reason for keeping the second. Both are satisfiable: the row stays for audit and the text and vector are cleared, so a dump taken afterwards does not still hold the fact a user asked to be forgotten. A project-scoped row carries no user and belongs to everyone who can see it, so any member may still delete one.
+
+**And the retrieval threshold could not be set.** `retrieve.ts` argues for making it a knob rather than a constant — "the right value is a property of the embedding model… a learned model needs its own calibration" — and `grep` for `maxDistance` across `backend/src`, `shared/src` and `.env.example` returned nothing: no environment variable, no composition-root wiring, no caller. An operator who swapped the embedding model could not calibrate anything. `RAG_MAX_COSINE_DISTANCE` reaches both the agent's search tool and the RAG route now.
+
+**Date:** 2026-09-21
+**Impact:** `backend/packages/mcp/src/client.ts`, `backend/packages/security/src/auth-service.ts`, `backend/packages/database/src/repositories/memory-item-repository.ts`, `backend/src/{config,context,index}.ts`, `backend/src/routes/v1/rag.ts`, `.env.example`, docs/27 + 4 tests.

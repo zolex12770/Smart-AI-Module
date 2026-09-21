@@ -323,6 +323,19 @@ const envFields = z.object({
    * `checkEmbeddingTokens` returned `allowed: true` in every real deployment. The meter was
    * built, called from all four embedding paths, tested — and could not refuse anything.
    */
+  /**
+   * The retrieval relevance threshold — docs/26_DECISIONS.md ADR-158.
+   *
+   * `retrieve.ts` justifies making it a knob rather than a constant: "the right value is a
+   * property of the embedding model, so it is a knob, not a constant: a learned model needs its
+   * own calibration". `RetrieveDeps.maxDistance` existed, and `grep` for it across `backend/src`,
+   * `shared/src` and `.env.example` returned nothing — no environment variable, no composition
+   * root wiring, no caller. So an operator who swapped the embedding model could not calibrate
+   * anything, and the documented knob was a parameter only tests passed.
+   *
+   * Cosine distance, so 0 is identical and 2 is opposite; the default is 0.6.
+   */
+  RAG_MAX_COSINE_DISTANCE: z.coerce.number().min(0).max(2).optional(),
   DAILY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
   MONTHLY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
 });

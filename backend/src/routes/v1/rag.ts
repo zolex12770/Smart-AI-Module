@@ -298,7 +298,13 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
 
       const results = await searchDocuments(
-        { chunkRepo: ctx.documentChunks, documentRepo: ctx.documents, embeddings: ctx.embeddings },
+        {
+          chunkRepo: ctx.documentChunks,
+          documentRepo: ctx.documents,
+          embeddings: ctx.embeddings,
+          // ADR-158 — the same operator calibration the agent's search tool gets.
+          ...(ctx.ragMaxDistance !== undefined ? { maxDistance: ctx.ragMaxDistance } : {}),
+        },
         { projectId, query: parsed.data.question, topK: parsed.data.topK ?? 5 }
       );
 
@@ -518,7 +524,10 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
     const authCtx = await requireProject(request, ctx.auth, "memory:write");
     // docs/08 §7 asks for deletion that actually stops influencing retrieval; the repository's
     // soft delete does that (every read filters on `deletedAt`) while keeping the row for audit.
-    const deleted = await ctx.memoryItems.softDelete(scopeOf(authCtx), request.params.id);
+    // Scoped to the caller (ADR-158): the listing shows only your own user-scoped memories plus
+    // the project-wide ones, so a delete that took the project alone let one member remove
+    // another's by id, invisibly.
+    const deleted = await ctx.memoryItems.softDelete(scopeOf(authCtx), request.params.id, authCtx.user.id);
     if (!deleted) throw new NotFoundError(`Memory item "${request.params.id}" not found.`);
     return { ok: true };
   });

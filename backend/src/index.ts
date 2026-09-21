@@ -560,7 +560,14 @@ async function main() {
     // Metered: this is the path an AGENT takes, and an agent can search in a loop (ADR-131).
     // The RAG route meters its own question separately and therefore passes no meter, so one
     // question is never charged twice.
-    ...createRagTools({ chunkRepo: documentChunks, documentRepo: documents, embeddings, embeddingMeter }),
+    ...createRagTools({
+      chunkRepo: documentChunks,
+      documentRepo: documents,
+      embeddings,
+      embeddingMeter,
+      // ADR-158 — the documented calibration knob, reachable at last.
+      ...(config.RAG_MAX_COSINE_DISTANCE !== undefined ? { maxDistance: config.RAG_MAX_COSINE_DISTANCE } : {}),
+    }),
   ]) {
     toolRegistry.register(definition, handler);
   }
@@ -1474,6 +1481,7 @@ async function main() {
     videoScenes,
     usage,
     quota,
+    ragMaxDistance: config.RAG_MAX_COSINE_DISTANCE,
     modelCallMeter,
     speechMeter,
     scanner,

@@ -796,13 +796,21 @@ export class AuthService {
      * A ceiling on projects, checked inside the transaction that creates one — ADR-126.
      *
      * Quotas draw against the tenant now, so a second project buys no extra budget. What it can
-     * still do is fill the database: creating projects was unbounded and cheap. The count and the
-     * insert share a transaction so two concurrent creates cannot both read "one under the
-     * limit" and both proceed.
+     * still do is fill the database: creating projects was unbounded and cheap.
+     *
+     * A TRANSACTION IS NOT ENOUGH for a count-then-insert — docs/26_DECISIONS.md ADR-158. This
+     * comment used to claim the shared transaction meant "two concurrent creates cannot both
+     * read one under the limit and both proceed". Under READ COMMITTED, which is Postgres's
+     * default and what this runs at, that is precisely what they can do: neither sees the
+     * other's uncommitted row, both count N, both insert, and the organization lands at N+2
+     * against a cap of N+1. The advisory lock below makes the pair genuinely exclusive without
+     * an isolation-level change or a retry loop, and it is transaction-scoped, so a commit or a
+     * rollback releases it and a thrown error cannot leak it.
      */
     const now = this.now();
     const id = uuid();
     await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${organizationId}))`);
       const [existing] = await tx
         .select({ total: count() })
         .from(projects)

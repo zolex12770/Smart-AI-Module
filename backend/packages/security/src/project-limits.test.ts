@@ -97,4 +97,39 @@ describe("projects per organization", () => {
 
     await expect(auth.createProject(user, organizationId, "one-too-many")).rejects.toThrow(/maximum of 100 projects/);
   });
+
+  it("holds the cap when several creates race", async () => {
+    /**
+     * docs/26_DECISIONS.md ADR-158. The comment in `createProject` claimed the shared
+     * transaction meant "two concurrent creates cannot both read one under the limit and both
+     * proceed". Under READ COMMITTED — Postgres's default, and what this runs at — that is
+     * exactly what they can do: neither sees the other's uncommitted row, both count N, both
+     * insert. The advisory lock is what actually makes the pair exclusive.
+     *
+     * Un-awaited on purpose: awaiting each create in turn is the ordering the bug cannot occur
+     * in, which is how the cases above stayed green while the race was open.
+     *
+     * HONEST LIMIT: this test passes with the advisory lock REMOVED, and it is kept anyway. The
+     * suite runs on PGlite, which is a single embedded connection, so two transactions cannot
+     * actually interleave here — the case the lock exists for is not reproducible in this
+     * environment at all. What this asserts is the invariant (five racing callers, two winners,
+     * three rows); the lock itself is reasoned from Postgres's READ COMMITTED semantics and is
+     * unverified until the platform runs against a real multi-connection server. Recorded in
+     * docs/27_RISKS_AND_LIMITATIONS.md rather than left for a reader to assume.
+     */
+    const auth = new AuthService(db, { scryptParams: TEST_SCRYPT_PARAMS, maxProjectsPerOrganization: 3 });
+    const { user } = await signup(auth);
+    const organizationId = await auth.primaryOrganizationId(user.id);
+
+    // Signup made one, so there is room for exactly two more — and five callers want one.
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, (_, i) => auth.createProject(user, organizationId, `racer-${i}`))
+    );
+
+    const created = results.filter((r) => r.status === "fulfilled").length;
+    expect(created).toBe(2);
+    // And the database agrees with the count of winners, which is the assertion that matters:
+    // a cap that refuses the right NUMBER of callers while writing extra rows is no cap.
+    expect(await auth.listProjectsForUser(user.id)).toHaveLength(3);
+  });
 });

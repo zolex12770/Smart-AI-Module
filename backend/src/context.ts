@@ -70,6 +70,12 @@ export interface AppContext {
   usage: UsageRecordRepository;
   quota: QuotaManager;
   /**
+   * The retrieval relevance threshold, from `RAG_MAX_COSINE_DISTANCE` (ADR-158). Undefined means
+   * the package default; `retrieve.ts` documents it as a per-embedding-model calibration and it
+   * had no way in at all.
+   */
+  ragMaxDistance?: number;
+  /**
    * Budget and ledger for the model calls made outside chat — docs/26_DECISIONS.md ADR-150.
    *
    * Today that is the video storyboard, which `POST /api/v1/videos` ran against no budget and

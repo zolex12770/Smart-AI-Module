@@ -174,7 +174,20 @@ export async function connectMcpServer(
 
       try {
         registry.register(definition, async (args) => {
-          const result = (await client.callTool({ name: tool.name, arguments: args })) as {
+          /**
+           * The tool's own bound, passed to the SDK — docs/26_DECISIONS.md ADR-158.
+           *
+           * This call had no options object, so it took the SDK's
+           * `DEFAULT_REQUEST_TIMEOUT_MSEC` of 60 seconds — while `ToolRegistry` believes it is
+           * enforcing `definition.timeoutMs`, and every other request in this file passes one
+           * (`listTools`, the health probe). Letting the SDK's timer fire first does two things:
+           * the effective bound becomes the one the registry configured, and the SDK sends the
+           * protocol's `notifications/cancelled` to the remote, so a slow third-party server is
+           * told to stop rather than left running.
+           */
+      const result = (await client.callTool({ name: tool.name, arguments: args }, undefined, {
+        timeout: definition.timeoutMs,
+      })) as {
             content?: Array<{ type: string; text?: string }>;
             isError?: boolean;
           };

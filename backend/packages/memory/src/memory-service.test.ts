@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDb, runMigrations, PgMemoryItemRepository, type PgliteDb } from "@ai-platform/database";
+import { createDb, memoryItems, runMigrations, PgMemoryItemRepository, type PgliteDb } from "@ai-platform/database";
+import { eq } from "drizzle-orm";
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { organizations, projects, users } from "@ai-platform/database";
 import { v4 as uuid } from "uuid";
@@ -310,6 +311,58 @@ describe("MemoryService", () => {
 
       expect(injected).toEqual([]);
       expect(messages).toEqual(before);
+    });
+  });
+
+  /**
+   * Deleting a memory is scoped, and it erases the content — docs/26_DECISIONS.md ADR-158.
+   *
+   * `softDelete` took only the project, while `searchSemantic` scopes reads with
+   * `or(userId = caller, userId IS NULL)`. So any member could delete another member's
+   * user-scoped memory by id — and the screen that lists them shows only your own, which is
+   * exactly the shape that hides a cross-user write. docs/08 §7 also asks for a hard delete of
+   * the content, which the code cited as its justification for keeping it.
+   */
+  describe("deleting a memory", () => {
+    it("refuses to delete another user's memory", async () => {
+      const mine = await service.remember({ projectId, userId, scope: "user", content: "Alice prefers Terraform." });
+      const repo = new PgMemoryItemRepository(db);
+
+      // `otherUserId` is a real member of the same project.
+      expect(await repo.softDelete(projectId, mine.id, otherUserId)).toBe(false);
+
+      // And it is still there, and still recallable.
+      const still = await repo.listRecent({ projectId, userId, limit: 10 });
+      expect(still.map((m) => m.id)).toContain(mine.id);
+    });
+
+    it("deletes your own, and clears the text and the vector with it", async () => {
+      const mine = await service.remember({ projectId, userId, scope: "user", content: "Alice prefers Terraform." });
+      const repo = new PgMemoryItemRepository(db);
+
+      expect(await repo.softDelete(projectId, mine.id, userId)).toBe(true);
+
+      // The row survives for audit — who deleted what, and when — and the content does not, so
+      // a dump taken afterwards no longer holds the fact the user asked to be forgotten.
+      const rows = await repo.listRecent({ projectId, userId, limit: 10 });
+      expect(rows.map((m) => m.id)).not.toContain(mine.id);
+      const raw = await db.select().from(memoryItems).where(eq(memoryItems.id, mine.id));
+      expect(raw).toHaveLength(1);
+      expect(raw[0].deletedAt).not.toBeNull();
+      expect(raw[0].content).toBe("");
+      expect(raw[0].embedding).toBeNull();
+    });
+
+    it("lets any member delete a memory the whole project shares", async () => {
+      // A `project`-scoped row carries no user, so it belongs to everyone who can see it.
+      const shared = await service.remember({
+        projectId,
+        userId,
+        scope: "project",
+        content: "The deploy window is Thursday.",
+      });
+      const repo = new PgMemoryItemRepository(db);
+      expect(await repo.softDelete(projectId, shared.id, otherUserId)).toBe(true);
     });
   });
 });

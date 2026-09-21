@@ -142,7 +142,11 @@ export interface MemoryItemRepository {
   markUsed(ids: string[]): Promise<void>;
   /** Correction without erasure (docs/08 §4): the old item stays, pointing at its replacement. */
   supersede(projectId: string, oldId: string, newId: string): Promise<boolean>;
-  softDelete(projectId: string, id: string): Promise<boolean>;
+  /**
+   * `userId` scopes the delete to its owner (ADR-158). Omit it only for a caller acting for the
+   * whole project, such as account deletion.
+   */
+  softDelete(projectId: string, id: string, userId?: string): Promise<boolean>;
 }
 
 /**
@@ -304,16 +308,44 @@ export class PgMemoryItemRepository implements MemoryItemRepository {
     return updated.length > 0;
   }
 
-  async softDelete(projectId: string, id: string): Promise<boolean> {
+  /**
+   * Scoped to the person deleting, and it erases the CONTENT — docs/26_DECISIONS.md ADR-158.
+   *
+   * Two gaps. It took only the project, while `searchSemantic` scopes reads with
+   * `or(userId = caller, userId IS NULL)` — so any member could delete another member's
+   * user-scoped memory by id, and the screen that lists them shows only your own, which is
+   * exactly the shape that hides a cross-user write.
+   *
+   * And docs/08 §7 asks for "deletion that actually stops influencing retrieval", which the
+   * comment here cited as the justification for a soft delete — but the same section asks for a
+   * hard delete of the content. Both are satisfiable: the row survives for audit (who deleted
+   * what, and when), and the text and its vector are cleared, so a database dump taken
+   * afterwards does not still contain the fact a user asked to be forgotten.
+   */
+  async softDelete(projectId: string, id: string, userId?: string): Promise<boolean> {
     const now = new Date();
-    // docs/08 §7 asks for deletion that actually stops influencing retrieval. `deletedAt` does
-    // that — every read above filters it out — while leaving the row for audit. If a hard
-    // erase is ever required for a data-subject request, it is a separate, deliberate purge,
-    // not the everyday delete button.
     const deleted = await this.db
       .update(memoryItems)
-      .set({ deletedAt: now, updatedAt: now })
-      .where(and(eq(memoryItems.projectId, projectId), eq(memoryItems.id, id), isNull(memoryItems.deletedAt)))
+      .set({
+        deletedAt: now,
+        updatedAt: now,
+        // Emptied rather than left behind. `content` is NOT NULL, so it becomes the empty
+        // string; the vector is nullable and is cleared outright.
+        content: "",
+        embedding: null,
+        embeddingModel: null,
+      })
+      .where(
+        and(
+          eq(memoryItems.projectId, projectId),
+          eq(memoryItems.id, id),
+          isNull(memoryItems.deletedAt),
+          // A project-scoped row (`user_id IS NULL`) is shared, so any member may delete it;
+          // a user-scoped one belongs to its owner. Omitting the id keeps the old behaviour for
+          // callers that genuinely act for the whole project, such as account deletion.
+          userId === undefined ? undefined : or(eq(memoryItems.userId, userId), isNull(memoryItems.userId))
+        )
+      )
       .returning({ id: memoryItems.id });
     return deleted.length > 0;
   }
