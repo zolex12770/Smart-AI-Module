@@ -45,6 +45,7 @@ function detailHref(task: Task): string {
 }
 
 export default function TasksPage() {
+  const { projectId } = useSession();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,15 +53,24 @@ export default function TasksPage() {
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
-  function refresh() {
+  // Stable, so it can be a dependency of the effect below rather than re-running every render.
+  const refresh = useCallback(() => {
     setLoading(true);
     listTasks()
       .then((r) => setTasks(r.tasks))
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }
+  }, []);
 
-  useEffect(refresh, []);
+  /**
+   * Reloads when the PROJECT changes — docs/26_DECISIONS.md ADR-154.
+   *
+   * The dependency list was empty, and the project switcher is rendered on every authenticated
+   * screen. So switching project left this list showing the previous project's tasks, and
+   * opening one 404'd against the newly selected scope. Memory, Usage and Platform all declare
+   * the dependency; these two did not.
+   */
+  useEffect(refresh, [refresh, projectId]);
 
   const activeType = TASK_TYPES.find((t) => t.value === taskType)!;
 

@@ -194,7 +194,7 @@ export interface ImageGeneration {
   id: string;
   prompt: string;
   request: ImageGenerationRequest;
-  status: "pending" | "processing" | "succeeded" | "failed";
+  status: "pending" | "processing" | "succeeded" | "failed" | "cancelled";
   providerName: string | null;
   resultAssetId: string | null;
   errorMessage: string | null;
@@ -262,7 +262,7 @@ export interface VideoScene {
   /** Set once narration has really been synthesised and stored (ADR-079). */
   audioAssetId?: string | null;
   durationSeconds: number;
-  status: "pending" | "processing" | "succeeded" | "failed";
+  status: "pending" | "processing" | "succeeded" | "failed" | "cancelled";
   jobId: string | null;
   assetId: string | null;
   retryCount: number;
@@ -303,6 +303,14 @@ export const ingestFile = (path: string) =>
   request<{ document: DocumentRecord }>("/api/v1/files", { method: "POST", body: JSON.stringify({ path }) });
 
 export const getFile = (id: string) => request<{ document: DocumentRecord }>(`/api/v1/files/${id}`);
+/**
+ * Removing an ingested document — docs/26_DECISIONS.md ADR-154.
+ *
+ * `DELETE /api/v1/files/:id` is documented and had no client function and no control, so a
+ * document could be ingested, indexed and retrieved into every later answer with no way to take
+ * it back out — on a screen whose whole job is managing what the platform has read.
+ */
+export const deleteFile = (id: string) => request<{ ok: true }>(`/api/v1/files/${id}`, { method: "DELETE" });
 
 /**
  * Real multipart upload (ADR-041), through `apiFetch` like everything else.
@@ -423,6 +431,45 @@ export const deleteAccount = (password: string) =>
     method: "DELETE",
     body: JSON.stringify({ password, confirm: DELETE_ACCOUNT_CONFIRMATION }),
   });
+
+/**
+ * Collaborators and the audit trail — docs/26_DECISIONS.md ADR-154.
+ *
+ * The role table (`viewer`/`editor`/`admin`) had exactly one route, `POST .../members`, and the
+ * product never called it — so no deployment could assign a role through its own interface and
+ * every user administered their own project. The audit trail had the same shape: every tool call
+ * writes a row (ADR-139) and `GET /api/v1/audit` had no consumer at all.
+ */
+export interface ProjectMember {
+  userId: string;
+  email: string;
+  displayName: string;
+  role: "viewer" | "editor" | "admin";
+}
+
+export const listProjectMembers = (projectId: string) =>
+  request<{ members: ProjectMember[] }>(`/api/v1/projects/${projectId}/members`);
+
+export const addProjectMember = (projectId: string, email: string, role: ProjectMember["role"]) =>
+  request<{ userId: string }>(`/api/v1/projects/${projectId}/members`, {
+    method: "POST",
+    body: JSON.stringify({ email, role }),
+  });
+
+export const removeProjectMember = (projectId: string, userId: string) =>
+  request<{ ok: true }>(`/api/v1/projects/${projectId}/members/${userId}`, { method: "DELETE" });
+
+export interface AuditEntry {
+  id: string;
+  action: string;
+  outcome: string;
+  resourceType: string | null;
+  resourceId: string | null;
+  createdAt: string;
+  detail?: Record<string, unknown> | null;
+}
+
+export const listAudit = () => request<{ entries: AuditEntry[] }>("/api/v1/audit");
 
 // --- Memory --------------------------------------------------------------------------------
 

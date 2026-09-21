@@ -28,6 +28,15 @@ vi.mock("../lib/api", async (importOriginal) => ({
 }));
 
 const streamChat = vi.fn();
+/**
+ * The session, because the sidebar reloads when the project changes (ADR-154). Only the one
+ * field this component reads is provided — a mock that answered everything would let a
+ * component start depending on something this test never exercises.
+ */
+vi.mock("../lib/session-context", () => ({
+  useSession: () => ({ projectId: "p1" }),
+}));
+
 vi.mock("../lib/chat-stream", () => ({
   streamChat: (...args: unknown[]) => streamChat(...args),
 }));

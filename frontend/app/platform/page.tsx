@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { apiFetch } from "../lib/auth-client";
-import { RequireSession, SystemAdminOnly, useSession } from "../lib/session-context";
+import { Can, RequireSession, SystemAdminOnly, useSession } from "../lib/session-context";
 import { reconnectMcpServer } from "../lib/api";
 
 /**
@@ -22,7 +22,8 @@ import { reconnectMcpServer } from "../lib/api";
 interface ModelRow {
   provider: string;
   model: string;
-  capabilities?: string[];
+  /** An object, not a list of names — see `ProviderCapabilities` in shared. */
+  capabilities?: { streaming?: boolean; toolCalling?: boolean; vision?: boolean; contextWindow?: number | null };
   isMock?: boolean;
   available?: boolean;
 }
@@ -33,14 +34,34 @@ interface ToolRow {
   enabled: boolean;
   riskLevel: string;
   requiresApproval: string;
-  source?: string;
+  /** `{ kind: "native" | "mcp", serverId, serverVersion }` — the route calls it `origin`. */
+  origin?: { kind?: string; serverId?: string | null };
 }
 
+/**
+ * The field names the route ACTUALLY sends — docs/26_DECISIONS.md ADR-154.
+ *
+ * This said `error`, and `/api/v1/mcp` returns `lastError`. `grep -c lastError` on this file
+ * returned 0, so `server.error` was `undefined` on every row and the ternary rendering it was
+ * always false: an operator could watch a server sit in `failed` with no way to learn why, on
+ * the screen built to tell them. Two more fields had the same shape — `ModelRow.capabilities`
+ * typed as `string[]` against an object, and a `ToolRow.source` the route never sends — and all
+ * three were invisible because a missing field renders as nothing rather than as an error.
+ */
 interface McpRow {
   id: string;
   status: string;
+  transport?: string;
   toolCount?: number;
-  error?: string | null;
+  lastError?: string | null;
+  /**
+   * Tools this server offered that the platform declined to register — ADR-154.
+   *
+   * The route's own comment says these are returned "so an operator can see" them, and no screen
+   * read the field. A refusal is the case an operator most needs to know about: the server is
+   * connected and healthy, and some of what it offers is deliberately not available.
+   */
+  refusedToolIds?: string[];
 }
 
 interface JobRow {
@@ -246,7 +267,13 @@ function PlatformView() {
             <li key={server.id}>
               <strong>{server.id}</strong> — {server.status}
               {typeof server.toolCount === "number" ? ` (${server.toolCount} tools)` : ""}
-              {server.error ? <span className="auth-error"> {server.error}</span> : null}
+              {server.lastError ? <span className="auth-error"> {server.lastError}</span> : null}
+              {server.refusedToolIds && server.refusedToolIds.length > 0 ? (
+                <div className="page-subtitle">
+                  {server.refusedToolIds.length} tool(s) refused and not registered:{" "}
+                  <code>{server.refusedToolIds.join(", ")}</code>
+                </div>
+              ) : null}
               {/**
                * Reconnect — ADR-144. The route existed with no caller anywhere, so an operator
                * could watch a server sit in `failed` and do nothing about it. Inside the guard
@@ -354,14 +381,22 @@ function PlatformView() {
                 <td>{row.attempts}</td>
                 <td>{row.error ?? "no reason recorded"}</td>
                 <td>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    disabled={busy === row.id}
-                    onClick={() => void replay(row)}
+                  {/* ADR-154: replay re-runs the original PAID work and the route requires
+                      `project:write`, so a viewer pressing this got a 403 from a control that
+                      looked available to them. */}
+                  <Can
+                    permission="project:write"
+                    fallback={<span className="page-subtitle">a project editor can replay this</span>}
                   >
-                    {busy === row.id ? "Replaying…" : "Replay"}
-                  </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={busy === row.id}
+                      onClick={() => void replay(row)}
+                    >
+                      {busy === row.id ? "Replaying…" : "Replay"}
+                    </button>
+                  </Can>
                 </td>
               </tr>
             ))}

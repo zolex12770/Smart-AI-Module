@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ingestFile, listFiles, uploadFile, type DocumentRecord } from "../lib/api";
+import { deleteFile, ingestFile, listFiles, uploadFile, type DocumentRecord } from "../lib/api";
 import { badgeClass, StatusBadge } from "../lib/status-badge";
 
 export default function FilesPage() {
@@ -9,6 +9,7 @@ export default function FilesPage() {
   const [path, setPath] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -33,6 +34,20 @@ export default function FilesPage() {
     listFiles()
       .then((r) => setDocuments(r.documents))
       .catch((e) => setError(String(e)));
+  }
+
+  /** ADR-154 — the delete route had no caller, so nothing could be un-ingested. */
+  async function remove(id: string) {
+    setRemoving(id);
+    setError(null);
+    try {
+      await deleteFile(id);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRemoving(null);
+    }
   }
 
   useEffect(() => {
@@ -117,7 +132,19 @@ export default function FilesPage() {
               </div>
               {d.errorMessage && <p className="error-text">{d.errorMessage}</p>}
             </div>
-            <StatusBadge status={d.status} />
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <StatusBadge status={d.status} />
+              {/* ADR-154: the route existed with no caller, so an ingested document could be
+                  retrieved into every later answer with no way to take it back out. */}
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={removing === d.id}
+                onClick={() => void remove(d.id)}
+              >
+                {removing === d.id ? "Removing…" : "Remove"}
+              </button>
+            </div>
           </div>
         ))}
       </div>

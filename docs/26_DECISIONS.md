@@ -2490,3 +2490,22 @@ The primitive lived in `agent-core`, so the only subsystems that could reach it 
 
 **Date:** 2026-09-20
 **Impact:** `backend/tsconfig.tests.json` (new), `backend/src/audit-sink.ts` (new), 21 test files, `scripts/verify-migrations.sh`, `frontend/app/lib/session-context.admin.test.tsx`.
+
+## ADR-154: The role system nobody could use, and six screens reading fields the API never sends
+
+**Decision:** project membership is listable, grantable and revocable from the product; the audit trail has a reader; the Platform screen reads the field names the route actually sends; a cancelled generation says so; two screens reload when the project changes; a document can be removed; and the coding screen filters for the tool the coding agent is allowed to call.
+
+**The permission table described something no operator could reach.** `PROJECT_ROLE_PERMISSIONS` defines viewer, editor and admin; `POST /api/v1/projects/:projectId/members` was the only route that could create a non-admin member, and nothing in the product called it. There was no way to LIST members or to REMOVE one at all — so a grant was a one-way door reachable only by hand-writing an HTTP request, every user a deployment made through its own interface administered their own project, and `viewer` existed only inside tests. Listing is `project:read`, because knowing who your collaborators are is not privileged; granting and revoking are `project:admin`. Removal refuses the LAST administrator, because a project whose admins have all been removed can never have another one added — adding one requires `project:admin` — so without that guard the feature's own failure mode is a project that can never be administered again.
+
+**The audit trail had no reader.** Every tool call, sign-in, approval and membership change writes an `audit_log` row (ADR-139), and `GET /api/v1/audit` had no consumer anywhere in the product: a trail kept for an operator who had no way to open it. Settings shows it, behind the `project:admin` the route already requires.
+
+**Three fields on one screen were read under names the route does not use.** The Platform screen declared `error` and `/api/v1/mcp` returns `lastError` — `grep -c lastError` on that file returned 0, so `server.error` was `undefined` on every row and the element rendering it was always false. An operator could watch a server sit in `failed` with no way to learn why, on the screen built to tell them. `ModelRow.capabilities` was typed `string[]` against an object, and `ToolRow.source` was a field the route never sends. None of the three was visible as a bug, because a missing field renders as nothing rather than as an error. `refusedToolIds` had the opposite shape: the route returns it with a comment saying it is there "so an operator can see", and no screen read it — the case an operator most needs, a connected healthy server some of whose tools are deliberately unavailable.
+
+**A cancelled generation said "Generating…" forever.** ADR-122 made `cancelled` reachable; the client's status unions stopped at `failed`, so every screen's switch fell through to its still-working branch — with the Cancel button already gone, because it is gated on `pending|processing`.
+
+**Two screens ignored the project switcher.** `/tasks` had an empty dependency list and the chat sidebar depended only on `conversationId`, which does not change when the project does. Both listings are project-scoped server-side, so switching project left the previous project's rows on screen and opening one 404'd. Memory, Usage and Platform all declare the dependency. The sidebar's `catch(() => {})` went too: a sidebar that could not load looked exactly like an account with no conversations.
+
+**And two controls pointed at things that do not exist.** `DELETE /api/v1/files/:id` had no client function and no button, so a document could be ingested, indexed and retrieved into every later answer with no way to take it back out. The coding screen's "Files changed" tab filtered for `fs.write_file` and `fs.delete_file`, neither of which `planFixFailingTest` grants — its set is `terminal.run_command`, `code.read_lines`, `code.apply_patch` and the read-only filesystem tools — so the tab read 0 for every real coding run. Replay was offered to every project member while the route requires `project:write`.
+
+**Date:** 2026-09-21
+**Impact:** `backend/packages/security/src/auth-service.ts`, `backend/src/routes/v1/auth.ts`, `docs/API.md`, `frontend/app/{settings,platform,files,tasks,images,chat,agent,lib}` + 5 new tests.

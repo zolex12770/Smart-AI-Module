@@ -88,7 +88,10 @@ export default function ImagesPage() {
               <img src={assetUrl(g.resultAssetId)} alt={g.prompt} style={{ width: "100%", borderRadius: 8 }} />
             ) : (
               <div className="empty-state" style={{ height: 120, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                {g.status === "failed" ? "Failed" : "Generating…"}
+                {/* ADR-122 made `cancelled` reachable; without this branch a cancelled tile
+                    said "Generating…" forever, with its own Cancel button already gone
+                    (ADR-154). */}
+                {g.status === "failed" ? "Failed" : g.status === "cancelled" ? "Cancelled" : "Generating…"}
               </div>
             )}
             <p className="mono" style={{ marginTop: 8 }}>

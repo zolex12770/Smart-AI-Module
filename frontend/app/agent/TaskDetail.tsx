@@ -366,7 +366,18 @@ function CodingTabs({ nodes, activity }: { nodes: TaskNode[]; activity: TaskActi
     entries.find((e) => e.kind === "tool_result" && callId !== undefined && e.callId === callId);
 
   const commands = calls.filter((c) => c.name === "terminal.run_command");
-  const fileWrites = calls.filter((c) => c.name === "fs.write_file" || c.name === "fs.delete_file");
+  /**
+   * What the CODING agent actually uses to change a file — docs/26_DECISIONS.md ADR-154.
+   *
+   * This filtered for `fs.write_file` and `fs.delete_file`, and `planFixFailingTest` grants
+   * neither: its allowed set is `terminal.run_command`, `code.read_lines`, `code.apply_patch`
+   * plus the read-only filesystem tools. So the "Files changed" tab read 0 for every real
+   * coding run, on the screen built to show what the run changed. The write tools stay in the
+   * filter for the autonomous variant, which does hold them.
+   */
+  const fileWrites = calls.filter(
+    (c) => c.name === "code.apply_patch" || c.name === "fs.write_file" || c.name === "fs.delete_file"
+  );
 
   return (
     <div className="card">

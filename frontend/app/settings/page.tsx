@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  addProjectMember,
   changePassword,
   createApiKey,
+  listAudit,
+  listProjectMembers,
+  removeProjectMember,
+  type AuditEntry,
+  type ProjectMember,
   deleteAccount,
   DELETE_ACCOUNT_CONFIRMATION,
   type AccountDeletionResult,
@@ -17,7 +23,7 @@ import {
   type SessionSummary,
 } from "../lib/api";
 import { createProject } from "../lib/auth-client";
-import { RequireSession, useSession } from "../lib/session-context";
+import { Can, RequireSession, useSession } from "../lib/session-context";
 
 /**
  * Account and project settings.
@@ -88,6 +94,12 @@ function SettingsView() {
           would misrepresent who can call the API. */}
       {projectId ? <ApiKeysCard key={projectId} /> : null}
 
+      {/* Both are project-scoped and both remount on a switch, for the same reason the keys
+          card does: the previous project's members or activity under a new selection would
+          misrepresent who can act and what happened (ADR-154). */}
+      {projectId ? <MembersCard key={`members-${projectId}`} projectId={projectId} /> : null}
+      {projectId ? <ActivityCard key={`audit-${projectId}`} /> : null}
+
       <DangerZoneCard onDeleted={() => void signOut()} />
 
       <div className="card">
@@ -101,6 +113,172 @@ function SettingsView() {
         </p>
       </div>
     </section>
+  );
+}
+
+/**
+ * Who else can act in this project — docs/26_DECISIONS.md ADR-154.
+ *
+ * `PROJECT_ROLE_PERMISSIONS` defines viewer, editor and admin, and the only route that could
+ * create a non-admin member had no caller anywhere in the product. So every user a deployment
+ * made through its own interface was an admin of their own project, a `viewer` existed only in
+ * tests, and the permission table the whole authorization story rests on described something no
+ * operator could reach.
+ *
+ * Behind `project:admin`, with the list itself readable by any member: knowing who your
+ * collaborators are is not privileged, and changing the list is.
+ */
+function MembersCard({ projectId }: { projectId: string }) {
+  const [members, setMembers] = useState<ProjectMember[] | null>(null);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<ProjectMember["role"]>("editor");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    listProjectMembers(projectId)
+      .then((r) => {
+        setMembers(r.members);
+        setError(null);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, [projectId]);
+
+  useEffect(refresh, [refresh]);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await addProjectMember(projectId, email.trim(), role);
+      setEmail("");
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(userId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await removeProjectMember(projectId, userId);
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <strong>Project members</strong>
+      <p className="page-subtitle">
+        A viewer can read this project; an editor can spend its budget on chat, agents and media;
+        an admin can also manage members and API keys.
+      </p>
+      {error && <p className="error-text">{error}</p>}
+      {members === null && !error && <p className="empty-state">Loading…</p>}
+      {members?.length === 0 && <p className="empty-state">No members yet.</p>}
+      {members?.map((m) => (
+        <div key={m.userId} className="card-row" style={{ marginTop: 8 }}>
+          <div>
+            <strong>{m.displayName}</strong>
+            <div className="page-subtitle">
+              {m.email} — {m.role}
+            </div>
+          </div>
+          <Can permission="project:admin" fallback={null}>
+            <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void remove(m.userId)}>
+              Remove
+            </button>
+          </Can>
+        </div>
+      ))}
+      <Can
+        permission="project:admin"
+        fallback={
+          <p className="page-subtitle" style={{ marginTop: 12 }}>
+            A project admin can add or remove members.
+          </p>
+        }
+      >
+        <form onSubmit={add} style={{ marginTop: 12 }}>
+          <div className="form-row">
+            <label style={{ flex: 1, minWidth: 220 }}>
+              Add by email (the account must already exist)
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+            </label>
+            <label style={{ minWidth: 140 }}>
+              Role
+              <select value={role} onChange={(e) => setRole(e.target.value as ProjectMember["role"])}>
+                <option value="viewer">viewer</option>
+                <option value="editor">editor</option>
+                <option value="admin">admin</option>
+              </select>
+            </label>
+          </div>
+          <button type="submit" className="btn" disabled={busy || !email.trim()}>
+            {busy ? "Saving…" : "Add member"}
+          </button>
+        </form>
+      </Can>
+    </div>
+  );
+}
+
+/**
+ * The audit trail, readable — ADR-139, reached by ADR-154.
+ *
+ * Every tool call, login, approval and member change writes an `audit_log` row, and
+ * `GET /api/v1/audit` had no consumer anywhere in the product: the trail existed for an operator
+ * who had no way to open it. `project:admin`, which is what the route requires.
+ */
+function ActivityCard() {
+  const [entries, setEntries] = useState<AuditEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    listAudit()
+      .then((r) => {
+        setEntries(r.entries);
+        setError(null);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  return (
+    <Can permission="project:admin" fallback={null}>
+      <div className="card">
+        <strong>Activity</strong>
+        <p className="page-subtitle">
+          What has happened in this project: every tool call, sign-in, approval and membership
+          change, newest first.
+        </p>
+        {entries === null ? (
+          <button type="button" className="btn btn-secondary" style={{ marginTop: 8 }} onClick={load}>
+            Load activity
+          </button>
+        ) : entries.length === 0 ? (
+          <p className="empty-state">Nothing recorded yet.</p>
+        ) : (
+          <ul className="page-subtitle" style={{ margin: "8px 0 0 18px" }}>
+            {entries.slice(0, 50).map((entry) => (
+              <li key={entry.id}>
+                <code>{entry.action}</code> — {entry.outcome}
+                {entry.resourceId ? ` · ${entry.resourceId}` : ""} ·{" "}
+                {new Date(entry.createdAt).toLocaleString()}
+              </li>
+            ))}
+          </ul>
+        )}
+        {error && <p className="error-text">{error}</p>}
+      </div>
+    </Can>
   );
 }
 

@@ -837,6 +837,70 @@ export class AuthService {
     return rows[0].organizationId;
   }
 
+  /**
+   * Who is in this project, and as what — docs/26_DECISIONS.md ADR-154.
+   *
+   * `addProjectMember` was the only member route, and the product had no caller for it, so the
+   * viewer/editor/admin table `PROJECT_ROLE_PERMISSIONS` defines could not be used: every user a
+   * deployment could create through its own interface was an admin of their own project, and a
+   * `viewer` existed only in tests. A role that cannot be granted, inspected or revoked is not an
+   * access-control system.
+   *
+   * `project:read`, because knowing who your collaborators are is not privileged; granting and
+   * revoking are, and those two keep `project:admin`.
+   */
+  async listProjectMembers(
+    ctx: AuthContext
+  ): Promise<Array<{ userId: string; email: string; displayName: string; role: ProjectRole }>> {
+    if (!ctx.projectId) throw new ValidationError("A project must be selected.");
+    const rows = await this.db
+      .select({
+        userId: projectMembers.userId,
+        email: users.email,
+        displayName: users.displayName,
+        role: projectMembers.role,
+      })
+      .from(projectMembers)
+      .innerJoin(users, eq(users.id, projectMembers.userId))
+      .where(eq(projectMembers.projectId, ctx.projectId))
+      .orderBy(users.email);
+    return rows.map((r) => ({ ...r, role: r.role as ProjectRole }));
+  }
+
+  /**
+   * Removing a member — ADR-154. A grant with no revocation is a one-way door: the only way to
+   * take an editor's access back was a hand-written SQL statement.
+   *
+   * The LAST admin cannot be removed. A project whose every admin has been removed can never have
+   * another one added, because adding one requires `project:admin` — so the guard is what stops a
+   * project locking itself out permanently, and it refuses rather than silently keeping the row.
+   */
+  async removeProjectMember(ctx: AuthContext, userId: string): Promise<boolean> {
+    if (!ctx.projectId) throw new ValidationError("A project must be selected.");
+    const members = await this.listProjectMembers(ctx);
+    const target = members.find((m) => m.userId === userId);
+    if (!target) return false;
+    if (target.role === "admin" && members.filter((m) => m.role === "admin").length === 1) {
+      throw new ValidationError(
+        "This is the project's last administrator. Add another before removing this one, or the project cannot be administered again."
+      );
+    }
+    await this.db
+      .delete(projectMembers)
+      .where(and(eq(projectMembers.projectId, ctx.projectId), eq(projectMembers.userId, userId)));
+    await this.recordAudit({
+      userId: ctx.user.id,
+      projectId: ctx.projectId,
+      action: "project.member.remove",
+      outcome: "success",
+      method: ctx.method,
+      resourceType: "user",
+      resourceId: userId,
+      detail: { role: target.role },
+    });
+    return true;
+  }
+
   async addProjectMember(ctx: AuthContext, email: string, role: ProjectRole): Promise<{ userId: string }> {
     if (!ctx.projectId) throw new ValidationError("A project must be selected.");
     const target = await this.db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);

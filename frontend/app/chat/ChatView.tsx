@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { streamChat, type ChatMessage } from "../lib/chat-stream";
 import { listConversations, type Conversation, type Message } from "../lib/api";
 import { historyForRequest } from "../lib/chat-history";
+import { useSession } from "../lib/session-context";
 
 interface DisplayMessage extends ChatMessage {
   isError?: boolean;
@@ -23,7 +24,16 @@ export default function ChatView({
   initialMessages?: Message[];
 }) {
   const router = useRouter();
+  const { projectId } = useSession();
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  /**
+   * The sidebar's own failure, shown — ADR-154.
+   *
+   * The catch was `() => {}`, so a sidebar that could not load looked exactly like an account
+   * with no conversations. It is kept apart from the composer's `error` so a listing failure
+   * does not read as a failure to send.
+   */
+  const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [messages, setMessages] = useState<DisplayMessage[]>(toDisplay(initialMessages));
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -31,10 +41,16 @@ export default function ChatView({
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    // `projectId` is in the dependency list because the sidebar is project-scoped server-side
+    // and the switcher is on every screen (ADR-154): without it, switching project left the
+    // previous project's conversations listed, and opening one 404'd.
     listConversations()
-      .then((r) => setConversations(r.conversations))
-      .catch(() => {});
-  }, [conversationId]);
+      .then((r) => {
+        setConversations(r.conversations);
+        setSidebarError(null);
+      })
+      .catch((e: unknown) => setSidebarError(e instanceof Error ? e.message : String(e)));
+  }, [conversationId, projectId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -131,7 +147,8 @@ export default function ChatView({
         <Link href="/chat" className="btn btn-secondary" style={{ display: "block", textAlign: "center", marginBottom: 10 }}>
           + New chat
         </Link>
-        {conversations.length === 0 && <p className="empty-state">No conversations yet.</p>}
+        {sidebarError && <p className="error-text">{sidebarError}</p>}
+        {conversations.length === 0 && !sidebarError && <p className="empty-state">No conversations yet.</p>}
         {conversations.map((c) => (
           <Link
             key={c.id}

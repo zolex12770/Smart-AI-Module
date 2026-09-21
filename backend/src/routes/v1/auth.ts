@@ -233,6 +233,20 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
   }
   );
 
+  /**
+   * Collaboration, reachable from the product — docs/26_DECISIONS.md ADR-154.
+   *
+   * `POST .../members` was the only member route and nothing in the product called it, so the
+   * viewer/editor/admin table could not be used: every user a deployment created through its own
+   * interface administered their own project, and a `viewer` existed only in tests. Listing and
+   * removal are what make the grant a system rather than a one-way door.
+   */
+  app.get<{ Params: { projectId: string } }>("/api/v1/projects/:projectId/members", async (request) => {
+    // Seeing who your collaborators are is not privileged; granting and revoking are.
+    const authCtx = await requireProject(request, ctx.auth, "project:read");
+    return { members: await ctx.auth.listProjectMembers(authCtx) };
+  });
+
   app.post("/api/v1/projects/:projectId/members", async (request, reply) => {
     const authCtx = await requireProject(request, ctx.auth, "project:admin");
     const parsed = addProjectMemberRequestSchema.safeParse(request.body);
@@ -240,6 +254,18 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     const result = await ctx.auth.addProjectMember(authCtx, parsed.data.email, parsed.data.role);
     reply.status(201).send(result);
   });
+
+  app.delete<{ Params: { projectId: string; userId: string } }>(
+    "/api/v1/projects/:projectId/members/:userId",
+    async (request) => {
+      const authCtx = await requireProject(request, ctx.auth, "project:admin");
+      const removed = await ctx.auth.removeProjectMember(authCtx, request.params.userId);
+      // 404 rather than 403 for a member of another project: the same disclosure rule as
+      // everywhere else (ADR-089).
+      if (!removed) throw new NotFoundError(`No member "${request.params.userId}" in this project.`);
+      return { ok: true };
+    }
+  );
 
   /**
    * Account and data deletion — NFR-008, docs/26_DECISIONS.md ADR-102.
