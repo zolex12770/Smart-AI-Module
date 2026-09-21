@@ -51,6 +51,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "pino": "^10.3.1",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
