@@ -2,6 +2,8 @@ import { context, trace } from "@opentelemetry/api";
 import { InMemorySpanExporter, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { Writable } from "node:stream";
+import { createLogger } from "./logger.js";
 import { currentTraceContext, withSpan } from "./tracing.js";
 
 /**
@@ -143,5 +145,50 @@ describe("span nesting", () => {
     expect(context.active()).toBeDefined();
     expect(trace.getActiveSpan()).toBeUndefined();
     expect(currentTraceContext()).toBeUndefined();
+  });
+});
+
+/**
+ * A log line written inside a span carries that span's ids — docs/26_DECISIONS.md ADR-155.
+ *
+ * `currentTraceContext` had no production caller at all: a repo-wide grep returned its own
+ * definition and two uses inside this file. docs/20's `trace_id` correlation was therefore a
+ * field name that appeared in no log line anywhere, so an operator holding a trace had no way to
+ * find its logs — which is the whole reason for emitting both.
+ */
+describe("logs carry the active trace", () => {
+  function captureLog(fn: (log: ReturnType<typeof createLogger>) => void | Promise<void>): Promise<string> {
+    let output = "";
+    const sink = new Writable({
+      write(chunk, _encoding, callback) {
+        output += String(chunk);
+        callback();
+      },
+    });
+    return Promise.resolve(fn(createLogger("trace-test", sink))).then(() => output);
+  }
+
+  it("includes trace_id and span_id for a line written inside a span", async () => {
+    const output = await captureLog(async (log) => {
+      await withSpan("unit.under.test", {}, async () => {
+        log.info({ project_id: "p1" }, "inside a span");
+      });
+    });
+
+    const line = JSON.parse(output.trim().split("\n").pop()!) as Record<string, unknown>;
+    expect(line.msg).toBe("inside a span");
+    expect(String(line.traceId)).toMatch(/^[0-9a-f]{32}$/);
+    expect(String(line.spanId)).toMatch(/^[0-9a-f]{16}$/);
+    // The line's own fields survive the mixin.
+    expect(line.project_id).toBe("p1");
+  });
+
+  it("writes an ordinary line outside a span, rather than failing or inventing ids", async () => {
+    const output = await captureLog((log) => {
+      log.info({ project_id: "p1" }, "outside any span");
+    });
+    const line = JSON.parse(output.trim().split("\n").pop()!) as Record<string, unknown>;
+    expect(line.msg).toBe("outside any span");
+    expect(line.traceId).toBeUndefined();
   });
 });

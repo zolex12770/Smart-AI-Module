@@ -1217,10 +1217,12 @@ async function main() {
       recordProviderCall({
         provider: call.provider,
         model: call.model ?? "unknown",
-        // `cancelled` is not an outcome the metric has a bucket for, and it is not a failure:
-        // recording it as `success` would inflate the success rate, so it is left out entirely
-        // and the latency histogram keeps it.
-        status: call.status === "error" ? "error" : "success",
+        // Passed through, not flattened (ADR-155). This used to be
+        // `call.status === "error" ? "error" : "success"`, immediately under a comment saying a
+        // cancelled call is left out of the counter — so every Stop and every abandoned stream
+        // was counted as a success. `recordProviderCall` drops it from the counter and keeps it
+        // in the latency histogram, which is what that comment always described.
+        status: call.status,
         durationMs: call.durationMs,
         ...(call.errorType ? { errorType: call.errorType } : {}),
       });

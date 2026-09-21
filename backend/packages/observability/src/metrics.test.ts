@@ -141,4 +141,36 @@ describe("metrics", () => {
     expect(await scrapeMetrics()).toBeNull();
     initMetrics("metrics-test");
   });
+
+  it("does not count a CANCELLED provider call as a success, but keeps its latency", async () => {
+    /**
+     * docs/26_DECISIONS.md ADR-155. The composition root flattened the router's three-way status
+     * with `call.status === "error" ? "error" : "success"`, directly under a comment saying a
+     * cancelled call is left out of the counter so it cannot inflate the success rate. It did
+     * the opposite — and this platform's own cancellation work makes abandonment routine, so the
+     * success rate was measuring something else entirely.
+     */
+    recordProviderCall({ provider: "local", model: "qwen2.5:7b", status: "cancelled", durationMs: 120 });
+    const scrape = await scrapeMetrics();
+
+    // Nothing in the request counter at all, under any status label.
+    expect(scrape).not.toMatch(/provider_request_count[^\n]*qwen2\.5:7b/);
+    // And the call's latency is still measured: it happened, and it took time.
+    expect(scrape).toMatch(/provider_latency_ms[\s\S]*qwen2\.5:7b/);
+  });
+
+  it("still counts the calls that did finish", async () => {
+    // A counter that dropped everything would satisfy the assertion above.
+    recordProviderCall({ provider: "local", model: "qwen2.5:1.5b", status: "success", durationMs: 40 });
+    const scrape = await scrapeMetrics();
+    expect(scrape).toMatch(/provider_request_count[\s\S]*qwen2\.5:1\.5b/);
+  });
+
+  it("emits job_retry_total once a job reports a retry", async () => {
+    // ADR-155: `recordJobProcessed` has taken `retryCount` since ADR-082 and no production call
+    // site passed one, so this counter could not be emitted by anything — which on a dashboard
+    // reads exactly like a system that is not retrying.
+    recordJobProcessed({ queue: "image.generate", outcome: "success", durationMs: 10, retryCount: 2 });
+    expect(await scrapeMetrics()).toMatch(/job_retry_total/);
+  });
 });

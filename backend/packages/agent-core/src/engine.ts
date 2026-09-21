@@ -948,7 +948,11 @@ export class AgentEngine {
              */
             verify: async (answer, transcript) => {
               if (!answer.trim()) return { ok: false, reason: "The run produced no answer." };
-              const verdict = await this.verifyAutonomousAnswer(goal, answer, transcript, controller.signal);
+              const verdict = await this.verifyAutonomousAnswer(goal, answer, transcript, controller.signal, {
+                taskId: task.id,
+                nodeId: node.id,
+                turn,
+              });
               return verdict;
             },
             onEvent: (event) => {
@@ -1200,7 +1204,20 @@ export class AgentEngine {
           nodeId: node.id,
           // One model call per `model_call` node, so the node id alone is the natural key
           // (ADR-054): a node re-executed by crash recovery must not bill the project twice.
-          idempotencyKey: `agent.node:${node.id}`,
+          /**
+           * The ATTEMPT is part of the key — docs/26_DECISIONS.md ADR-156.
+           *
+           * "One model call per `model_call` node, so the node id alone is the natural key" is
+           * false for a retried node: a failed verification routes to `handleNodeFailure`, which
+           * sets the same node to `retrying` with an incremented `attemptCount`, and the
+           * re-dispatch makes a second real provider call. The unique index on the key then
+           * discarded the second row, so every re-prompted node was unbilled — the same shape as
+           * the per-turn bug ADR-054 fixed for the reasoning loop, one layer down.
+           *
+           * Crash recovery still deduplicates: `resumeAll` resets a `waiting_model` node to
+           * `pending` WITHOUT incrementing `attemptCount`, so a re-executed call keeps its key.
+           */
+          idempotencyKey: `agent.node:${node.id}:attempt:${node.attemptCount}`,
         });
       }
       await this.verifyAndAdvance(task.id, task.projectId, node, byId, {
@@ -1233,11 +1250,24 @@ export class AgentEngine {
    * discard a real answer, and the alternative (fail closed) would make every parse hiccup look
    * like a failed task. What it must be able to do, and now can, is say no.
    */
+  /**
+   * Metered like every other turn — docs/26_DECISIONS.md ADR-156.
+   *
+   * ADR-133's verification pass is a REAL model call, once per answer, and it went through the
+   * router directly: no `checkTurnQuota` before it and no `meter.record` after it. A project at
+   * its ceiling could still drive one on every autonomous run, the ledger under-reported every
+   * run by one call, and the run's own `maxTokensPerRun` did not cover it — so the harness's
+   * budget bounded the turns and not the check that follows them.
+   *
+   * `billing` is optional because the verifier is also reachable from tests that have no meter;
+   * absent, it behaves exactly as it did.
+   */
   private async verifyAutonomousAnswer(
     goal: string,
     answer: string,
     transcript: ChatMessage[],
-    signal: AbortSignal
+    signal: AbortSignal,
+    billing?: { taskId: string; nodeId: string; turn: number }
   ): Promise<{ ok: boolean; reason?: string }> {
     // Only what the run actually established — tool results — not the whole conversation.
     const evidence = transcript
@@ -1264,11 +1294,42 @@ export class AgentEngine {
       },
     ];
 
+    // Asked BEFORE the call, like the loop's own turns (ADR-046). A refusal is reported as a
+    // verdict that could not be evaluated rather than thrown: the answer is already produced,
+    // and failing the whole run over the check would spend more, not less.
+    if (billing && this.deps.meter) {
+      const estimated = estimatePromptTokens(messages.map((m) => m.content).join(" "));
+      const check = await this.deps.meter.checkTokens(estimated, {
+        taskId: billing.taskId,
+        nodeId: billing.nodeId,
+      });
+      if (!check.allowed) {
+        return { ok: true, reason: `verification could not be evaluated (${check.reason ?? "token quota exceeded"})` };
+      }
+    }
+
     let text = "";
     try {
       for await (const event of this.deps.modelRouter.streamChat({ messages }, { signal })) {
         if (event.type === "token") text += event.delta;
-        if (event.type === "done") text = event.message.content || text;
+        if (event.type === "done") {
+          text = event.message.content || text;
+          if (billing && this.deps.meter) {
+            // Recorded after it happened, keyed on the node and the turn it verified, so a
+            // resumed or re-verified run charges once per check rather than once per node.
+            void this.deps.meter
+              .record({
+                provider: event.provider,
+                model: event.model,
+                inputTokens: event.usage.inputTokens,
+                outputTokens: event.usage.outputTokens,
+                taskId: billing.taskId,
+                nodeId: billing.nodeId,
+                idempotencyKey: `agent.node:${billing.nodeId}:verify:${billing.turn}`,
+              })
+              .catch(() => undefined);
+          }
+        }
       }
     } catch {
       return { ok: true, reason: "verification could not be evaluated (the verifier call failed)" };

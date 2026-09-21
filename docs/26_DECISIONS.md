@@ -2526,3 +2526,16 @@ The primitive lived in `agent-core`, so the only subsystems that could reach it 
 
 **Date:** 2026-09-21
 **Impact:** `backend/packages/observability/src/{logging,logger}.ts`, `backend/packages/jobs/src/queue.ts`, `backend/packages/model-router/src/router.ts`, `backend/packages/mcp/src/client.ts`, `backend/packages/media/src/failure-message.ts` (new) + 4 workers, `backend/src/{config,index}.ts` + 12 tests.
+
+## ADR-156: The model call outside the budget, and the retry that was never billed
+
+**Decision:** the autonomous verification pass is quota-checked and recorded like any other turn, and a retried `model_call` node's usage row carries its attempt.
+
+**ADR-133's verifier was a real model call outside every control.** It runs once per autonomous answer — a second opinion from the same router, given the goal and the run's own transcript — and it went through `modelRouter.streamChat` directly: no `checkTurnQuota` before it, no `meter.record` after it. The loop's quota gate wraps only its own `streamChat` wrapper, so a project at its ceiling could still drive a verification on every run; the ledger under-reported every autonomous run by one call; and the harness's `maxTokensPerRun` bounded the turns and not the check that follows them. It is metered now, keyed `agent.node:<id>:verify:<turn>` so a resumed or re-verified run charges once per check.
+
+A refused check returns "verification could not be evaluated" rather than throwing. The answer has already been produced and paid for by that point, and failing the whole run over the budget for the CHECK would spend more, not less — the honest outcome is a run that completed with its verification unevaluated, which is what the verdict says.
+
+**And a retried model node's second call was free.** The usage row was keyed `agent.node:<nodeId>` under the comment "one model call per `model_call` node, so the node id alone is the natural key". That is not true of a retried node: a failed verification routes to `handleNodeFailure`, which sets the same node to `retrying` with an incremented `attemptCount`, and the re-dispatch makes a second real provider call. `usage_records`' unique index then discarded the second row — the same shape as the per-turn collision ADR-054 fixed for the reasoning loop, one layer down. The attempt is part of the key now, and crash recovery still deduplicates: `resumeAll` resets a `waiting_model` node to `pending` without incrementing `attemptCount`, so a re-executed call keeps the key it had.
+
+**Date:** 2026-09-21
+**Impact:** `backend/packages/agent-core/src/engine.ts` + 2 tests.

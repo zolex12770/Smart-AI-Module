@@ -24,7 +24,7 @@ import type {
   ToolCall,
 } from "@ai-platform/shared";
 import { PermissionError } from "@ai-platform/shared";
-import { AgentEngine } from "./engine.js";
+import { AgentEngine, type AgentEngineDeps } from "./engine.js";
 
 /**
  * docs/26_DECISIONS.md ADR-064 — the proof that the two agent architectures are actually
@@ -106,7 +106,9 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     limits?: { maxIterations?: number },
     extraTools: NativeToolEntry[] = [],
     /** An already-built provider, for a test that needs to control WHEN a turn answers. */
-    suppliedProvider?: ScriptedAgentProvider
+    suppliedProvider?: ScriptedAgentProvider,
+    /** A real meter, for the tests that assert what the run charged for (ADR-156). */
+    meter?: AgentEngineDeps["meter"]
   ) => {
     const provider = suppliedProvider ?? new ScriptedAgentProvider(turns);
     const registry = new ModelRegistry();
@@ -130,6 +132,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
       modelRouter: new ModelRouter(registry),
       workspaceRoot: sandboxRoot,
       agentLimits: limits,
+      ...(meter ? { meter } : {}),
     });
     return { engine, provider, toolRegistry };
   };
@@ -916,5 +919,68 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     await engine.reconcile(task.id, parked.id, "abandon", USER);
     const finished = await waitFor(task.id, ["CANCELLED", "FAILED", "COMPLETED"]);
     expect(finished.state).toBe("CANCELLED");
+  });
+
+  /**
+   * The verification pass is billed like any other model call — docs/26_DECISIONS.md ADR-156.
+   *
+   * ADR-133's verifier is a REAL call, once per answer, and it went through the router directly:
+   * no quota check before it and no ledger row after it. A project at its ceiling could still
+   * drive one on every autonomous run, and every run under-reported its own spend by one call.
+   */
+  it("records the verification call in the ledger, keyed apart from the turns", async () => {
+    const recorded: Array<{ idempotencyKey?: string; inputTokens: number }> = [];
+    const meter = {
+      async checkTokens() {
+        return { allowed: true as const };
+      },
+      async record(entry: { idempotencyKey?: string; inputTokens: number }) {
+        recorded.push(entry);
+      },
+    };
+
+    const { engine } = build([{ text: "The harbour is at 51.5N." }], undefined, [], undefined, meter);
+
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Where is the harbour?" },
+      { projectId: PROJECT, userId: USER }
+    );
+    await waitFor(task.id, ["COMPLETED", "FAILED"]);
+
+    // One row for the turn, one for the verification — and they cannot collide, because the
+    // usage table's unique index would have dropped the second.
+    const verifyRows = recorded.filter((r) => (r.idempotencyKey ?? "").includes(":verify:"));
+    expect(verifyRows).toHaveLength(1);
+    expect(recorded.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(recorded.map((r) => r.idempotencyKey)).size).toBe(recorded.length);
+  });
+
+  it("does not make the verification call when the budget is spent", async () => {
+    // Refused as a verdict that could not be evaluated rather than thrown: the answer is already
+    // produced, and failing the run over the check would spend more, not less.
+    let checks = 0;
+    const meter = {
+      async checkTokens() {
+        checks += 1;
+        // The first check is the turn itself; the verification is the one refused.
+        return checks > 1 ? { allowed: false as const, reason: "Daily token limit reached." } : { allowed: true as const };
+      },
+      async record() {
+        /* nothing to record for a refused call */
+      },
+    };
+
+    const { engine } = build([{ text: "The harbour is at 51.5N." }], undefined, [], undefined, meter);
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Where is the harbour?" },
+      { projectId: PROJECT, userId: USER }
+    );
+    const finished = await waitFor(task.id, ["COMPLETED", "FAILED"]);
+
+    // The run still completes — the refusal is about the check, not the answer.
+    expect(finished.state).toBe("COMPLETED");
+    expect(checks).toBeGreaterThanOrEqual(2);
   });
 });

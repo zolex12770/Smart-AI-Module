@@ -178,13 +178,28 @@ export function recordHttpRequest(attrs: {
 export function recordProviderCall(attrs: {
   provider: string;
   model: string;
-  status: "success" | "error" | "timeout";
+  /**
+   * `cancelled` really is one of these — docs/26_DECISIONS.md ADR-155.
+   *
+   * `ProviderCallOutcome.status` is a three-way union and the composition root flattened it
+   * with `call.status === "error" ? "error" : "success"`, directly under a comment saying a
+   * cancelled call "is left out entirely so it does not inflate the success rate". It did the
+   * opposite: every user who pressed Stop, and every abandoned SSE stream, counted as a
+   * successful provider call. Given that the platform's own cancellation work (ADR-119, ADR-146)
+   * makes abandonment routine, that is a success rate measuring something else.
+   *
+   * It is accepted here and dropped from the COUNTER rather than rejected at the call site, so
+   * the latency histogram still sees it: the call did happen and it did take time.
+   */
+  status: "success" | "error" | "timeout" | "cancelled";
   durationMs: number;
   /** Bounded category, never the raw message — `rate_limit`, `auth`, `server`, `timeout`. */
   errorType?: string;
 }): void {
   const labels: Attributes = { provider: attrs.provider, model: attrs.model, status: attrs.status };
-  counter("provider_request_count", "Model provider calls by provider, model and outcome").add(1, labels);
+  if (attrs.status !== "cancelled") {
+    counter("provider_request_count", "Model provider calls by provider, model and outcome").add(1, labels);
+  }
   histogram("provider_latency_ms", "Model provider call latency", "ms").record(attrs.durationMs, {
     provider: attrs.provider,
     model: attrs.model,
