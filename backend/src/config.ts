@@ -298,6 +298,15 @@ const envFields = z.object({
   // --- Agent limits (ADR-057) -----------------------------------------------------------
   AGENT_MAX_ITERATIONS: z.coerce.number().int().positive().max(50).default(12),
   AGENT_MAX_TOKENS_PER_RUN: z.coerce.number().int().positive().default(200_000),
+  /**
+   * The per-node wall-clock ceiling for an agent run, overriding the planner constant — ADR-162.
+   *
+   * A reasoning node is planned with 10 minutes, and the `fix_failing_test` acceptance run has
+   * now died at that ceiling twice on a 7B model running on four CPU cores. The limit is right
+   * for a hosted model and wrong for that one, and until now there was no way to say so. Unset
+   * keeps whatever the planner wrote for each node type.
+   */
+  AGENT_NODE_TIMEOUT_MS: z.coerce.number().int().min(1000).max(3_600_000).optional(),
   ANTHROPIC_API_KEY: optionalString,
   OPENAI_API_KEY: optionalString,
   OPENAI_ORG_ID: optionalString,
@@ -338,6 +347,23 @@ const envFields = z.object({
   RAG_MAX_COSINE_DISTANCE: z.coerce.number().min(0).max(2).optional(),
   DAILY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
   MONTHLY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
+  /**
+   * How long the storyboard stage may spend in the model — ADR-161.
+   *
+   * It was a hard-coded 25 seconds, chosen so `POST /api/v1/videos` (which runs this stage
+   * inline, before its 202) stays responsive. The fifth audit measured the reference local
+   * runtime — qwen2.5:7b on this machine — at 21.2 seconds for a two-scene brief. That is
+   * inside the ceiling by under four seconds, and when it is not, the whole authored half of
+   * the feature turns off: no model-written shots, no narration, therefore no audio track and
+   * no subtitles, while the render still succeeds and the project still reports `succeeded`.
+   * Two consecutive real runs fell back that way.
+   *
+   * The default stays 25s, because the responsiveness argument is still right and a longer
+   * default would make every deployment's POST slower to fix one deployment's slow model. What
+   * changes is that an operator who knows their runtime is slower can now say so, instead of
+   * having a silently degraded feature and no knob.
+   */
+  VIDEO_SCRIPT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).optional(),
 });
 
 const envSchema = envFields

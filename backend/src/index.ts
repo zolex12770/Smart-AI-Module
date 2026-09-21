@@ -120,11 +120,6 @@ async function connectDatabase(
   // ENOENT from `mkdir`. Creating the parent here makes a fresh checkout, a fresh container
   // and a throwaway test database all boot without a manual `mkdir` first.
   mkdirSync(dirname(resolve(config.DATABASE_DIR)), { recursive: true });
-  // PGlite creates its data directory but not the parents, so a first boot with a nested
-  // DATABASE_DIR (the default `./data/pgdata`, or a per-environment one) fails with a bare
-  // ENOENT from `mkdir`. Creating the parent here makes a fresh checkout, a fresh container
-  // and a throwaway test database all boot without a manual `mkdir` first.
-  mkdirSync(dirname(resolve(config.DATABASE_DIR)), { recursive: true });
   const db = await createDb(config.DATABASE_DIR);
   await runMigrations(db);
   return {
@@ -1482,6 +1477,7 @@ async function main() {
     usage,
     quota,
     ragMaxDistance: config.RAG_MAX_COSINE_DISTANCE,
+    videoScriptTimeoutMs: config.VIDEO_SCRIPT_TIMEOUT_MS,
     modelCallMeter,
     speechMeter,
     scanner,
@@ -1503,7 +1499,12 @@ async function main() {
     sandbox,
     // Ceilings the model cannot raise. They live on the context rather than inside the loop
     // so an operator can see and change the bound without editing agent code.
-    agentLimits: { maxIterations: config.AGENT_MAX_ITERATIONS, maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN },
+    agentLimits: {
+      maxIterations: config.AGENT_MAX_ITERATIONS,
+      maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN,
+      // ADR-162 — undefined keeps each node type's planned deadline.
+      ...(config.AGENT_NODE_TIMEOUT_MS !== undefined ? { nodeTimeoutMs: config.AGENT_NODE_TIMEOUT_MS } : {}),
+    },
     semanticEmbeddingsAvailable,
     registry,
     mcp: mcpManager,
