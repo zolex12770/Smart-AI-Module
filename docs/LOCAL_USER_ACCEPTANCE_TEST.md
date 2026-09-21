@@ -179,7 +179,39 @@ Legend: **PASS** / **FAIL** / **BLOCKED_EXTERNAL** (needs something this machine
 | **ACTION** | Seed `sum.cjs` (`return a - b`) and `sum.test.cjs` (asserts `sum(2,3) === 5`) into the workspace, confirm by hand that the test really fails, then run `taskType: "fix_failing_test"` against it. |
 | **EXPECTED RESULT** | The agent runs the test, sees the failure, edits the source, re-runs, and the test passes. |
 | **ACTUAL RESULT** | **The cycle did not complete.** Two attempts, each ending `FAILED` at the reasoning node's 600 s ceiling (601 s and 520 s). The MACHINERY worked correctly at every step, which the persisted activity log shows in full (21 entries): the agent ran a command, searched, read both files with `code.read_lines`, applied a patch with `code.apply_patch`, and a verification pass ran. What failed was the local 7B model's judgement, twice over. First, it invoked `terminal.run_command` with `command: "node"` AND `args: ["node", "sum.test.cjs"]` — duplicating the binary — so Node tried to load a module literally named `node`, and the agent never saw the real assertion failure at all. Second, never having seen it, the patch it wrote was a no-op: its own diff removed `module.exports = { sum };` and added the identical line, leaving `return a - b` untouched. `hunksApplied: 1` was therefore *accurate* — the tool applied exactly the hunk it was given. It then tried three times to patch the test file with stale hunks, and the patch tool correctly refused all three rather than corrupting the file. |
-| **STATUS** | **FAIL** — as a capability demonstration. The platform behaved correctly throughout, including the three refusals; a 7B model on a 4-core CPU did not drive it to a fix inside ten minutes. This is a model-capability ceiling, not a defect in the agent, and it is the one capability in this document that has never been observed completing end to end. |
+| **STATUS** | **FAIL** on 2026-09-18, **PASS** on 2026-09-21 — see the re-run below. |
+
+#### UAT-17 re-run, 2026-09-21 — the cycle completed
+
+Run three times against the same brief, the same `qwen2.5:7b` and the same platform. The third
+**COMPLETED in 311 s**, and it is the first time the FAIL → patch → PASS cycle has been observed
+end to end:
+
+```
+tool_call  terminal.run_command  {"command":"node","args":["sum.test.cjs"],"cwd":"."}
+tool_call  code.read_lines       {"path":"sum.cjs","startLine":1,"endLine":5}
+tool_call  code.apply_patch      (malformed diff — refused)
+tool_call  code.apply_patch      (malformed diff — refused)
+tool_call  code.apply_patch      (malformed diff — refused)
+tool_call  code.apply_patch      --- a/sum.cjs +++ b/sum.cjs  - return a - b; + return a + b;
+verification
+tool_call  terminal.run_command  {"command":"node","args":["sum.test.cjs"],"cwd":"."}
+```
+
+Checked from outside the platform rather than taken from the agent's report: `sum.cjs` on disk now
+reads `return a + b;`, and running `node sum.test.cjs` by hand prints `ok`.
+
+The other two runs failed the same way as the 2026-09-18 one, and differently from each other's
+cause: both read and repeatedly tried to patch the **test** file, which the task's goal explicitly
+forbids, and never opened the source. Same brief, same model, same platform — **the variance is the
+model's**, and the honest reading of three runs is "this works and is not yet reliable" rather than
+"this works".
+
+Two things the re-runs found in the platform, both fixed (ADR-162), and neither visible without
+running it: a node that exceeded its deadline was recorded as **CANCELLED** — the state a person
+pressing Stop produces — with no reason stored anywhere, and the ceiling it exceeded could not be
+configured. The successful run took 311 s, which is inside the planner's 600 s, so the raised
+`AGENT_NODE_TIMEOUT_MS` is not what made it pass and is not credited with it.
 
 ---
 
@@ -190,6 +222,41 @@ It covers signing up, sending a chat message and reading the streamed answer, th
 `/chat/<id>` and reload persistence, tenant isolation through the browser, the usage screen, the
 platform screen reporting whether a model is a mock, changing a password and signing back in with
 the new one, and starting an autonomous agent task from the Tasks screen.
+
+---
+
+## The fifth audit's own run — 2026-09-21
+
+Everything above was measured on 2026-09-18. The fifth audit re-ran the platform end to end on a
+rebuilt tree, with the same real providers — qwen2.5:7b and nomic-embed-text on a local Ollama,
+stable-diffusion.cpp with SD-Turbo q8_0, Windows SAPI, ffmpeg 7.1 — on `127.0.0.1:8799`. Two of
+the defects fixed in this audit (ADR-161) were found by this run and by nothing else, and the
+numbers below are from the run after those fixes.
+
+| # | Check | Measured result | Status |
+|---|---|---|---|
+| 1 | Sign up, session, default project | 201; `aip_session` + `aip_csrf` set; project created in one transaction | **PASS** |
+| 2 | Effective permissions reach the client | `GET /auth/me` returned 16 permissions for the admin role (`project:read`, `files:read`, `memory:read`, `usage:read`, …) — the field ADR-148 added, which the UI's `Can` guard reads | **PASS** |
+| 3 | Chat, streamed, from a real model | `local/qwen2.5:7b`, 4 628 ms, 30 token events, 40 in / 31 out | **PASS** |
+| 4 | Memory recalled in a NEW conversation | Stored "deploys on Thursdays"; a fresh conversation answered "Thursdays" — retrieval crossing conversations, with ADR-149's `<untrusted_content>` wrapper in place | **PASS** |
+| 5 | Document ingested and embedded | `handbook.txt` → `ready`, chunked and embedded by nomic-embed-text (768 dims) | **PASS** |
+| 6 | RAG answers with a citation | "An engineer receives 27 days of paid leave per calendar year. [1]" — `grounded: true`, 1 source, cosine distance 0.208, 10 541 ms | **PASS** |
+| 7 | RAG refuses what the corpus cannot answer | Submarine-maintenance question → "The provided documents do not contain the answer to this question." | **PASS** |
+| 8 | A bare citation is NOT reported as a grounded answer | Before ADR-161 this run produced the literal answer `[1]` with `grounded: true`; now such a reply is `grounded: false, groundingViolation: "citation_without_answer"` (5 route tests) | **PASS** |
+| 9 | The autonomous agent chooses a tool and is verified | `COMPLETED`; the model chose `fs.read_file` itself and answered "The on-call rotation starts on Wednesday at 10:00 UTC." | **PASS** |
+| 10 | Every tool call leaves a durable record | `audit_log` held the `tool.call` row for `fs.read_file` written by that run | **PASS** |
+| 11 | Image generation produces real pixels | stable-diffusion.cpp, 512×512 PNG, 618 910 bytes, **112 382 distinct colours** (decoded to raw RGB and counted — a placeholder cannot pass this), 45 s | **PASS** |
+| 12 | Speech synthesis with a measured duration | SAPI, `succeeded`, duration **4.678458 s** measured from the file rather than estimated | **PASS** |
+| 13 | Long-form video renders a real, playable file | 2 scenes, ffprobe: `h264` 640×360, 7.92 s | **PASS** |
+| 14 | A narrated video carries audio and subtitles | With `VIDEO_SCRIPT_TIMEOUT_MS=90000`: `scriptSource: "model"`, 2 authored shots with narration, both scenes synthesised, ffprobe: **`h264` + `aac` + `mov_text`**, 7.92 s, subtitle and WebVTT assets stored. At the 25 s default the same brief instead logged `script stage failed … "The script stage exceeded its 25s deadline."` and recorded it on the project — before ADR-161 that line reached no logger at all and the project blamed the model's JSON | **PASS** |
+| 15 | The coding agent fixes a genuinely broken file | `fix_failing_test` on a `sum.cjs` returning `a - b`: **COMPLETED in 311 s**, the model read the source, the patch tool refused three malformed diffs and applied the fourth, and `node sum.test.cjs` run by hand afterwards prints `ok`. Two earlier runs of the same brief did not get there — the variance is the model's (docs/27) | **PASS** |
+| 16 | Streaming and CORS in a REAL browser | Chromium on `http://localhost:3000` against `http://localhost:8799`: 19 token events, first at 225 ms, last at 2 787 ms (**spread 2 607 ms** — progressive, not one chunk), `text/event-stream`, credentialed session works cross-origin, and a header the allow-list does not name is refused by the browser itself. 10/10 | **PASS** |
+| 17 | Rate limiting really refuses | Signup: `x-ratelimit-limit: 5`, `x-ratelimit-remaining: 0`, `retry-after: 305`, body `{"error":{"code":"RATE_LIMITED","message":"Rate limit exceeded, retry in 5 minutes."}}`. It survived a process restart, because the store is Postgres-backed rather than per-process | **PASS** |
+| 18 | One tenant cannot reach another's data | A second tenant naming the first's project id received **404**, never 403 (ADR-089) | **PASS** |
+
+The scripts behind this table are `accept.mjs` (11 checks), `accept2.mjs` (5) and `browser/drive.mjs`
+(10 browser assertions); they sign up through the real API, drive the real routes and read the
+resulting bytes back through `GET /api/v1/assets/:id` rather than off the disk.
 
 ## What this run did not cover
 

@@ -75,3 +75,25 @@ This section comes from the third audit of this phase's own diff (`78a0e13..74c7
   a signed-in user can change their own password (`POST /api/v1/auth/password`, current password
   required), see their live sessions and end any of them. A user who is locked out entirely needs
   an operator, and that is the honest state of it rather than a half-built flow.
+
+- **The storyboard stage's default deadline is marginal on a local 7B model (ADR-161).** `POST
+  /api/v1/videos` runs the script stage inline before its 202, so its 25-second ceiling is what
+  keeps the button responsive — and the reference local runtime here was measured at 21.2 seconds
+  for a two-scene brief, with two real runs going over it under load. Over the ceiling, the
+  deterministic planner writes the scenes, which takes the narration with it: no audio track and
+  no subtitles, on a render that still succeeds and a project that still reports `succeeded`. The
+  project row says `scriptSource: "deterministic"` with the reason, and the reason now reaches the
+  log as well, but a caller who does not read either sees only a silent video. `VIDEO_SCRIPT_TIMEOUT_MS`
+  raises it; the default stays 25 s because a longer one would slow every deployment's POST to
+  fix one deployment's slow model.
+- **The coding agent completes the cycle, but not reliably (ADR-162).** UAT-17 — a genuinely
+  broken `sum.cjs` with a test that really fails — was run three times on 2026-09-21 against
+  qwen2.5:7b on four CPU cores. The third run **COMPLETED in 311 s**: the model ran the test, read
+  the SOURCE, wrote four patches (the tool refused three malformed diffs and applied the fourth),
+  the harness re-ran the check itself, and `sum.cjs` on disk now returns `a + b` with the test
+  printing `ok`. The first two runs did not: in both, the model read and repeatedly tried to patch
+  the TEST file, which the task's own goal forbids, and never opened the source. Same brief, same
+  model, same platform — the variance is the model's. The deadline was not the binding constraint
+  in the successful run (311 s is inside the 600 s the planner writes), so `AGENT_NODE_TIMEOUT_MS`
+  should not be credited with it; what that knob removes is a confound, not the ceiling on
+  judgement.

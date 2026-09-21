@@ -1,6 +1,15 @@
 # Project Status — the single source of truth
 
-**Date:** 2026-09-18 · **Code commit:** `513e709` — every result below was measured on that tree
+**Date:** 2026-09-21 · **Code commit:** `HEAD` of the fifth audit — every result below was
+measured on that tree
+
+**Three different things are reported separately, and none of them implies another:**
+
+| | |
+|---|---|
+| **Code completion** | 95% — see Completion below. Counted from `docs/29_FEATURE_MATRIX.md`, which anyone can recount. |
+| **Local runtime verification** | Extensive. Every capability in the Matrix marked Runtime Verified was executed against real providers on this machine and its output inspected — see `docs/LOCAL_USER_ACCEPTANCE_TEST.md`, whose 18-item checklist for this audit is all PASS. |
+| **Production verification** | **None. Zero. It has never been deployed.** No container has been built here, no `terraform apply` has ever run, no request has ever reached this code in a deployed environment. The phrase "production ready" does not appear in this document about this system, and should not appear anywhere else about it either. |
 
 This file supersedes every other status claim in the repository. Where it disagrees with a
 report, a README, an ADR or the root `PROJECT_STATUS.md` (which is a historical phase log, not a
@@ -112,13 +121,15 @@ diffusion model and an ffmpeg motion path produce real files (ADR-120, ADR-121),
 `docs/LOCAL_USER_ACCEPTANCE_TEST.md`. **Coding Agent** has no structural gap left after `513e709` — the last
 missing piece was a way to put files in front of it, which nothing in the product could do
 (ADR-142), and the loop, tools, approval gate, verification pass, patch tool and the screen that
-shows what it did are all real and were all exercised in a live run. It stays short of DONE for
-an honest reason: the full FAIL → patch → PASS cycle has still never been observed completing.
-The run is written up as UAT-17 in `docs/LOCAL_USER_ACCEPTANCE_TEST.md`, and what it shows is a
-model-capability ceiling rather than a platform defect — the 7B local model invoked the terminal
-tool with the binary duplicated into its own arguments, so the test never ran and it never saw
-the failure it was meant to fix; the patch it then wrote was its own no-op. The platform behaved
-correctly at every step, including refusing three stale patches rather than corrupting a file.
+shows what it did are all real and were all exercised in a live run. On 2026-09-21 the full
+FAIL → patch → PASS cycle was finally observed end to end: UAT-17 COMPLETED in 311 s, the model
+read the source, the patch tool refused three malformed diffs and applied the fourth, and
+`node sum.test.cjs` run by hand afterwards printed `ok`. It stays short of DONE anyway, for an
+honest reason: two other runs of the same brief on the same day did not get there — in both the
+model read and repeatedly tried to patch the TEST file, which the task goal forbids, and never
+opened the source. Same brief, same model, same platform, so the variance is the model's. The
+platform behaved correctly in all three, including refusing every malformed patch rather than
+corrupting a file, and re-running the check itself rather than believing the model's report.
 The two rows that remain are **Cloud deployment** (written and validated, never applied — there
 is no GCP project here) and **Extensible architecture**, which is a property rather than a
 deliverable and will read IN PROGRESS for as long as the project is alive.
@@ -206,46 +217,39 @@ mistook `node -e 1` for an environment flag.
 
 ## Gates, and what each one now proves
 
-All commands below were run on `fd5f5a5`, the code commit this file names.
+All commands below were run on the fifth audit's tree, on 2026-09-21.
 
 | Gate | Result | What it would catch |
 |---|---|---|
 | `npm run build` | pass (exit 0) | — |
-| `npm run typecheck` | 0 errors (all workspaces) | — |
-| `npm run lint` | 0 errors, 5 `no-console` warnings | The five: `database/src/migrate-cli.ts:12` (CLI), `jobs/src/queue.test.ts:145` (test diagnostics), `backend/src/config.ts:300` and `:304` (before the logger exists), `backend/src/index.ts:1223` (fatal startup). The previous version of this file said six |
-| `npm test` | **705 passed, 0 failed, 1 skipped, 86 files** | ffmpeg, clamd and fake-gcs-server all present. The one skip is the Windows file-symlink case; it is reported as a skip rather than passed with no assertions. CI's zero-skip step fails the build on any skip — and until ADR-111 that step could never pass on Linux, because the long-form suite always skipped there |
-| `scripts/verify-boundary.sh` | 8/8 — self-test + 7 rules | The self-test must catch 39 planted violations and report nothing in 10 clean files before any rule judges the real tree (275 source files parsed); each of 15 rule mutants is killed by it. It replaces checks the third audit defeated with ordinary syntax (ADR-111) |
-| `scripts/verify-migrations.sh` | 3/3 | Clean empty DB, no drift. Migration 0002 adds `conversations.summary_fingerprint` |
-| `scripts/verify-boot.sh` | 7/7 | Refusal cases assert the REASON, not merely that health never answered |
-| `npx playwright test` | 7/7 (28.2 s, servers started fresh) | Servers always started fresh (ADR-105) — a stale one had been silently reused |
-| `api-contract.test.ts` (inside `npm test`) | pass — one of `api`'s 15 files | A generator that labels a route wrongly: every row of `docs/API.md` is sent a real request — anonymous (public rows admit it, every other row answers 401), a viewer (403 naming exactly the documented permission), and the `x-ratelimit-limit` applied. Run against the previous document, it fails and names each wrong row |
-| `docs/API.md` drift (generator output vs the committed file) | identical | A route changed without regenerating the document. The CI step that runs it is new and, like the rest of the workflow, has never executed |
-| Fresh `git clone` → `npm ci`; backend alone `npm run dev`; frontend alone `npm run build` | pass | Clone of `fd5f5a5` with 0 files in `shared/dist`; `npm ci` exit 0 in 43 s; `cd backend && npm run dev` answered `GET /api/health` with `{"status":"ok"}` after its predev build; `cd frontend && npm run build` exit 0 through its prebuild. Before ADR-112 the documented backend command could not start there |
-| `terraform fmt -check && validate` | pass ("Success! The configuration is valid.") | Run after the `TRUST_PROXY_HOPS` env addition; says nothing about whether 1 is the right value on Cloud Run |
-| `npm run test:docker -w @ai-platform/security` | **fails here, by design** | Docker is not installed and the real-container suite refuses to skip. Before ADR-111 the documented Docker check ran no Docker test and passed on this same machine |
+| `npm run typecheck` | **0 errors**, all workspaces — including `backend/tsconfig.tests.json`, which type-checks the backend's own test files (they were outside every project reference until ADR-155) | A test file that no longer compiles against the code it tests |
+| `npm run lint` | **0 errors, 5 `no-console` warnings** | The five are deliberate: a migration CLI, test diagnostics, two lines in `config.ts` that run before the logger exists, and a fatal startup path |
+| `npm test` | **1 044 passed, 0 failed, 30 skipped, 124 files** | The 30 skips are all `describe.skipIf`/`it.skipIf` on an external binary — piper, ffmpeg, clamd, fake-gcs-server, stable-diffusion.cpp — being absent. None is a disabled test |
+| `npm test` with `.local-tools/test-env.sh` sourced | **1 071 passed, 0 failed, 3 skipped, 128 files** | 27 of those 30 skips really run when the binaries are there, and this is the run that proves it. The 3 that remain are Windows file-symlink cases, which the OS will not create without elevation. This run found a test that had been failing since ADR-155 and was invisible because the default run skips it (ADR-161) |
+| `scripts/verify-boundary.sh` | **8 passed, 0 failed** — 340 source files parsed | It was failing before this audit and had not been re-run: four test files imported `drizzle-orm` or `pino` that their own `package.json` did not declare, working only because npm hoists them to the root |
+| `scripts/verify-migrations.sh` | 3 passed, 0 failed | Clean empty DB, no drift; the table list is derived from the `pgTable(` names rather than hand-maintained |
+| `scripts/verify-boot.sh` | 8 passed, 0 failed | Every refusal case asserts the REASON, not merely that health never answered |
+| `npx playwright test` (from `frontend/`) | **14 passed** (1.4 min, servers started fresh) | A real Chromium against a real API and a real Next.js build |
+| `terraform fmt -check && terraform validate` | pass — "Success! The configuration is valid." | Says nothing about whether the configuration is *right*: no plan has ever been run against a real project |
+| `npm run test:docker -w @ai-platform/security` | **fails here, by design** | Docker is not installed and the real-container suite refuses to skip rather than passing by doing nothing. CI's `infrastructure` job runs it on a machine that has a daemon |
 
-### Test counts, per workspace
+### Real runtime verification, 2026-09-21
 
-From the `npm test` run on `fd5f5a5`. Given per workspace because a per-AREA count is a
-judgement about which file belongs to which feature, and this way the numbers are reproducible:
+Separate from the gates, because a passing test suite verifies code against its author's
+expectations and a runtime verifies it against reality. Full detail and measurements are in
+`docs/LOCAL_USER_ACCEPTANCE_TEST.md`; the stack was qwen2.5:7b and nomic-embed-text on a local
+Ollama, stable-diffusion.cpp with SD-Turbo, Windows SAPI and ffmpeg 7.1.
 
-| Workspace | Tests · files | Workspace | Tests · files |
-|---|---|---|---|
-| `tools` | 114 (+1 skipped) · 9 | `observability` | 26 · 4 |
-| `api` (backend/src) | 91 · 15 | `jobs` | 18 · 3 |
-| `security` | 65 · 5 | `model-router` | 18 · 2 |
-| `agent-core` | 52 · 4 | `llm-openai` | 13 · 1 |
-| `rag` | 47 · 9 | `llm-google` / `llm-local` | 12 · 1 / 12 · 1 |
-| `mcp` | 39 · 4 | `quota` | 11 · 1 |
-| `media` | 39 · 8 | `llm-anthropic` | 11 · 1 |
-| `web` (frontend) | 34 · 5 | `image-openai` / `video-mock` | 8 · 1 / 8 · 2 |
-| `memory` | 32 · 2 | `scanning` | 7 · 1 |
-| `video-replicate` | 31 · 3 | `shared` | 7 · 1 |
-| `image-mock` | 4 · 1 | `database` / `embeddings` | 3 · 1 / 3 · 1 |
+| Run | Result |
+|---|---|
+| `accept.mjs` — auth, permissions, chat, memory, RAG, agent, audit, speech, tenant isolation | **11/11 passed** |
+| `accept2.mjs` — RAG answer and refusal, image, video | **5/5 passed** |
+| `browser/drive.mjs` — streaming and CORS in a real Chromium, cross-origin | **10/10 passed**; 19 token events, first at 225 ms, last at 2 787 ms |
+| UAT-17 — the coding agent on a genuinely broken file | **COMPLETED in 311 s**, the fix verified by running the test by hand afterwards. Two other runs of the same brief did not get there |
 
-**705 passed and 1 skipped across 86 files, 0 failed.** Plus 7 Playwright E2E tests, which run
-against real servers rather than in a workspace. `security`'s 65 do not include the 4-test
-real-container suite, which runs only through `npm run test:docker`.
+Two defects were found by these runs and by nothing else — a RAG answer of `[1]` reported as
+`grounded: true`, and a node that timed out reported as `CANCELLED` — and both are closed
+(ADR-161, ADR-162).
 
 ---
 

@@ -493,6 +493,11 @@ and it never saw the failure it was meant to fix; the patch it then wrote was it
 is a model-capability ceiling rather than a platform defect, and it is the one capability here
 never observed working end to end.
 
+> **Superseded on 2026-09-21.** UAT-17 was re-run in the fifth audit and COMPLETED in 311 s — see
+> the end of this document. The sentence "never observed working end to end" was true when it was
+> written and is no longer. It stays here rather than being edited away, because a status document
+> that quietly rewrites its own history is the thing these audits exist to catch.
+
 **Still BLOCKED_EXTERNAL, unchanged:** container builds and the CI workflow (no Docker, no git
 remote), the cloud deployment (no GCP project), and the three hosted model providers plus Replicate
 (no credentials). Nothing in this repository has ever run in a deployed environment.
@@ -503,3 +508,133 @@ Triaged, not fixed. None is a broken capability, a security hole or a false clai
 classes this phase treated as blocking. They are recorded in the audit artefacts and remain open
 work; a phase that closed 58 defects and called the remaining 98 "done" would be repeating the
 mistake this document exists to catch.
+
+
+---
+
+# The fifth audit — 2026-09-21
+
+A whole-tree audit and, for the first time, a verification pass built around **running the thing
+with real weights and reading what came back**. That distinction is the finding: two of the
+defects below cannot be reached from any test, because a test supplies the answer the code is
+hoping for. Both were produced by a 7-billion-parameter model doing something a mock would never
+do, and both were reported by the platform as success.
+
+## What the audit closed
+
+**90 findings from the fresh audit** — 1 P0, 30 P1, 58 P2, 1 informational — are closed across
+**ADR-146 … ADR-160**, each with a covering test and, for every substantive fix, a proven negative
+check: the implementation removed, the named tests observed failing, the implementation restored.
+
+**Two more were found by the runtime pass and by nothing else**, and are closed as ADR-161 and
+ADR-162.
+
+### ADR-161 — a citation reported as an answer
+
+Asked "How many days of paid leave does an engineer get?" over a handbook whose text says 27, with
+retrieval working perfectly — one passage, cosine distance 0.208 — qwen2.5:7b's complete reply was:
+
+```
+[1]
+```
+
+`checkGrounding` passed it. Evidence had been retrieved, and `[1]` was a real marker: those are the
+only two things it asked. So `POST /api/v1/rag/query` answered `200` with `grounded: true`, and a
+client rendering `answer` showed its user the string "[1]". That flag is the platform's own
+assurance that the caller is holding an evidenced answer. There was no answer.
+
+The same ADR fixed a second thing the same run exposed. Two video projects fell back to the
+mechanical storyboard — which silently removes the narration, and therefore the audio track and the
+subtitles, from a render that still succeeds — and recorded the reason as "The model did not return
+a usable storyboard JSON object". Asked the same brief directly, the same model returned clean
+parseable JSON every time. Every parse failure produced that one sentence, so a truncated reply, an
+empty reply and malformed prose were indistinguishable; and the stage's own `logger.warn` naming
+the real reason was passed no logger by the only call site that runs in production. With the logger
+wired, the very next real run said what had actually happened: `The script stage exceeded its 25s
+deadline.`
+
+### ADR-162 — a timeout reported as somebody pressing Stop
+
+`withNodeDeadline` and `cancel` abort the same `AbortController`. ADR-146 — correctly, for the case
+it was written for — taught the catch that settles a reasoning node to read "aborted" as "the user
+cancelled". So every expired deadline was recorded as a cancellation: `CANCELLED` on the operator's
+screen, no reason stored anywhere, and a node placed beyond the reach of any retry policy.
+
+It is a regression, and both halves were already written down in this repository. UAT-17's entry
+records the 2026-09-18 run as "two attempts, each ending **FAILED** at the reasoning node's 600 s
+ceiling". The same brief, the same model and the same ceiling on 2026-09-21 produced one
+**CANCELLED** with no reason.
+
+### A gate that was failing, and had not been re-run
+
+`scripts/verify-boundary.sh` reported **7 passed, 1 failed**: four test files import `drizzle-orm`
+or `pino` that their own `package.json` does not declare. They resolve only because npm hoists them
+to the root. Nothing in the previous phase's reported gate results included this script.
+
+### A test that had been failing since ADR-155, invisibly
+
+`audio-generation.integration.test.ts` asserts that a synthesiser's own words reach the stored error
+message. ADR-155 deliberately stopped that — the column is served straight back to the tenant and a
+provider's message names the deployment — and the test was never updated, because it only runs where
+piper is installed and the default `npm test` skips it. Running the suite with the local binaries
+present is what found it.
+
+## What was actually run, 2026-09-21
+
+Against qwen2.5:7b and nomic-embed-text on a local Ollama, stable-diffusion.cpp with SD-Turbo,
+Windows SAPI and ffmpeg 7.1:
+
+| | |
+|---|---|
+| `accept.mjs` — auth, permissions, chat, memory, RAG, agent, audit, speech, tenant isolation | **11/11** |
+| `accept2.mjs` — RAG answer and refusal, image, video | **5/5** |
+| `browser/drive.mjs` — a real Chromium on `localhost:3000` against `localhost:8799` | **10/10** |
+| UAT-17 — the coding agent on a genuinely broken file | **COMPLETED in 311 s** |
+
+The browser run is the one §26 asks for by name, and it is deliberately not curl, not Node `fetch`
+and not `app.inject()`: 19 token events reached the page, the first at 225 ms and the last at
+2 787 ms, so the delivery was progressive rather than one chunk at the end; the credentialed
+cross-origin session worked; and a header the allow-list does not name was refused by the browser
+itself, which is the negative control that stops the whole thing passing against a server with CORS
+switched off.
+
+**UAT-17 completed for the first time.** The model ran the test, read the SOURCE, wrote four
+patches (the tool refused three malformed diffs and applied the fourth), and the harness re-ran the
+check itself. `sum.cjs` on disk now returns `a + b` and running the test by hand prints `ok`. Two
+other runs of the same brief the same day did not get there — both read and repeatedly tried to
+patch the TEST file, which the task's goal forbids. Same brief, same model, same platform: the
+variance is the model's, and the honest reading of three runs is "works, not yet reliable".
+
+## Gates
+
+| Gate | Result |
+|---|---|
+| `npm run build` | pass |
+| `npm run typecheck` | 0 errors |
+| `npm run lint` | 0 errors, 5 deliberate `no-console` warnings |
+| `npm test` | **1 044 passed, 0 failed, 30 skipped**, 124 files |
+| `npm test` with the local binaries present | **1 071 passed, 0 failed, 3 skipped**, 128 files |
+| `scripts/verify-boundary.sh` | 8 passed, 0 failed (340 files) |
+| `scripts/verify-migrations.sh` | 3 passed, 0 failed |
+| `scripts/verify-boot.sh` | 8 passed, 0 failed |
+| `npx playwright test` | 14 passed |
+| `terraform fmt -check` / `validate` | clean / Success |
+
+Every one of the 30 default skips is an `skipIf` on an external binary. 27 of them run when those
+binaries are present, which the second row proves; the 3 that remain are Windows file-symlink cases
+the OS will not create without elevation.
+
+## What this audit does not establish
+
+**Nothing here has ever been deployed.** No container has been built on this machine, no
+`terraform apply` has run, no request has reached this code in a deployed environment. Local
+runtime verification is extensive and production verification is zero, and the two are reported in
+separate rows of `docs/PROJECT_STATUS.md` for exactly that reason.
+
+The hosted providers (OpenAI, Anthropic, Google, Replicate) remain `BLOCKED_EXTERNAL` for want of
+credentials; container builds and the CI workflow remain `BLOCKED_EXTERNAL` for want of Docker and
+a git remote.
+
+And one limit is worth stating plainly, because it is the lesson of this audit rather than a caveat
+on it: every defect in ADR-161 and ADR-162 was invisible to a suite of a thousand passing tests, and
+became obvious within minutes of running the product against a real model and reading the output.
