@@ -100,6 +100,59 @@ describe("checkGrounding — fabricated citations", () => {
   });
 });
 
+/**
+ * ADR-161 — the third failure, and the one only a real model found.
+ *
+ * The fifth audit's acceptance run asked the live endpoint "How many days of paid leave does an
+ * engineer get?" over a handbook whose text says 27. Retrieval was correct: one passage, cosine
+ * distance 0.208. qwen2.5:7b's complete answer was:
+ *
+ *   [1]
+ *
+ * Both existing rules passed it — evidence was retrieved, and `[1]` was a real marker — so the
+ * endpoint returned `grounded: true` and a UI rendering `answer` showed its user the string
+ * "[1]". The flag is the platform's assurance that the caller holds an evidenced answer, and
+ * there was no answer at all.
+ */
+describe("checkGrounding — a citation with nothing attached to it", () => {
+  it("rejects an answer that is only a citation marker", () => {
+    const result = checkGrounding({ answer: "[1]", citations: citations(2), retrievedCount: 2 });
+    expect(result.grounded).toBe(false);
+    expect(result.violation).toBe("citation_without_answer");
+  });
+
+  it("rejects several markers with no prose between them", () => {
+    expect(checkGrounding({ answer: "[1] [2].", citations: citations(2), retrievedCount: 2 }).grounded).toBe(false);
+  });
+
+  it("accepts a short answer — brevity is not the defect, absence is", () => {
+    // The distinction the check has to get right: "27 days. [1]" is a complete answer to a
+    // question about a number, and a rule that demanded a sentence would reject it.
+    const result = checkGrounding({ answer: "27 days. [1]", citations: citations(2), retrievedCount: 2 });
+    expect(result.grounded).toBe(true);
+    expect(result.violation).toBeUndefined();
+  });
+
+  it("accepts one bare word with a citation", () => {
+    expect(checkGrounding({ answer: "Wednesday [1]", citations: citations(1), retrievedCount: 1 }).grounded).toBe(true);
+  });
+
+  it("still calls a bare FABRICATED marker a fabricated citation", () => {
+    // Order matters: "[9]" is both. Naming the stronger fault is what is useful to whoever
+    // reads the violation, so the fabrication rule must win.
+    const result = checkGrounding({ answer: "[9]", citations: citations(2), retrievedCount: 2 });
+    expect(result.violation).toBe("fabricated_citation");
+  });
+
+  it("leaves an answer with no markers at all to the other rules", () => {
+    // No marker means nothing to strip; this rule must not fire on prose that simply did not
+    // cite, which is a different (and, with evidence retrieved, permitted) case.
+    expect(checkGrounding({ answer: "Engineers get 27 days.", citations: citations(1), retrievedCount: 1 }).grounded).toBe(
+      true
+    );
+  });
+});
+
 describe("extractCitationMarkers", () => {
   it("finds bracketed integers and de-duplicates them", () => {
     expect(extractCitationMarkers("As [1] says, and again [1], plus [2].").sort()).toEqual(["[1]", "[2]"]);

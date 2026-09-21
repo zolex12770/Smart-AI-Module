@@ -54,9 +54,22 @@ const ingestRequestSchema = z.object({
  */
 const NO_EVIDENCE_ANSWER = "The provided documents do not contain the answer to this question.";
 
+/**
+ * ADR-161 — "state the answer" is in here because a real model would not otherwise.
+ *
+ * The first sentence used to be "You answer questions using ONLY the numbered passages" and the
+ * second "Cite the passage you used with its bracketed number, e.g. [1]." Asked how many days of
+ * leave an engineer gets, over a handbook that says 27, qwen2.5:7b replied with the entire text
+ * `[1]`: it read the only *formatting* instruction it was given as the whole task. Telling the
+ * model to write the answer first, and saying plainly that a bare marker is not an answer, is
+ * what makes it answer; `checkGrounding` now refuses the bare marker as a backstop, because a
+ * prompt cannot make a model comply — the same reasoning ADR-075 gives for the other two rules.
+ */
 const RAG_SYSTEM_PROMPT =
   "You answer questions using ONLY the numbered passages supplied in the user message. " +
-  "Cite the passage you used with its bracketed number, e.g. [1]. " +
+  "State the answer in your own words in one or two sentences, then cite the passage it came " +
+  "from with its bracketed number, e.g. [1]. A bracketed number on its own is not an answer: " +
+  "always write the answer itself before the citation. " +
   "If the passages do not contain the answer, reply exactly: " +
   `"${"The provided documents do not contain the answer to this question."}" ` +
   "Never cite a number that does not appear in the passages, and never refer to a document that is not listed. " +
@@ -443,13 +456,28 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       }
       const verdict = checkGrounding({ answer, citations, retrievedCount: results.length });
       if (!verdict.grounded) {
+        /**
+         * The fallback sentence has to match the violation — ADR-161.
+         *
+         * `NO_EVIDENCE_ANSWER` is right for the two fabrication cases: the safe thing to say
+         * when a model invented a source is that the documents do not support an answer. It is
+         * WRONG for `citation_without_answer`, where the documents demonstrably did contain the
+         * answer and the model simply failed to write one down — telling the caller their
+         * corpus lacks something it holds would send them off to add a document they already
+         * have. Both are `grounded: false` with the violation named, so a client can still
+         * branch; this only fixes the sentence a client renders verbatim.
+         */
+        const fallbackAnswer =
+          verdict.violation === "citation_without_answer"
+            ? "The model did not write an answer, only a citation. The passages it was given are listed below."
+            : NO_EVIDENCE_ANSWER;
         // Returned, not thrown, and NOT silently replaced by the refusal text: the caller gets
         // the sources that really existed and an explicit `grounded: false`, so a client can
         // tell "the model went off-piste" from "there was nothing to find". Hiding it would
         // reproduce the original bug with better manners.
         return reply.send({
           question: parsed.data.question,
-          answer: NO_EVIDENCE_ANSWER,
+          answer: fallbackAnswer,
           sources,
           grounded: false,
           groundingViolation: verdict.violation,

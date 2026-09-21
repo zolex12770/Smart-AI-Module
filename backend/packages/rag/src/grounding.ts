@@ -23,6 +23,14 @@ import type { RagCitation } from "./retrieve.js";
  *  - **Citing a marker that was never offered.** `[3]` when only `[1]` and `[2]` exist is a
  *    fabricated source, and a citation that cannot be resolved is not a citation
  *    (docs/09_RAG_ARCHITECTURE.md §6).
+ *  - **Citing without answering.** ADR-161, found in the fifth audit's real acceptance run:
+ *    asked "How many days of paid leave does an engineer get?" over a handbook that says 27,
+ *    qwen2.5:7b replied with the complete text `[1]`. Retrieval was right (distance 0.208), the
+ *    marker was real, so both rules above passed and the endpoint reported `grounded: true` —
+ *    the platform's own assurance that the caller was handed an evidenced answer — for a string
+ *    containing no answer. A citation is a pointer attached to a claim; with the claim removed
+ *    there is nothing for the evidence to support, which makes this a grounding failure in
+ *    exactly the sense the other two are, not a formatting quibble.
  *
  * What this deliberately does NOT do is judge whether the answer is *faithful* to the passage
  * it cites. That needs a second model and is a different, weaker kind of check; these two are
@@ -41,7 +49,7 @@ export interface GroundingCheckInput {
 export interface GroundingResult {
   grounded: boolean;
   /** Machine-readable so a caller can branch; the message is for humans. */
-  violation?: "answered_without_evidence" | "fabricated_citation";
+  violation?: "answered_without_evidence" | "fabricated_citation" | "citation_without_answer";
   reason?: string;
   /** Markers the model wrote that were never offered to it. */
   invalidMarkers?: string[];
@@ -128,7 +136,8 @@ export function checkGrounding(input: GroundingCheckInput): GroundingResult {
   }
 
   const offered = new Set(input.citations.map((c) => c.marker));
-  const invalid = extractCitationMarkers(answer).filter((marker) => !offered.has(marker));
+  const markers = extractCitationMarkers(answer);
+  const invalid = markers.filter((marker) => !offered.has(marker));
   if (invalid.length > 0) {
     return {
       grounded: false,
@@ -140,5 +149,31 @@ export function checkGrounding(input: GroundingCheckInput): GroundingResult {
     };
   }
 
+  /**
+   * Markers, and nothing else — ADR-161. Checked last, after the markers have been shown to be
+   * real ones: "[9]" alone is a fabricated citation first and an empty answer second, and
+   * naming the stronger fault is more useful to whoever reads the violation.
+   *
+   * Only bracketed markers and punctuation are stripped. A one-word answer ("27.") survives,
+   * and must: brevity is not the defect, absence is.
+   */
+  if (markers.length > 0 && stripMarkersAndPunctuation(answer) === "") {
+    return {
+      grounded: false,
+      violation: "citation_without_answer",
+      reason: `Answer was ${markers.join(", ")} and nothing else — a citation with no claim attached to it, so there is no answer to be grounded.`,
+    };
+  }
+
   return { grounded: true };
+}
+
+/** What is left of an answer once its citation markers and punctuation are removed. */
+function stripMarkersAndPunctuation(answer: string): string {
+  return answer
+    // A fresh literal rather than MARKER_PATTERN: that one is `/g` and shared, and `replace`
+    // mutating its `lastIndex` under `extractCitationMarkers` is a bug waiting to be written.
+    .replace(/\[\d+\]/g, " ")
+    .replace(/[\s.,;:!?'"()[\]\-–—]/g, "")
+    .trim();
 }
