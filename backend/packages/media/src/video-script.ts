@@ -148,7 +148,11 @@ export async function writeVideoScript(
       // The call happened and the tokens were spent, so the cost is carried out even though the
       // storyboard is the mechanical one (ADR-150). Reporting a fallback as free would understate
       // the bill in exactly the case a model is behaving badly and being retried.
-      return { ...deterministic(planned, "The model did not return a usable storyboard JSON object."), provider: raw.provider, usage: raw.usage };
+      return {
+        ...deterministic(planned, describeUnusableReply(raw)),
+        provider: raw.provider,
+        usage: raw.usage,
+      };
     }
 
     return {
@@ -203,11 +207,44 @@ function deterministic(planned: PlannedScene[], reason: string): VideoScript {
 }
 
 /** Drains the stream to its terminal event. The router streams; this stage wants one string. */
+/**
+ * Why an unusable reply was unusable — ADR-161.
+ *
+ * Every parse failure used to be reported as "The model did not return a usable storyboard JSON
+ * object", which names the one cause an operator can do nothing about and hides the two they
+ * can. The fifth audit's real run recorded exactly that sentence for two consecutive video
+ * projects; asked the same prompt directly, the same qwen2.5:7b returned clean, parseable JSON
+ * every time. The message sent the investigation at the model's formatting for twenty minutes
+ * when the reply had in fact been cut short.
+ *
+ * So the three cases are separated, and the model's own words are carried out with them —
+ * bounded, because this string is persisted on the project row and rendered in the UI.
+ */
+function describeUnusableReply(raw: { text: string; finishReason?: string }): string {
+  const text = raw.text.trim();
+  if (text === "") {
+    return `The model returned an empty reply (finish reason: ${raw.finishReason ?? "unknown"}).`;
+  }
+  if (raw.finishReason === "length") {
+    return (
+      "The model's storyboard reply was cut off by the output-token limit before the JSON " +
+      `object closed. It began: "${excerpt(text)}"`
+    );
+  }
+  return `The model did not return a usable storyboard JSON object. It replied: "${excerpt(text)}"`;
+}
+
+/** First 200 characters, on one line — enough to recognise the shape, short enough to store. */
+function excerpt(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
+}
+
 async function completeText(
   model: ScriptModel,
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
   signal?: AbortSignal
-): Promise<{ text: string; model: string; provider: string; usage: ScriptUsage }> {
+): Promise<{ text: string; model: string; provider: string; usage: ScriptUsage; finishReason?: string }> {
   for await (const event of model.streamChat({ messages }, { signal })) {
     if (event.type === "done") {
       // The provider and the token counts are carried out (ADR-150) so the caller can write the
@@ -218,6 +255,9 @@ async function completeText(
         model: event.model,
         provider: event.provider,
         usage: { inputTokens: event.usage.inputTokens, outputTokens: event.usage.outputTokens },
+        // The provider has always reported this and the stage has always thrown it away, which
+        // is how a truncated reply came to be indistinguishable from a badly formatted one.
+        ...(event.finishReason !== undefined ? { finishReason: String(event.finishReason) } : {}),
       };
     }
     if (event.type === "error") throw new Error(event.message);

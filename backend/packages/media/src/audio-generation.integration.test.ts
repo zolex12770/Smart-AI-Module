@@ -168,9 +168,23 @@ describe.skipIf(!hasPiper)("processAudioGeneration with a real synthesiser", () 
     ).rejects.toThrow(/voice model is corrupt/);
 
     const row = await generationRepo.get(PROJECT, id);
-    // Failed, not stuck in `processing` — and the reason is on the row an operator reads.
+    // Failed, not stuck in `processing`.
     expect(row?.status).toBe("failed");
-    expect(row?.errorMessage).toContain("voice model is corrupt");
+    /**
+     * The STORED text names the stage and nothing else — ADR-155, asserted here since ADR-161.
+     *
+     * This line used to read `toContain("voice model is corrupt")`, and it was correct until
+     * ADR-155 sanitised what a worker persists: that column is served straight back by
+     * `GET /api/v1/audio/:id`, and a synthesiser's own words name the deployment — its paths,
+     * its endpoints, its model files. A corrupt voice model is an operator's problem and not
+     * the tenant's, so it collapses to the stage sentence while the raw error goes to the log.
+     *
+     * Nobody noticed the test had gone stale because it only runs where piper is installed, and
+     * the default `npm test` skips it. Both halves are asserted now: the throw above still
+     * carries the real reason for the caller in-process, and the row does not.
+     */
+    expect(row?.errorMessage).toContain("Speech synthesis failed");
+    expect(row?.errorMessage).not.toContain("voice model is corrupt");
     expect(row?.attemptCount).toBe(1);
     expect(await storedAssetCount()).toBe(0);
   }, 60_000);

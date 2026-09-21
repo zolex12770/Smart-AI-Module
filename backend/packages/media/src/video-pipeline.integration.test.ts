@@ -301,6 +301,53 @@ describe("Duplicate-work guards (real PGlite Postgres + real pg-boss)", () => {
     return scope;
   }
 
+  /**
+   * ADR-161 — the storyboard deadline is the operator's, and the stage's diagnosis goes
+   * somewhere.
+   *
+   * The ceiling was a hard-coded 25 seconds and this call site passed neither a timeout nor a
+   * logger, so the fifth audit's real runs — which fell back to the mechanical storyboard twice,
+   * taking the narration, the audio track and the subtitles with them — left a single short
+   * string on the project row and nothing else. The assertion on "1s" is what makes this test
+   * load-bearing: a deadline still hard-coded at 25 seconds cannot produce that sentence, and
+   * the test would sit for 25 seconds and then fail.
+   */
+  it("uses the configured script deadline, and logs why it gave up", async () => {
+    const warnings: Array<{ obj: unknown; msg: string }> = [];
+    const neverAnswers = {
+      // eslint-disable-next-line require-yield -- the point is that it never yields.
+      async *streamChat(_request: unknown, options?: { signal?: AbortSignal }) {
+        await new Promise((resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+        });
+      },
+    };
+
+    const started = Date.now();
+    const project = await createVideoProject(
+      {
+        projectRepo,
+        sceneRepo,
+        scriptModel: neverAnswers as never,
+        scriptTimeoutMs: 1_000,
+        logger: { warn: (obj, msg) => warnings.push({ obj, msg }) },
+      },
+      {
+        projectId: tenantId,
+        videoProjectId: "proj-script-deadline",
+        createdByUserId: null,
+        request: { prompt: "a harbour at dawn", targetDurationSeconds: 8, sceneClipSeconds: 4 },
+      }
+    );
+
+    expect(Date.now() - started).toBeLessThan(10_000);
+    const script = project.script as { scriptSource: string; fallbackReason: string };
+    expect(script.scriptSource).toBe("deterministic");
+    expect(script.fallbackReason).toContain("1s deadline");
+    // The stage's own line reaches a log rather than being written to nothing.
+    expect(warnings.map((w) => w.msg)).toContain("script stage failed; falling back to the deterministic storyboard");
+  }, 20_000);
+
   it("two concurrent completion checks enqueue exactly ONE render", async () => {
     const scope = await projectWithAllScenesSucceeded("proj-concurrent");
     const deps = { projectRepo, sceneRepo, jobQueue: queue };

@@ -76,6 +76,11 @@ export interface AppContext {
    */
   ragMaxDistance?: number;
   /**
+   * The storyboard stage's wall-clock ceiling, from `VIDEO_SCRIPT_TIMEOUT_MS` (ADR-161).
+   * Undefined keeps the media package's 25-second default.
+   */
+  videoScriptTimeoutMs?: number;
+  /**
    * Budget and ledger for the model calls made outside chat — docs/26_DECISIONS.md ADR-150.
    *
    * Today that is the video storyboard, which `POST /api/v1/videos` ran against no budget and

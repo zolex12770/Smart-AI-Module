@@ -147,6 +147,68 @@ describe("the script stage reports what it wrote, and gives up in time", () => {
     expect(script.scenesWritten).toBe(0);
   });
 
+  /**
+   * ADR-161 — a fallback reason an operator can act on.
+   *
+   * Every unusable reply used to record the same sentence: "The model did not return a usable
+   * storyboard JSON object." The fifth audit's real run stored it for two consecutive video
+   * projects; asked the same brief directly, that same qwen2.5:7b returned clean parseable JSON
+   * every time, so the recorded reason pointed at the one cause that was not happening. The
+   * three failures are now distinguished and the model's own words travel with them — this is
+   * the string an operator reads on the project row when their narration silently stopped.
+   */
+  describe("says WHY a reply was unusable", () => {
+    const modelReturningWith = (text: string, finishReason: string): ScriptModel => ({
+      async *streamChat() {
+        yield {
+          type: "done",
+          message: { role: "assistant", content: text },
+          usage: { inputTokens: 1, outputTokens: 1 },
+          provider: "test",
+          model: "test-model",
+          finishReason,
+        } as never;
+      },
+    });
+
+    it("names a truncated reply as truncated, not as bad formatting", async () => {
+      // Exactly the shape a cut-off reply has: valid JSON right up to where it stops.
+      const cutOff = '{"title": "Harbour", "scenes": [{"shotDescription": "A wide shot of the har';
+      const script = await writeVideoScript({ model: modelReturningWith(cutOff, "length") }, request);
+
+      expect(script.scriptSource).toBe("deterministic");
+      expect(script.fallbackReason).toMatch(/cut off by the output-token limit/i);
+      // And what it actually said, so the next person does not have to reproduce it.
+      expect(script.fallbackReason).toContain("A wide shot of the har");
+    });
+
+    it("names an empty reply as empty", async () => {
+      const script = await writeVideoScript({ model: modelReturningWith("   ", "stop") }, request);
+      expect(script.fallbackReason).toMatch(/returned an empty reply/i);
+      expect(script.fallbackReason).toContain("stop");
+    });
+
+    it("still reports genuinely unparseable prose as that, and quotes it", async () => {
+      const script = await writeVideoScript(
+        { model: modelReturningWith("Sure! I'd be happy to help you with that storyboard.", "stop") },
+        request
+      );
+      expect(script.fallbackReason).toMatch(/did not return a usable storyboard JSON object/i);
+      expect(script.fallbackReason).toContain("Sure! I'd be happy to help");
+    });
+
+    it("bounds the excerpt, because this string is persisted and rendered", async () => {
+      const script = await writeVideoScript({ model: modelReturningWith("x".repeat(5_000), "stop") }, request);
+      expect(script.fallbackReason!.length).toBeLessThan(320);
+      expect(script.fallbackReason).toContain("…");
+    });
+
+    it("flattens newlines out of the excerpt", async () => {
+      const script = await writeVideoScript({ model: modelReturningWith("line one\n\nline two", "stop") }, request);
+      expect(script.fallbackReason).toContain("line one line two");
+    });
+  });
+
   it("gives up on a model that never answers, and says that is why", async () => {
     // A provider that hangs. Before the deadline this held the HTTP request open with no bound.
     const hanging: ScriptModel = {

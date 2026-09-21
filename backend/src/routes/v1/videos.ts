@@ -72,6 +72,10 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
           // ADR-150: the storyboard is a real model call, so it is budgeted and recorded like
           // every other one. It was neither.
           modelCallMeter: ctx.modelCallMeter,
+          // ADR-161 — the operator's ceiling for this stage, and somewhere for it to say why it
+          // gave up. Without the logger the stage's own diagnosis was written to nothing.
+          ...(ctx.videoScriptTimeoutMs !== undefined ? { scriptTimeoutMs: ctx.videoScriptTimeoutMs } : {}),
+          logger: request.log,
         },
         {
           ...scope,

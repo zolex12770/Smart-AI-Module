@@ -68,6 +68,16 @@ export async function createVideoProject(
      * were both short by one model call per video, on the one path outside chat that makes one.
      */
     modelCallMeter?: ModelCallMeter;
+    /** Operator calibration for the storyboard call — ADR-161. Undefined keeps the 25s default. */
+    scriptTimeoutMs?: number;
+    /**
+     * Where the script stage's failure detail goes — ADR-161.
+     *
+     * `writeVideoScript` has always written a `logger.warn` naming the reason it fell back, and
+     * this call site passed no logger, so on the one path that runs in production the line went
+     * nowhere. The only surviving trace was the short `fallbackReason` string on the project row.
+     */
+    logger?: { warn(obj: unknown, msg: string): void };
   },
   input: CreateVideoProjectOptions
 ): Promise<VideoProject> {
@@ -83,7 +93,14 @@ export async function createVideoProject(
    */
   // Asked before, recorded after — the rule every other metered path follows (ADR-131).
   await deps.modelCallMeter?.check(input.projectId, input.request.prompt);
-  const script = await writeVideoScript({ model: deps.scriptModel }, input.request);
+  const script = await writeVideoScript(
+    {
+      model: deps.scriptModel,
+      ...(deps.scriptTimeoutMs !== undefined ? { timeoutMs: deps.scriptTimeoutMs } : {}),
+      ...(deps.logger ? { logger: deps.logger } : {}),
+    },
+    input.request
+  );
   if (script.provider && script.usage) {
     await deps.modelCallMeter?.record(
       input.projectId,
