@@ -55,6 +55,14 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
     Object.fromEntries(initialNodes.map((n) => [n.id, n]))
   );
   const [activity, setActivity] = useState<TaskActivity[]>([]);
+  /**
+   * Whether the screen is still live — docs/26_DECISIONS.md ADR-159.
+   *
+   * EventSource reconnects on its own, so "errored" and "stopped" are different states and the
+   * user needs to be able to tell them apart: a transient drop recovers, a CLOSED one does not
+   * and the page is showing a frozen snapshot from then on.
+   */
+  const [live, setLive] = useState<"live" | "reconnecting" | "disconnected">("live");
   const sourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -126,10 +134,19 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
     source.addEventListener("tool_result", onToolResult);
     source.addEventListener("verification", onVerification);
     source.onerror = () => {
-      // A closed/errored SSE connection just stops live updates; the page still shows the
-      // last known state, and a manual refresh re-fetches it — no retry loop needed for a
-      // single-operator dev tool like this.
+      /**
+       * Both halves of the old comment here were wrong — docs/26_DECISIONS.md ADR-159.
+       *
+       * It said a failed SSE connection "just stops live updates" and that no retry loop is
+       * needed. EventSource RECONNECTS on its own — it sets `readyState` to CONNECTING and
+       * retries about every three seconds, forever — so an endpoint answering 401 or 404
+       * produced a silent reconnect loop against the API rather than a stopped stream. And the
+       * two cases are not the same: a transient drop recovers by itself, while a CLOSED state
+       * is final and the user needs to know the screen has stopped being live.
+       */
+      setLive(source.readyState === EventSource.CLOSED ? "disconnected" : "reconnecting");
     };
+    source.onopen = () => setLive("live");
 
     return () => {
       source.removeEventListener("state", onState);
@@ -144,5 +161,5 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
   }, [taskId]);
 
   const nodes = Object.values(nodesById).sort((a, b) => a.createdAt - b.createdAt);
-  return { task, nodes, activity };
+  return { task, nodes, activity, live };
 }

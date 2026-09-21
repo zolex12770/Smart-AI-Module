@@ -108,13 +108,15 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     /** An already-built provider, for a test that needs to control WHEN a turn answers. */
     suppliedProvider?: ScriptedAgentProvider,
     /** A real meter, for the tests that assert what the run charged for (ADR-156). */
-    meter?: AgentEngineDeps["meter"]
+    meter?: AgentEngineDeps["meter"],
+    /** The audit sink the composition root supplies, for the tests that read the trail. */
+    auditSink?: (entry: { toolId: string; ok: boolean; outcome: string }) => void
   ) => {
     const provider = suppliedProvider ?? new ScriptedAgentProvider(turns);
     const registry = new ModelRegistry();
     registry.register(provider, { asDefault: true });
 
-    const toolRegistry = new ToolRegistry();
+    const toolRegistry = new ToolRegistry(auditSink ? { auditSink } : {});
     for (const { definition, handler } of [
       ...createFilesystemTools(sandboxRoot),
       ...createSearchTools(sandboxRoot),
@@ -982,5 +984,38 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     // The run still completes — the refusal is about the check, not the answer.
     expect(finished.state).toBe("COMPLETED");
     expect(checks).toBeGreaterThanOrEqual(2);
+  });
+
+  it("audits a tool name the model invented, instead of rejecting it before the registry", async () => {
+    /**
+     * docs/26_DECISIONS.md ADR-159. `approvalFor` THROWS `Unknown tool "x"` for an unregistered
+     * id, and the loop's own error handling swallowed that throw — so a hallucinated tool name
+     * was rejected before `ToolRegistry.call` was ever reached and produced no audit row and no
+     * tool-call sample. ADR-139 says every tool call a model makes is audited, and a model
+     * reaching for a tool that does not exist is exactly the event an operator wants to see.
+     */
+    const audited: Array<{ toolId: string; ok: boolean; outcome: string }> = [];
+    const { engine } = build(
+      [
+        { calls: [{ id: "c1", name: "fs.summon_pony", arguments: {} }] },
+        { text: "That tool does not exist; I stopped." },
+      ],
+      undefined,
+      [],
+      undefined,
+      undefined,
+      (entry) => audited.push(entry)
+    );
+
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Summon a pony." },
+      { projectId: PROJECT, userId: USER }
+    );
+    await waitFor(task.id, ["COMPLETED", "FAILED"]);
+
+    const row = audited.find((a) => a.toolId === "fs.summon_pony");
+    expect(row).toBeDefined();
+    expect(row?.ok).toBe(false);
   });
 });

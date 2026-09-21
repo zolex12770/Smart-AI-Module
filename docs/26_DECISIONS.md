@@ -2571,3 +2571,18 @@ The test that covers it **passes with the lock removed**, and is kept anyway. Th
 
 **Date:** 2026-09-21
 **Impact:** `backend/packages/mcp/src/client.ts`, `backend/packages/security/src/auth-service.ts`, `backend/packages/database/src/repositories/memory-item-repository.ts`, `backend/src/{config,context,index}.ts`, `backend/src/routes/v1/rag.ts`, `.env.example`, docs/27 + 4 tests.
+
+## ADR-159: A stream that went quiet, an error that erased the answer, and a tool call that was never audited
+
+**Decision:** the agent stream sends a keepalive, the client distinguishes a dropped connection from a closed one and says so, an in-band error keeps the text that already arrived, and a tool name the model invented goes through the audited path.
+
+**The live stream had no keepalive and the client's `onerror` did nothing.** An agent run can be silent for minutes — the reasoning loop's ceiling is ten of them, and a node parked for approval emits nothing at all until a human arrives — while Cloud Run's request timeout, every reverse proxy and most corporate middleboxes reap an idle connection long before that. A `:` comment frame every twenty seconds keeps the socket warm and delivers no event, so no listener sees it.
+
+The client's handler was empty, under a comment saying a failed SSE connection "just stops live updates" and that "no retry loop is needed". Both halves were wrong. EventSource reconnects by itself, about every three seconds, forever — so an endpoint answering 401 or 404 produced a silent reconnect loop against the API rather than a stopped stream. And a transient drop and a CLOSED state are not the same thing: one recovers, the other is final and leaves the screen showing a frozen snapshot while looking current. The hook reports which, and the task screen says so.
+
+**An in-band error erased the answer the user had already read.** The `error` branch replaced the assistant bubble outright, discarding every token streamed before the failure — while the transport-failure branch a few lines below deliberately keeps them, under a comment reading "what arrived before the stop is a real answer as far as it goes". Two paths, opposite policies, same situation; and the one a provider dying mid-answer actually takes was the one that erased it. It keeps both now, and the server stores the partial turn with the same marker (ADR-151), so the transcript and the screen agree.
+
+**And a hallucinated tool name was the one kind of tool call that was never audited.** `approvalFor` throws `Unknown tool "x"` for an unregistered id, and the loop's own error handling swallowed the throw — so the call was rejected before `ToolRegistry.call` was reached, and produced no audit row and no tool-call sample. ADR-139 says every tool call a model makes is audited; a model reaching for a tool that does not exist is precisely the event an operator wants in that trail. Existence is resolved first now and the rejection flows through `call`, which audits it.
+
+**Date:** 2026-09-21
+**Impact:** `backend/src/routes/v1/agent.ts`, `backend/packages/agent-core/src/engine.ts`, `frontend/app/lib/use-task-events.ts`, `frontend/app/chat/ChatView.tsx`, `frontend/app/agent/TaskDetail.tsx` + 2 tests.

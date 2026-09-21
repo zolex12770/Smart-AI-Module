@@ -87,6 +87,35 @@ describe("ChatView failure and stop", () => {
     expect(screen.getByText(/connection reset/)).toBeInTheDocument();
   });
 
+
+  it("keeps the text that arrived before an IN-BAND error, not only a transport one", async () => {
+    /**
+     * docs/26_DECISIONS.md ADR-159. The `error` branch replaced the bubble outright, discarding
+     * every token streamed before the failure — while the transport-failure branch, asserted by
+     * the test above, deliberately keeps them under a comment saying "what arrived before the
+     * stop is a real answer as far as it goes". The two paths described opposite policies for
+     * the same situation, and the one a provider dying mid-answer actually takes was the one
+     * that erased what the user had already read.
+     */
+    streamChat.mockImplementation(() =>
+      (async function* () {
+        yield { type: "token", delta: "Half an ans" } as ChatStreamEvent;
+        yield {
+          type: "error",
+          message: "The model provider failed partway through responding.",
+        } as ChatStreamEvent;
+      })()
+    );
+
+    await send("hello");
+
+    await waitFor(() => {
+      expect(screen.getByText(/failed partway through/i)).toBeInTheDocument();
+    });
+    // Both, in one bubble: the answer as far as it went, and why it stopped.
+    expect(screen.getByText(/Half an ans/)).toBeInTheDocument();
+  });
+
   it("offers a stop control while streaming that aborts the request", async () => {
     let capturedSignal: AbortSignal | undefined;
     // A stream that never finishes on its own: only an abort ends it.

@@ -909,6 +909,29 @@ export class AgentEngine {
               );
             },
             executeTool: async ({ call }) => {
+              /**
+               * A name the model invented goes through `call`, not through the gate — ADR-159.
+               *
+               * `approvalFor` THROWS `Unknown tool "x"` for an unregistered id, and that throw
+               * was swallowed by the loop's own error handling — so a hallucinated tool name was
+               * rejected before `ToolRegistry.call` was ever reached, and produced no audit row
+               * and no `tool_call_count` sample. ADR-139 says every tool call a model makes is
+               * audited; a model reaching for a tool that does not exist is exactly the event an
+               * operator wants in that trail, and it was the one kind that never appeared.
+               */
+              if (!this.deps.toolRegistry.get(call.name)) {
+                const rejected = await this.deps.toolRegistry.call(call.name, call.arguments, {
+                  projectId: task.projectId,
+                  userId,
+                  workspaceRoot: this.deps.workspaceRoot,
+                  signal: controller.signal,
+                });
+                return {
+                  ok: false,
+                  content: rejected.error ?? `Unknown tool "${call.name}".`,
+                };
+              }
+
               // Approval is resolved per call, per project — the four modes are real (ADR-059).
               // Every call goes through the gate, including one whose id matches an approved
               // call's (ADR-108).

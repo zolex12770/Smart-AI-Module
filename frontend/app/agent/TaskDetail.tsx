@@ -26,7 +26,7 @@ export default function TaskDetail({
   initialNodes: TaskNode[];
   variant?: "agent" | "coding";
 }) {
-  const { task, nodes, activity } = useTaskEvents(taskId, initialTask, initialNodes);
+  const { task, nodes, activity, live } = useTaskEvents(taskId, initialTask, initialNodes);
   const [busyNodeId, setBusyNodeId] = useState<string | null>(null);
   /**
    * A refusal has to be VISIBLE — docs/26_DECISIONS.md ADR-148.
@@ -126,6 +126,15 @@ export default function TaskDetail({
         </div>
       </div>
 
+      {/* ADR-159 — EventSource reconnects by itself, so a dropped stream is not the same as a
+          stopped one, and a screen that has quietly frozen must say so rather than look current. */}
+      {live !== "live" && !TERMINAL_STATES.has(task.state) && (
+        <p className="page-subtitle">
+          {live === "reconnecting"
+            ? "Live updates dropped — reconnecting…"
+            : "Live updates disconnected. Reload to see the current state."}
+        </p>
+      )}
       {cancelError && <p className="error-text">{cancelError}</p>}
 
       <div className="card">

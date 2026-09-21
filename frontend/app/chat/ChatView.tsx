@@ -103,7 +103,26 @@ export default function ChatView({
             })
           );
         } else if (event.type === "error") {
-          setMessages((prev) => replaceLast(prev, { role: "assistant", content: event.message, isError: true }));
+          /**
+           * The text that already arrived is kept — docs/26_DECISIONS.md ADR-159.
+           *
+           * This replaced the bubble outright, discarding every token streamed before the
+           * failure — while the transport-failure branch below deliberately keeps them, with a
+           * comment saying "what arrived before the stop is a real answer as far as it goes".
+           * The two paths described opposite policies for the same situation, and the one a
+           * provider dying mid-answer actually takes was the one that erased what the user had
+           * read. The server stores the partial turn with the same marker (ADR-151), so the
+           * transcript and the screen agree.
+           */
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            const partial = last?.role === "assistant" ? last.content : "";
+            return replaceLast(prev, {
+              role: "assistant",
+              content: partial ? `${partial}\n\n${event.message}` : event.message,
+              isError: true,
+            });
+          });
         }
         result = await stream.next();
       }

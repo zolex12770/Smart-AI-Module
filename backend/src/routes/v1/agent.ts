@@ -153,11 +153,33 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
     // event bus — which is keyed by task id alone and knows nothing about tenancy — is never
     // subscribed to on behalf of someone who could not read the task in the first place.
     const unsubscribe = ctx.engine.subscribe(task.id, send);
+
+    /**
+     * A comment frame every 20 seconds — docs/26_DECISIONS.md ADR-159.
+     *
+     * An agent run can be silent for minutes: the reasoning loop's ten-minute ceiling is a
+     * documented limit, and a node waiting for approval emits nothing at all until a human
+     * arrives. Cloud Run's request timeout, every reverse proxy and most corporate middleboxes
+     * reap an idle connection long before that, and the client's `onerror` used to do nothing
+     * — so the stream went quiet and stayed quiet, on the screen whose whole job is showing
+     * what the run is doing right now.
+     *
+     * A `:` line is an SSE comment: it keeps the socket warm and delivers no event, so no
+     * listener sees it and no client needs to know it exists.
+     */
+    const keepalive = setInterval(() => {
+      if (reply.raw.writableEnded || reply.raw.destroyed) return;
+      reply.raw.write(": keepalive\n\n");
+    }, 20_000);
+    (keepalive as unknown as { unref?: () => void }).unref?.();
     // `request.raw` is the right hook *here* and the wrong one in chat.ts: this is a bodyless
     // GET, so Fastify never drains and destroys the request stream, and its `close` fires only
     // when the client actually goes away. A POST's request stream is destroyed as soon as the
     // body is parsed — see the long note in routes/v1/chat.ts before copying this pattern.
-    request.raw.on("close", unsubscribe);
+    request.raw.on("close", () => {
+      clearInterval(keepalive);
+      unsubscribe();
+    });
   });
 
   app.post<{ Params: { id: string } }>("/api/v1/agent/tasks/:id/approve", async (request) => {
