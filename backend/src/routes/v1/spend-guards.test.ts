@@ -200,20 +200,49 @@ describe("spend guards", () => {
    * addressed by name and a completed job re-sent to it, repeatedly.
    */
   it("refuses to replay a speech job when the speech budget is spent", async () => {
+    /**
+     * This test could only ever take the 404 branch — docs/26_DECISIONS.md ADR-159.
+     *
+     * It posted a UUID that was never inserted, so `getDeadLettered` returned null, the route's
+     * `sourceQueue === "audio.generate" && payload` arm was never entered, and the assertion
+     * `expect([429, 404]).toContain(...)` was satisfied by the 404 that a missing job produces
+     * whatever the pricing code does. The branch it is named for — ADR-130's speech pricing —
+     * was executed by nothing.
+     *
+     * A REAL dead letter now: an `audio.generate` job whose payload names a real generation row
+     * with real text, failed into its dead-letter queue, replayed against a zero-character
+     * ceiling. The disjunction is gone: this asserts 429.
+     */
+    const generation = await ctx.audioGenerations.create({
+      id: "dead-letter-speech",
+      projectId: auth.projectId,
+      createdByUserId: auth.userId,
+      request: { text: "a hundred characters of narration that will be priced on replay", speed: 1 },
+    });
+
+    /**
+     * The dead letter is seeded directly onto the dead-letter QUEUE, which is what a dead letter
+     * IS: `getDeadLettered` reads `pgboss.job where name = 'audio.generate.dlq'`. Driving a
+     * real failure through pg-boss's retry and archive machinery takes tens of seconds and adds
+     * nothing — the route under test reads this row and nothing else.
+     */
+    await ctx.jobQueue.ensureQueueWithDeadLetter("audio.generate", { retryLimit: 0, expireInSeconds: 5 });
+    const deadLetterId = await ctx.jobQueue.enqueue("audio.generate.dlq", {
+      projectId: auth.projectId,
+      generationId: generation.id,
+    });
+    expect(deadLetterId).toBeTruthy();
+
     ctx.quota = new QuotaManager(new PgUsageRecordRepository(db), { dailySpeechCharacterLimit: 0 });
     const res = await app.inject({
       method: "POST",
-      url: "/api/v1/jobs/dead-letter/audio.generate.dlq/7d8f3c2e-1b4a-4c6d-9e8f-0a1b2c3d4e5f/replay",
+      url: `/api/v1/jobs/dead-letter/audio.generate.dlq/${deadLetterId}/replay`,
       headers: auth.headers,
       payload: {},
     });
-    // Zero budget refuses even a zero-character replay: the ceiling is consulted, which is the
-    // property that was missing entirely.
-    expect([429, 404]).toContain(res.statusCode);
-    if (res.statusCode === 404) {
-      // A payload that cannot be read prices nothing; the replay itself must still refuse.
-      expect(JSON.stringify(res.json())).toMatch(/not found/i);
-    }
+
+    expect(res.statusCode).toBe(429);
+    expect((res.json() as { error: { code: string } }).error.code).toBe("QUOTA_EXCEEDED");
   });
 
   it("refuses to replay from a live queue name, not only from a dead-letter queue", async () => {

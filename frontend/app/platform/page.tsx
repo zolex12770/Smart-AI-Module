@@ -266,6 +266,11 @@ function PlatformView() {
           {mcp.map((server) => (
             <li key={server.id}>
               <strong>{server.id}</strong> — {server.status}
+              {/* The wire it came up on (ADR-159): stdio, Streamable HTTP, or the deprecated SSE
+                  fallback. Returned by the route with a comment saying it is there for an
+                  operator to see, and read by nothing until now — and an unexpected fallback to
+                  the deprecated transport is exactly what an operator would want to notice. */}
+              {server.transport ? ` via ${server.transport}` : ""}
               {typeof server.toolCount === "number" ? ` (${server.toolCount} tools)` : ""}
               {server.lastError ? <span className="auth-error"> {server.lastError}</span> : null}
               {server.refusedToolIds && server.refusedToolIds.length > 0 ? (

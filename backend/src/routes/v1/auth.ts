@@ -247,6 +247,18 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     return { members: await ctx.auth.listProjectMembers(authCtx) };
   });
 
+  /**
+   * Deleting a project — ADR-159. `projects.deleted_at` was documented in the schema and had no
+   * writer anywhere, so the soft delete did not exist and the per-organization cap could never
+   * be freed.
+   */
+  app.delete<{ Params: { projectId: string } }>("/api/v1/projects/:projectId", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "project:admin");
+    const deleted = await ctx.auth.deleteProject(authCtx, { ipAddress: request.ip, requestId: request.id });
+    if (!deleted) throw new NotFoundError(`Project "${request.params.projectId}" not found.`);
+    return { ok: true };
+  });
+
   app.post("/api/v1/projects/:projectId/members", async (request, reply) => {
     const authCtx = await requireProject(request, ctx.auth, "project:admin");
     const parsed = addProjectMemberRequestSchema.safeParse(request.body);

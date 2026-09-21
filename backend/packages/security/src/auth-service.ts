@@ -814,7 +814,9 @@ export class AuthService {
       const [existing] = await tx
         .select({ total: count() })
         .from(projects)
-        .where(eq(projects.organizationId, organizationId));
+        // Only LIVE projects consume a slot (ADR-159). Counting soft-deleted ones would make
+        // the delete route pointless: an organization at its limit would stay there.
+        .where(and(eq(projects.organizationId, organizationId), isNull(projects.deletedAt)));
       if ((existing?.total ?? 0) >= this.maxProjectsPerOrganization) {
         throw new ValidationError(
           `This organization already has the maximum of ${this.maxProjectsPerOrganization} projects.`
@@ -905,6 +907,59 @@ export class AuthService {
       resourceType: "user",
       resourceId: userId,
       detail: { role: target.role },
+    });
+    return true;
+  }
+
+  /**
+   * Soft-deleting a project — docs/26_DECISIONS.md ADR-159.
+   *
+   * `projects.deleted_at` is documented in the schema ("a deleted project's content stays
+   * readable to an admin for audit") and had no writer at all: `grep` returned two reads —
+   * `authorizeProject` and `listProjectsForUser`, both filtering on `IS NULL` — and no route,
+   * no service method, nothing. So the documented soft delete did not exist, and the
+   * per-organization cap could never be freed: an organization that reached its limit stayed
+   * there for good, because the only way out was deleting the whole account.
+   *
+   * `project:admin`, and the last project of an organization is refused: an organization with no
+   * projects cannot be acted in at all, and `createProject` needs an organization membership
+   * rather than a project one, so this is a door that can be reopened — but leaving a tenant
+   * with nothing selected is a state the product has no screen for.
+   */
+  async deleteProject(ctx: AuthContext, meta: RequestMeta = {}): Promise<boolean> {
+    if (!ctx.projectId) throw new ValidationError("A project must be selected.");
+    const [target] = await this.db
+      .select({ organizationId: projects.organizationId })
+      .from(projects)
+      .where(and(eq(projects.id, ctx.projectId), isNull(projects.deletedAt)))
+      .limit(1);
+    if (!target) return false;
+
+    const [remaining] = await this.db
+      .select({ total: count() })
+      .from(projects)
+      .where(and(eq(projects.organizationId, target.organizationId), isNull(projects.deletedAt)));
+    if ((remaining?.total ?? 0) <= 1) {
+      throw new ValidationError(
+        "This is the organization's last project. Create another before deleting this one."
+      );
+    }
+
+    const now = this.now();
+    await this.db
+      .update(projects)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(and(eq(projects.id, ctx.projectId), isNull(projects.deletedAt)));
+
+    await this.recordAudit({
+      userId: ctx.user.id,
+      projectId: ctx.projectId,
+      action: "project.delete",
+      outcome: "success",
+      method: ctx.method,
+      resourceType: "project",
+      resourceId: ctx.projectId,
+      ...meta,
     });
     return true;
   }

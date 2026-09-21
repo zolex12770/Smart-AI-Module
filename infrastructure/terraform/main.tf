@@ -290,7 +290,22 @@ resource "google_cloud_run_v2_service" "api" {
 
     scaling {
       min_instance_count = 0 # scale-to-zero, docs/18 §4.
-      max_instance_count = 3
+      /**
+       * ONE instance, deliberately — docs/26_DECISIONS.md ADR-159.
+       *
+       * The api role runs the agent engine in-process, and the live task stream is an in-process
+       * `EventEmitter`: `engine.subscribe(taskId, send)` only ever hears events emitted by the
+       * SAME process. With three instances and no session affinity, a `POST /agent/tasks` and
+       * the `GET .../events` that follows it land on different instances about two times in
+       * three — and the stream then delivers nothing at all, silently, on the screen whose whole
+       * purpose is showing what the run is doing.
+       *
+       * ADR-151's execution lease makes multi-instance DISPATCH safe; the event bus is the part
+       * that is still single-process. Raising this number requires a cross-instance bus —
+       * Postgres LISTEN/NOTIFY keyed by task id is already available here — not just affinity,
+       * which does not guarantee that the POST and the GET share an instance either.
+       */
+      max_instance_count = 1
     }
 
     volumes {
@@ -328,6 +343,44 @@ resource "google_cloud_run_v2_service" "api" {
       # a model-chosen command that escapes its workspace reaches this container's filesystem and
       # network. The container is the blast radius, which is why the service account below is
       # scoped to one bucket and one database rather than to the project.
+      /**
+       * The health endpoint is finally consumed — ADR-159.
+       *
+       * `/api/health` has existed since the first phase and `grep -rn "api/health" infrastructure/
+       * .github/` returned nothing: no startup probe, no liveness probe, and the CI boot gate
+       * only checked that the process had not exited. So a revision whose server was listening
+       * but whose database was unreachable was rolled out as healthy, and a process that wedged
+       * after boot was never restarted.
+       *
+       * The port is stated alongside, matching the Dockerfile's EXPOSE: a probe needs one, and
+       * leaving Cloud Run to infer it while a probe names it is how the two drift.
+       */
+      ports {
+        container_port = 8080
+      }
+
+      startup_probe {
+        http_get {
+          path = "/api/health"
+          port = 8080
+        }
+        # Generous: the first request runs migrations against Cloud SQL.
+        initial_delay_seconds = 5
+        timeout_seconds       = 5
+        period_seconds        = 10
+        failure_threshold     = 12
+      }
+
+      liveness_probe {
+        http_get {
+          path = "/api/health"
+          port = 8080
+        }
+        period_seconds    = 30
+        timeout_seconds   = 5
+        failure_threshold = 3
+      }
+
       env {
         name  = "SANDBOX_ALLOW_PROCESS_IN_PRODUCTION"
         value = "true"

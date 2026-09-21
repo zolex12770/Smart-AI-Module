@@ -305,6 +305,23 @@ jobs:
       # The ADR-047 audit found the API image could never boot, and the reason was invisible
       # because no image had ever been built. Building both images in CI is what stops that
       # class of defect from recurring.
+      # The real-container sandbox suite — docs/26_DECISIONS.md ADR-159.
+      #
+      # `backend/packages/security/vitest.config.ts` excludes `sandbox.docker.test.ts` from the
+      # default run because no developer machine here has a docker daemon, and the suite THROWS
+      # rather than skips when one is missing — deliberately, so it cannot pass by doing nothing.
+      # It was therefore the one part of the isolation story never executed anywhere, while this
+      # job has had a working daemon all along. It runs before the image builds so a failure is
+      # attributed to the sandbox rather than to a build step.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build:packages
+
+      - name: Docker sandbox isolation suite (real containers)
+        run: npm run test:docker --workspace=@ai-platform/security
+
       - name: Build the API image
         run: docker build -f backend/Dockerfile -t ai-platform-api:ci .
 

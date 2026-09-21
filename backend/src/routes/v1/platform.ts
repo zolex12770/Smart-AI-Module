@@ -356,4 +356,13 @@ export const PLATFORM_ROUTE_PERMISSIONS: Record<string, Permission | "system-adm
   "POST /api/v1/mcp/:id/reconnect": "system-admin",
   "GET /api/v1/jobs": "project:read",
   "POST /api/v1/jobs/:queue/:id/cancel": "project:write",
+  // The five this table was missing — docs/26_DECISIONS.md ADR-159. Its own docstring says "a
+  // route missing from it reads as unprotected, and silently omitting the admin routes would
+  // make the strongest guard the least visible", and three of the five omitted were exactly
+  // those admin routes. Nothing imported the table, so nothing could notice.
+  "GET /api/v1/jobs/dead-letter": "project:read",
+  "POST /api/v1/jobs/dead-letter/:queue/:id/replay": "project:write",
+  "GET /api/v1/admin/health": "system-admin",
+  "GET /api/v1/admin/metrics": "system-admin",
+  "GET /api/v1/admin/stats": "system-admin",
 };
