@@ -92,7 +92,15 @@ test.describe("system-admin boundary", () => {
     // ...and the same call the button makes really succeeds for this session.
     expect(await statusOfEnableCall(page)).toBe(200);
 
-    // Pressing it changes the listed state, which is the point of the control existing.
+    /**
+     * PRESSED, not just bound — ADR-160.
+     *
+     * This comment said "pressing it changes the listed state" above a `reload()`, and nothing
+     * ever clicked: the state had already flipped because `statusOfEnableCall` made the same
+     * call by hand a line earlier. So the one assertion about the CONTROL was being satisfied by
+     * a raw fetch, and an onClick wired to nothing would have passed.
+     */
+    await page.getByRole("button", { name: /^enable$/i }).first().click();
     await page.reload();
     await page.getByLabel(/task type/i).selectOption("mcp_read_and_summarize");
     await expect(page.getByRole("button", { name: /^disable$/i }).first()).toBeVisible({ timeout: 30_000 });
