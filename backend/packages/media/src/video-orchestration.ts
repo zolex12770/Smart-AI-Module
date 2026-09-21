@@ -10,6 +10,7 @@ import type { JobQueue } from "@ai-platform/jobs";
 import { writeVideoScript, type ScriptModel } from "./video-script.js";
 import type { SpeechProvider } from "./speech.js";
 import { describeFailureForCaller } from "./failure-message.js";
+import { watchForCancellation } from "./cancellation-watch.js";
 import type { AssetStore } from "./asset-store.js";
 
 /**
@@ -99,36 +100,35 @@ export async function createVideoProject(
       }
     );
   }
+  const storedScript = {
+    title: script.title,
+    scriptSource: script.scriptSource,
+    model: script.model,
+    fallbackReason: script.fallbackReason,
+    scenesWritten: script.scenesWritten,
+    scenes: script.scenes.map((scene) => ({
+      sceneIndex: scene.sceneIndex,
+      shotDescription: scene.shotDescription,
+      // `undefined` rather than null for a silent scene: `VideoScriptScene.narration` is
+      // optional, and an explicit null would serialise a field that means "absent".
+      narration: scene.narration ?? undefined,
+      durationSeconds: scene.durationSeconds,
+    })),
+  };
+
   const project = await deps.projectRepo.create({
     id: input.videoProjectId,
     projectId: input.projectId,
     createdByUserId: input.createdByUserId,
     prompt: input.request.prompt,
-    // Persisted so the API and the UI can show what was written, and so the distinction between
-    // an authored and a mechanical storyboard survives past this function.
-    script: {
-      title: script.title,
-      scriptSource: script.scriptSource,
-      model: script.model,
-      fallbackReason: script.fallbackReason,
-      /**
-       * How much of this storyboard the model really wrote — docs/26_DECISIONS.md ADR-137.
-       *
-       * A reply describing two shots for a five-scene video was padded by cycling those two, and
-       * the project still recorded `scriptSource: "model"` with no qualification — so a screen
-       * reading "Written by qwen2.5" was describing three shots the model never wrote. Persisted
-       * beside the source so the distinction survives the request that made it.
-       */
-      scenesWritten: script.scenesWritten,
-      scenes: script.scenes.map((scene) => ({
-        sceneIndex: scene.sceneIndex,
-        shotDescription: scene.shotDescription,
-        // `undefined` rather than null for a silent scene: `VideoScriptScene.narration` is
-        // optional, and an explicit null would serialise a field that means "absent".
-        narration: scene.narration ?? undefined,
-        durationSeconds: scene.durationSeconds,
-      })),
-    },
+    /**
+     * Persisted so the API and the UI can show what was written, and so the distinction between
+     * an authored and a mechanical storyboard survives past this function. `scenesWritten` is
+     * how much of it the model really wrote (ADR-137): a reply describing two shots for a
+     * five-scene video was padded by cycling those two while the project still recorded
+     * `scriptSource: "model"` with no qualification.
+     */
+    script: storedScript,
     targetDurationSeconds: input.request.targetDurationSeconds,
     sceneClipSeconds: input.request.sceneClipSeconds,
     sceneCount: script.scenes.length,
@@ -137,8 +137,20 @@ export async function createVideoProject(
     // and a row parked there forever would be a status that lies about what is happening.
     status: "generating_scenes",
   });
-  await deps.sceneRepo.createMany(
-    { projectId: input.projectId, videoProjectId: input.videoProjectId },
+  /**
+   * The scenes and the parent row go in together — docs/26_DECISIONS.md ADR-157.
+   *
+   * This used to be a `create` followed by a `createMany`: two writes with no transaction, so a
+   * process that died between them left a video project claiming N scenes with none of them
+   * written, which nothing could then repair. `applyScript` was built for exactly this — its
+   * docstring says so, and it does the delete-and-replace inside one transaction with the tenant
+   * check in the `WHERE` — and it had no caller anywhere: the interface advertised a guarantee no
+   * code path provided.
+   */
+  await deps.projectRepo.applyScript(
+    input.projectId,
+    input.videoProjectId,
+    storedScript,
     script.scenes.map((s) => ({
       id: uuid(),
       sceneIndex: s.sceneIndex,
@@ -177,12 +189,18 @@ export async function orchestrateVideoProject(
     throw new Error(`Unknown video project "${scope.videoProjectId}" in project "${scope.projectId}".`);
   }
 
-  // The other half of the retry defect: a project that already reached `succeeded` has every
-  // scene generated and its render settled, so a retry has nothing to regenerate — it would
-  // only spend provider calls and write usage rows for an identical result. The old code
-  // went straight to the scene list and, finding nothing outstanding, still fell through to
-  // the completion check below.
-  if (project.status === "succeeded") return;
+  /**
+   * A finished project has nothing to regenerate — unless its RENDER never happened.
+   *
+   * `processVideoRender` marks the project `succeeded` when it skipped for want of ffmpeg
+   * (every scene really did generate, and the clips are individually available), so a
+   * deployment that installs ffmpeg afterwards had a project that was permanently un-renderable:
+   * this early return sent the retry straight back, and the only Retry control in the product
+   * was gated on a failed SCENE, which a render failure precludes by construction
+   * (docs/26_DECISIONS.md ADR-157).
+   */
+  const renderIncomplete = project.renderStatus === "failed" || project.renderStatus === "skipped_no_ffmpeg";
+  if (project.status === "succeeded" && !renderIncomplete) return;
 
   /**
    * A retry spends the cancellation request — docs/26_DECISIONS.md ADR-150.
@@ -205,7 +223,11 @@ export async function orchestrateVideoProject(
   // otherwise it is a one-shot latch and the completion check below could never enqueue the
   // second render this retry exists to produce. A `pending`/`processing` render is still in
   // flight and keeps its claim.
-  if (project.renderStatus === "failed") {
+  // `skipped_no_ffmpeg` releases too (ADR-157). `releaseRenderSlot`'s own docstring has always
+  // said it covers "a failed OR SKIPPED render"; only the failed half was implemented, so the
+  // slot stayed latched and the completion check below could never enqueue the second render
+  // this retry exists to produce.
+  if (renderIncomplete) {
     await deps.projectRepo.releaseRenderSlot(scope.videoProjectId);
   }
 
@@ -289,12 +311,25 @@ export async function processVideoScene(
 
   await deps.sceneRepo.updateStatus(scope, sceneId, "processing");
 
+  /**
+   * Cancellation, while the provider is still running — ADR-157.
+   *
+   * The flag was read once, above, and ignored from then on. A video prediction runs for
+   * minutes and bills for all of them, so "cancel" that only applies before the call starts is
+   * the half that matters least. The watch polls the project row, which the API role writes.
+   */
+  const watch = watchForCancellation(async () => {
+    const current = await deps.projectRepo.get(scope.projectId, scope.videoProjectId);
+    return Boolean(current?.cancelRequestedAt);
+  });
+
   try {
     const result = await deps.provider.generateVideo(
       { prompt: scene.shotDescription, sceneIndex: scene.sceneIndex, durationSeconds: scene.durationSeconds },
       // The clip belongs to the tenant that asked for the video (ADR-049) — `assets.project_id`
       // is the scope every later read of these bytes, including the render's, filters on.
-      (bytes, mimeType, ext) => deps.assetStore.store(scope.projectId, bytes, mimeType, ext, "video")
+      (bytes, mimeType, ext) => deps.assetStore.store(scope.projectId, bytes, mimeType, ext, "video"),
+      watch.signal
     );
 
     if (result.status !== "succeeded" || !result.video) {
@@ -356,6 +391,15 @@ export async function processVideoScene(
       });
     }
   } catch (err) {
+    if (watch.wasCancelled()) {
+      // Not a failure: the user asked for it to stop. Recording it as `failed` would put a
+      // defect in the project's own history, and the queue would retry it (ADR-157).
+      await deps.sceneRepo.updateStatus(scope, sceneId, "cancelled", {
+        lastError: "Cancelled while the provider was generating this scene.",
+      });
+      await checkProjectCompletion(deps, scope, requestId);
+      return;
+    }
     deps.logger?.warn({ sceneId, videoProjectId: scope.videoProjectId, error: String(err) }, "video scene threw");
     await deps.sceneRepo.updateStatus(scope, sceneId, "failed", {
       lastError: describeFailureForCaller("video", err),
@@ -375,6 +419,7 @@ export async function processVideoScene(
     throw err;
   }
 
+  watch.stop();
   await checkProjectCompletion(deps, scope, requestId);
 }
 

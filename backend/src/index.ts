@@ -45,6 +45,7 @@ import {
   processVideoRender,
   processVideoScene,
   type AssetStore,
+  watchForCancellation,
   type SpeechProvider,
 } from "@ai-platform/media";
 import { estimateLlmCostUsd, estimatePromptTokens, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
@@ -971,11 +972,28 @@ async function main() {
           const startedAt = Date.now();
           let outcome: Awaited<ReturnType<typeof processAudioGeneration>> | undefined;
           try {
-            outcome = await processAudioGeneration(
-              { generationRepo: audioGenerations, assetStore, speech, ffmpegPath: config.FFMPEG_PATH },
-              projectId,
-              generationId
-            );
+            /**
+             * The signal this function has always taken — ADR-157.
+             *
+             * `processAudioGeneration` threads it into `speech.synthesize` and has a `cancelled`
+             * branch, and this call passed three arguments: the parameter was always undefined,
+             * so the branch was unreachable and pressing Cancel on a long synthesis did nothing
+             * but write a column. The watch polls the generation row, which the API role writes.
+             */
+            const watch = watchForCancellation(async () => {
+              const current = await audioGenerations.get(projectId, generationId);
+              return Boolean(current?.cancelRequestedAt);
+            });
+            try {
+              outcome = await processAudioGeneration(
+                { generationRepo: audioGenerations, assetStore, speech, ffmpegPath: config.FFMPEG_PATH, logger },
+                projectId,
+                generationId,
+                watch.signal
+              );
+            } finally {
+              watch.stop();
+            }
           } finally {
             // In `finally` for the same reason as the image worker: a provider that throws is
             // exactly the case a failure rate exists to show.

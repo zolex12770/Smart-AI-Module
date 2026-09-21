@@ -51,7 +51,18 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
   if (error) return <div className="page error-text">{error}</div>;
   if (!project) return <div className="page empty-state">Loading…</div>;
 
+  /**
+   * What a retry can actually fix — docs/26_DECISIONS.md ADR-157.
+   *
+   * The Retry control was gated on a failed SCENE, and `processVideoRender` only runs once every
+   * scene has succeeded — so a render that failed, or that was skipped because the deployment
+   * had no ffmpeg, could never be retried from the product at all. Those are precisely the two
+   * states a retry exists for: the scenes are generated and paid for, and only the assembly is
+   * missing.
+   */
   const hasFailedScenes = scenes.some((s) => s.status === "failed");
+  const renderIncomplete = project.renderStatus === "failed" || project.renderStatus === "skipped_no_ffmpeg";
+  const canRetry = hasFailedScenes || renderIncomplete;
 
   return (
     <div className="page">
@@ -62,9 +73,9 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <StatusBadge status={project.status} />
-          {hasFailedScenes && (
+          {canRetry && (
             <button className="btn" disabled={retrying} onClick={handleRetry}>
-              {retrying ? "Retrying…" : "Retry failed scenes"}
+              {retrying ? "Retrying…" : hasFailedScenes ? "Retry failed scenes" : "Retry rendering"}
             </button>
           )}
           {["generating_scenes", "assembling"].includes(project.status) && !project.cancelRequestedAt && (

@@ -2539,3 +2539,18 @@ A refused check returns "verification could not be evaluated" rather than throwi
 
 **Date:** 2026-09-21
 **Impact:** `backend/packages/agent-core/src/engine.ts` + 2 tests.
+
+## ADR-157: Cancellation that stopped nothing, and a render that could never be retried
+
+**Decision:** a cancellation request reaches the call that is still running, a render honours it, a failed or skipped render can be retried from the product, and a video project's scenes are written in the same transaction as the project.
+
+**ADR-122's Cancel button recorded a request nothing acted on.** Every media row got a `cancel_requested_at` column and a route to set it, and the workers read it exactly once — before starting. `processAudioGeneration` takes a `signal`, threads it into `speech.synthesize` and has a `cancelled` branch; its one production caller passed three arguments, so the parameter was always `undefined` and the branch unreachable. `VideoProvider.generateVideo` had no signal parameter at all, so the Replicate adapter's own cancel endpoint — which exists, and which stops a prediction that is still billing — could not be reached from the platform, under a comment in that adapter explaining that it takes one "for a caller that HAS a cancellation token". And `processVideoRender` never read the flag, while `requestCancel` accepts `assembling` and the screen offers Cancel there: pressing it during assembly ran the full eight-invocation render to completion on a project the user had abandoned.
+
+The request is written by the API role and read by the worker role, so it is polled rather than listened for: a few seconds is the resolution of the cancellation, which bounds the waste without turning a provider call into a database loop. A cancelled scene settles `cancelled`, not `failed` — a failure would put a defect in the project's history and the queue would retry it. And the render reads the flag before the ffmpeg probe, so a cancelled project is never recorded as `skipped_no_ffmpeg` and `succeeded`, which is a different claim and the one somebody would have to un-pick later.
+
+**A render that did not happen could never be made to happen.** `processVideoRender` runs only once every scene has succeeded, so a render failure implies zero failed scenes — and the only Retry control in the product was gated on a failed SCENE. Behind it, `orchestrateVideoProject` returned early for any project already marked `succeeded`, which is exactly what a render skipped for want of ffmpeg leaves behind, and released the render slot only for `failed`. `releaseRenderSlot`'s own docstring says it covers "a failed **or skipped** render"; only the failed half existed, so the slot stayed latched and the completion check could never enqueue the second render. A deployment that installed ffmpeg afterwards had a project whose scenes were generated and paid for and whose assembly was permanently out of reach.
+
+**And `applyScript` was written for a problem nobody let it solve.** It creates a project's scenes and updates the parent in ONE transaction, with the tenant check inside the `WHERE`, and its docstring explains why: a half-written storyboard is a project claiming N scenes with none of them written. It had no caller. `createVideoProject` did a `create` followed by a `createMany` — two writes, no transaction — so a process that died between them left exactly the state the method exists to prevent, and the interface advertised a guarantee no code path provided.
+
+**Date:** 2026-09-21
+**Impact:** `shared/src/video.ts`, `backend/packages/media/src/{cancellation-watch.ts (new),video-orchestration,video-render}.ts`, `backend/src/index.ts`, `frontend/app/videos/[id]/page.tsx` + 9 tests.

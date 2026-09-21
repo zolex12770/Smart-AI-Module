@@ -110,6 +110,14 @@ export const DEFAULT_FFMPEG_TIMEOUT_MS = 900_000;
  */
 export const DEFAULT_RENDER_BUDGET_MS = 3_600_000;
 
+/** Thrown by the step guard when the project's cancellation request is seen (ADR-157). */
+class RenderCancelled extends Error {
+  constructor() {
+    super("The render was cancelled.");
+    this.name = "RenderCancelled";
+  }
+}
+
 /**
  * What the composed render produced besides the video — ADR-081.
  *
@@ -162,7 +170,28 @@ export async function processVideoRender(
   const budgetMs = deps.renderBudgetMs ?? DEFAULT_RENDER_BUDGET_MS;
   const deadline = Date.now() + budgetMs;
   const perCallMs = deps.ffmpegTimeoutMs ?? DEFAULT_FFMPEG_TIMEOUT_MS;
-  const ffmpeg = (args: string[]) => {
+  /**
+   * Cancellation is observed BETWEEN steps — docs/26_DECISIONS.md ADR-157.
+   *
+   * `requestCancel` accepts `assembling` (it is one of `IN_FLIGHT_STATUSES`), the screen offers
+   * Cancel while a project is in it, and the render never read the flag: it fetched the project
+   * only to 404 on a missing row. So pressing Cancel during assembly recorded a request that
+   * nothing acted on, and the render ran to completion — through eight ffmpeg invocations, on a
+   * project the user had already abandoned.
+   *
+   * Between steps rather than inside one: an ffmpeg invocation is already bounded by its own
+   * deadline, and killing one mid-write would leave a partial file for the next step to read.
+   */
+  let cancelled = false;
+  const stopIfCancelled = async (): Promise<boolean> => {
+    if (cancelled) return true;
+    const current = await deps.projectRepo.get(scope.projectId, scope.videoProjectId);
+    cancelled = Boolean(current?.cancelRequestedAt);
+    return cancelled;
+  };
+
+  const ffmpeg = async (args: string[]) => {
+    if (await stopIfCancelled()) throw new RenderCancelled();
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
       throw new Error(
@@ -193,6 +222,30 @@ export async function processVideoRender(
       audioStatus: "included",
       subtitleAssetId: project.subtitleAssetId,
       subtitleVttAssetId: project.subtitleVttAssetId,
+    };
+  }
+
+  /**
+   * Cancellation is read before anything else — ADR-157.
+   *
+   * Ahead of the ffmpeg probe on purpose: a cancelled project must not be recorded as
+   * `skipped_no_ffmpeg` and `succeeded`, which is a different claim entirely and the one an
+   * operator would have to un-pick later.
+   */
+  if (project.cancelRequestedAt) {
+    await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {
+      renderStatus: "failed",
+      renderError: "Rendering was cancelled before it started.",
+    });
+    await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "cancelled", {
+      errorMessage: "Cancelled before rendering started.",
+    });
+    return {
+      renderStatus: "failed",
+      assetId: null,
+      audioStatus: "skipped_no_narration",
+      subtitleAssetId: null,
+      subtitleVttAssetId: null,
     };
   }
 
@@ -517,6 +570,24 @@ export async function processVideoRender(
 
     return { renderStatus: "succeeded", assetId, audioStatus, subtitleAssetId, subtitleVttAssetId };
   } catch (err) {
+    if (err instanceof RenderCancelled) {
+      // Settled as what it is. `failed` would report a defect where the user made a choice,
+      // and `succeeded` would claim a video that was never assembled (ADR-157).
+      await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {
+        renderStatus: "failed",
+        renderError: "Rendering was cancelled before it finished.",
+      });
+      await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "cancelled", {
+        errorMessage: "Cancelled during rendering.",
+      });
+      return {
+        renderStatus: "failed",
+        assetId: null,
+        audioStatus: "skipped_no_narration",
+        subtitleAssetId: null,
+        subtitleVttAssetId: null,
+      };
+    }
     /**
      * The stored reason is bounded — docs/26_DECISIONS.md ADR-155.
      *

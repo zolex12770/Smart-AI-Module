@@ -57,9 +57,19 @@ export interface VideoProvider {
   readonly name: string;
   readonly isMock: boolean;
   getCapabilities(): VideoProviderCapabilities;
+  /**
+   * `signal` — docs/26_DECISIONS.md ADR-157.
+   *
+   * The Replicate adapter already accepted one as an untyped third parameter, with a comment
+   * explaining that it "keeps this assignable to VideoProvider while letting a caller that HAS a
+   * cancellation token stop a prediction that is still billing". No caller had one, because the
+   * interface did not carry it — so the one adapter that can cancel a running, billing
+   * prediction could never be told to.
+   */
   generateVideo(
     req: VideoGenerationRequest,
-    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
+    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>,
+    signal?: AbortSignal
   ): Promise<VideoResult>;
 }
 
