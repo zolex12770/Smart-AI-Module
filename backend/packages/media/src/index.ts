@@ -9,3 +9,4 @@ export * from "./speech.js";
 export * from "./speech-piper.js";
 export * from "./video-script.js";
 export * from "./subtitles.js";
+export * from "./failure-message.js";

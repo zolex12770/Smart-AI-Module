@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { AudioGeneration, AudioGenerationRepository } from "@ai-platform/database";
 import type { AssetStore } from "./asset-store.js";
 import type { SpeechProvider } from "./speech.js";
+import { describeFailureForCaller } from "./failure-message.js";
 import { ffprobePathFor, measureAudioDurationSeconds } from "./subtitles.js";
 
 /**
@@ -27,6 +28,8 @@ export interface AudioGenerationDeps {
   generationRepo: AudioGenerationRepository;
   assetStore: AssetStore;
   speech: SpeechProvider;
+  /** Where the RAW failure goes, since the stored one is bounded (ADR-155). */
+  logger?: { error(obj: unknown, msg: string): void };
   /** Enables duration measurement. Without it the produced audio is still stored. */
   ffmpegPath?: string;
 }
@@ -110,9 +113,12 @@ export async function processAudioGeneration(
     return { status: "succeeded", assetId, durationSeconds };
   } catch (err) {
     const cancelled = signal?.aborted === true;
+    // ADR-155 — a synthesiser's error names its endpoint or a binary path, and this column is
+    // served back to the tenant. The detail goes to the log.
+    deps.logger?.error({ project_id: projectId, generation_id: generationId, err }, "speech synthesis failed");
     await deps.generationRepo.updateStatus(projectId, generationId, cancelled ? "cancelled" : "failed", {
       providerName: deps.speech.name,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: describeFailureForCaller("speech", err),
     });
     // Rethrown so the queue sees a failure and applies its own retry and dead-letter policy.
     throw err;

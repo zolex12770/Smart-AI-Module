@@ -68,7 +68,13 @@ const optionalString = z.preprocess(
  * with a clear error rather than letting a missing/malformed variable surface later as a
  * confusing runtime failure.
  */
-const envSchema = z.object({
+/**
+ * The field map, kept separate from the refinement wrapped around it — ADR-155.
+ *
+ * `envSchema` is a `ZodEffects` because of the `superRefine` below, and a `ZodEffects` has no
+ * `.shape`. `SECRET_CONFIG_KEYS` is derived from the keys, so the keys need a name.
+ */
+const envFields = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   /**
    * The interface to listen on — docs/26_DECISIONS.md ADR-113. Unset: 127.0.0.1 outside production
@@ -319,7 +325,9 @@ const envSchema = z.object({
    */
   DAILY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
   MONTHLY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
-})
+});
+
+const envSchema = envFields
   /**
    * A half-configured video provider is refused on boot — ADR-085.
    *
@@ -344,6 +352,22 @@ const envSchema = z.object({
   });
 
 export type AppConfig = z.infer<typeof envSchema>;
+
+/**
+ * Every configuration key whose VALUE is a credential — docs/26_DECISIONS.md ADR-155.
+ *
+ * Derived from the schema rather than listed, because the hand-maintained redaction list in the
+ * observability package had already drifted seven fields behind this file: `LLM_API_KEY`,
+ * `VIDEO_API_TOKEN`, `IMAGE_API_KEY`, `SPEECH_API_KEY`, `EMBEDDING_API_KEY`,
+ * `BOOTSTRAP_ADMIN_PASSWORD` and `DATABASE_URL` were all live and none of them was redacted.
+ * A key added to the schema later is covered by construction.
+ *
+ * `DATABASE_URL` is included by name: it is not shaped like the others and it carries the
+ * database password.
+ */
+export const SECRET_CONFIG_KEYS: string[] = Object.keys(envFields.shape).filter(
+  (key) => /_(API_KEY|TOKEN|PASSWORD|SECRET)$/.test(key) || key === "DATABASE_URL"
+);
 
 /** The interface to listen on (ADR-113): an explicit HOST, otherwise loopback outside production. */
 export function resolveListenHost(config: Pick<AppConfig, "HOST" | "NODE_ENV">): string {

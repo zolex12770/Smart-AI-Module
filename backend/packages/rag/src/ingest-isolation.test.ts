@@ -67,10 +67,16 @@ describe("sandbox-path ingestion is scoped to the document's own project", () =>
     }) as unknown as Document;
 
   it("refuses a sourcePath that names another tenant's workspace", async () => {
-    await expect(processDocumentIngestion(deps, doc(ATTACKER, `${VICTIM}/secrets.txt`))).rejects.toThrow();
-    // The refusal is also recorded on the row, so an operator sees why the index is stale.
+    // The THROWN error carries the real reason — it reaches the worker's error log and the span.
+    await expect(processDocumentIngestion(deps, doc(ATTACKER, `${VICTIM}/secrets.txt`))).rejects.toThrow(
+      /outside the sandboxed root|ENOENT|no such file/i
+    );
+    // The refusal is also recorded on the row, so an operator sees why the index is stale — but
+    // the STORED text is the bounded one (ADR-155): `errorMessage` is served to the tenant, and
+    // an ENOENT names a path on the host, which is not theirs to read.
     expect(updates.at(-1)?.status).toBe("failed");
-    expect(String(updates.at(-1)?.error)).toMatch(/outside the sandboxed root|ENOENT|no such file/i);
+    expect(String(updates.at(-1)?.error)).toMatch(/could not be ingested/i);
+    expect(String(updates.at(-1)?.error)).not.toContain(VICTIM);
     const stored = (deps as unknown as { __chunks: Array<{ content: string }> }).__chunks;
     expect(JSON.stringify(stored)).not.toContain("CONFIDENTIAL");
   });

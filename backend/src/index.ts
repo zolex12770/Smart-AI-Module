@@ -88,7 +88,7 @@ import {
 import { sql } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
-import { loadConfig, type AppConfig, resolveListenHost } from "./config.js";
+import { loadConfig, SECRET_CONFIG_KEYS, type AppConfig, resolveListenHost } from "./config.js";
 import { detectLocalRuntime, detectLocalSpeech, probeFfmpeg } from "./local-runtime.js";
 import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 import type { AppContext } from "./context.js";
@@ -203,7 +203,9 @@ async function main() {
   // resolved: `metrics.getMeter()` called with no provider registered returns a no-op meter and
   // caches it, so an instrument created earlier would record nothing, forever, with no error.
   initMetrics(serviceName);
-  const logger = createLogger(serviceName);
+  // ADR-155 — the secret-shaped keys come from the schema, so a credential added to config.ts
+  // later cannot reach a log line because nobody remembered to edit a list in another package.
+  const logger = createLogger(serviceName, undefined, SECRET_CONFIG_KEYS);
   logger.info({ role: config.ROLE, http: runs.http, workers: runs.workers }, "booting");
 
   const { db, jobQueueOptions, close: closeDb } = await connectDatabase(config);
@@ -838,9 +840,9 @@ async function main() {
   if (runs.workers) {
     if (scanner) {
       const activeScanner = scanner;
-      await jobQueue.registerWorker<unknown>("document.scan", async (raw) => {
+      await jobQueue.registerWorker<unknown>("document.scan", async (raw, _jobId, attempt) => {
         const { projectId, documentId, requestId } = documentJobSchema.parse(raw);
-        await runJob(logger, { queue: "document.scan", jobId: documentId, projectId, requestId }, async () => {
+        await runJob(logger, { queue: "document.scan", jobId: documentId, projectId, requestId, retryCount: attempt.retryCount }, async () => {
           const outcome = await processDocumentScan(
             { documentRepo: documents, assetRepo: assets, assetStore, scanner: activeScanner, jobQueue },
             projectId,
@@ -855,9 +857,9 @@ async function main() {
       });
     }
 
-    await jobQueue.registerWorker<unknown>("document.ingest", async (raw) => {
+    await jobQueue.registerWorker<unknown>("document.ingest", async (raw, _jobId, attempt) => {
       const { projectId, documentId, requestId } = documentJobSchema.parse(raw);
-      await runJob(logger, { queue: "document.ingest", jobId: documentId, projectId, requestId }, async () => {
+      await runJob(logger, { queue: "document.ingest", jobId: documentId, projectId, requestId, retryCount: attempt.retryCount }, async () => {
         // Scoped read (ADR-049). A document id belonging to another project resolves to "not
         // found" right here rather than being fetched and then checked, so a job whose payload
         // names the wrong project simply finds nothing — there is no ownership comparison for
@@ -886,9 +888,9 @@ async function main() {
     });
 
     if (imageProvider)
-      await jobQueue.registerWorker<unknown>("image.generate", async (raw) => {
+      await jobQueue.registerWorker<unknown>("image.generate", async (raw, _jobId, attempt) => {
         const { projectId, userId, generationId, requestId } = imageJobSchema.parse(raw);
-        await runJob(logger, { queue: "image.generate", jobId: generationId, projectId, requestId }, async () => {
+        await runJob(logger, { queue: "image.generate", jobId: generationId, projectId, requestId, retryCount: attempt.retryCount }, async () => {
           // Measured around the provider call itself, not around the whole job: `runJob`'s
           // `job_duration_seconds` already covers queue-handler overhead, and the question
           // `generation_duration_seconds` answers is "how long does this provider take".
@@ -963,9 +965,9 @@ async function main() {
      * why the route refuses with a capability error instead of enqueueing when none is configured.
      */
     if (speech)
-      await jobQueue.registerWorker<unknown>("audio.generate", async (raw) => {
+      await jobQueue.registerWorker<unknown>("audio.generate", async (raw, _jobId, attempt) => {
         const { projectId, userId, generationId, requestId } = audioJobSchema.parse(raw);
-        await runJob(logger, { queue: "audio.generate", jobId: generationId, projectId, requestId }, async () => {
+        await runJob(logger, { queue: "audio.generate", jobId: generationId, projectId, requestId, retryCount: attempt.retryCount }, async () => {
           const startedAt = Date.now();
           let outcome: Awaited<ReturnType<typeof processAudioGeneration>> | undefined;
           try {
@@ -1021,9 +1023,9 @@ async function main() {
     if (videoProvider)
       await jobQueue.registerWorker<unknown>(
         "video.generate_scene",
-        async (raw) => {
+        async (raw, _jobId, attempt) => {
           const { projectId, userId, videoProjectId, sceneId, requestId } = videoSceneJobSchema.parse(raw);
-          await runJob(logger, { queue: "video.generate_scene", jobId: sceneId, projectId, requestId }, async () => {
+          await runJob(logger, { queue: "video.generate_scene", jobId: sceneId, projectId, requestId, retryCount: attempt.retryCount }, async () => {
             // See the image worker: the provider call is what `generation_duration_seconds`
             // is about, so the clock starts here and not at job pickup.
             const startedAt = Date.now();
@@ -1101,9 +1103,9 @@ async function main() {
         { localConcurrency: 3 }
       );
 
-    await jobQueue.registerWorker<unknown>("video.render", async (raw) => {
+    await jobQueue.registerWorker<unknown>("video.render", async (raw, _jobId, attempt) => {
       const { projectId, videoProjectId, requestId } = videoRenderJobSchema.parse(raw);
-      await runJob(logger, { queue: "video.render", jobId: videoProjectId, projectId, requestId }, async () => {
+      await runJob(logger, { queue: "video.render", jobId: videoProjectId, projectId, requestId, retryCount: attempt.retryCount }, async () => {
         await processVideoRender(
           { projectRepo: videoProjects, sceneRepo: videoScenes, assetRepo: assets, assetStore, ffmpegPath: config.FFMPEG_PATH },
           { projectId, videoProjectId }
@@ -1728,7 +1730,14 @@ function withAgentRunMetrics(
  */
 async function runJob<T>(
   jobLogger: Logger,
-  params: { queue: string; jobId: string; projectId: string; requestId?: string },
+  params: {
+    queue: string;
+    jobId: string;
+    projectId: string;
+    requestId?: string;
+    /** pg-boss's own attempt counter (ADR-155) — what `job_retry_total` is counted from. */
+    retryCount?: number;
+  },
   fn: () => Promise<T>
 ): Promise<T> {
   const startedAt = Date.now();
@@ -1757,7 +1766,12 @@ async function runJob<T>(
         // The same event as the log line above, counted rather than narrated (ADR-082). A log
         // answers "what happened to THIS job"; only a metric answers "is the failure rate
         // climbing", which is the question an alert is built on.
-        recordJobProcessed({ queue: params.queue, outcome: "success", durationMs: Date.now() - startedAt });
+        recordJobProcessed({
+          queue: params.queue,
+          outcome: "success",
+          durationMs: Date.now() - startedAt,
+          retryCount: params.retryCount,
+        });
         return result;
       } catch (err) {
         jobLogger.error(
@@ -1772,7 +1786,12 @@ async function runJob<T>(
           },
           "job failed"
         );
-        recordJobProcessed({ queue: params.queue, outcome: "failure", durationMs: Date.now() - startedAt });
+        recordJobProcessed({
+          queue: params.queue,
+          outcome: "failure",
+          durationMs: Date.now() - startedAt,
+          retryCount: params.retryCount,
+        });
         throw err;
       }
     }

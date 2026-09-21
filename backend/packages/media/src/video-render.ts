@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssetRepository, VideoProjectRepository, VideoSceneRepository } from "@ai-platform/database";
 import type { AssetStore } from "./asset-store.js";
+import { describeFailureForCaller } from "./failure-message.js";
 import type { VideoProjectScope } from "./video-orchestration.js";
 import {
   buildSubtitleCues,
@@ -516,13 +517,21 @@ export async function processVideoRender(
 
     return { renderStatus: "succeeded", assetId, audioStatus, subtitleAssetId, subtitleVttAssetId };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    /**
+     * The stored reason is bounded — docs/26_DECISIONS.md ADR-155.
+     *
+     * `runFfmpeg` builds its message out of the binary's own stderr, which names the absolute
+     * paths of the working directory and every input on the host, and a spawn failure names the
+     * ffmpeg binary's path. Both columns are served to the tenant by `GET /api/v1/videos/:id`.
+     * The raw text is rethrown, so `runJob`'s error log still has all of it.
+     */
+    const safe = describeFailureForCaller("render", err);
     await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {
       renderStatus: "failed",
-      renderError: message,
+      renderError: safe,
     });
     await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "failed", {
-      errorMessage: `Rendering failed: ${message}`,
+      errorMessage: safe,
     });
     throw err;
   } finally {

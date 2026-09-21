@@ -209,7 +209,11 @@ describe("a re-claimed media job does not pay twice", () => {
     // not instead of it.
     const scene = await sceneRepo.get(scope, sceneId);
     expect(scene?.status).toBe("failed");
-    expect(scene?.lastError).toMatch(/exploded/);
+    // And the STORED reason is the bounded one (ADR-155): `lastError` is served to the tenant,
+    // and a provider's own message names its endpoint. The raw text went to the thrown error,
+    // which the queue's error log records.
+    expect(scene?.lastError).toMatch(/video generation failed/i);
+    expect(scene?.lastError).not.toMatch(/exploded/);
   });
 
   // --- the render ----------------------------------------------------------------------

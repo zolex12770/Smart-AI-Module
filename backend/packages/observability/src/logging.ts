@@ -18,6 +18,20 @@
  * call site in this codebase actually produces: flat log objects, or Fastify's own
  * `req.headers.*` shape).
  */
+/**
+ * Every name that looks like a secret, at both depths — docs/26_DECISIONS.md ADR-155.
+ *
+ * The list below was maintained by hand and had drifted behind `config.ts`: seven live
+ * secret-shaped fields (`LLM_API_KEY`, `VIDEO_API_TOKEN`, `IMAGE_API_KEY`, `SPEECH_API_KEY`,
+ * `EMBEDDING_API_KEY`, `BOOTSTRAP_ADMIN_PASSWORD`, `DATABASE_URL`) were not in it, and its test
+ * asserted the names it already had, so a config field added later could never be caught. The
+ * composition root passes its own schema's secret-shaped keys through `createLogger` now; this
+ * turns a list of names into the paths pino needs.
+ */
+export function redactPathsFor(names: readonly string[]): string[] {
+  return names.flatMap((name) => [name, `*.${name}`]);
+}
+
 export const LOG_REDACT_PATHS = [
   "apiKey",
   "*.apiKey",
@@ -36,6 +50,10 @@ export const LOG_REDACT_PATHS = [
   "*.GOOGLE_API_KEY",
   "GEMINI_API_KEY",
   "*.GEMINI_API_KEY",
+  // A session cookie is a bearer credential exactly like a key is.
+  "cookie",
+  "*.cookie",
+  "req.headers.cookie",
 ];
 
 /**

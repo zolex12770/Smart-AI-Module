@@ -308,6 +308,41 @@ describe("provider call reporting (ADR-132)", () => {
     });
   };
 
+
+  it("labels the outcome with the model the provider actually used", async () => {
+    /**
+     * docs/26_DECISIONS.md ADR-155. Every outcome was reported with `provider.model` — the
+     * adapter's constructor-time default. The adapters honour a per-request override
+     * (`request.model ?? this.model`) and `chatRequestSchema` makes `model` a caller-supplied
+     * field the chat route forwards unchanged, so a deployment whose callers name a model saw
+     * every token, cost and latency bucket filed under the default instead, and the metric and
+     * the usage ledger disagreed by construction.
+     */
+    const calls: ProviderCallOutcome[] = [];
+    const provider = new ScriptedProvider("good", [
+      { type: "token", delta: "hi" },
+      { ...doneEvent("good"), model: "qwen2.5:14b" } as ChatStreamEvent,
+    ]);
+    // The provider's own default is something else entirely.
+    expect(provider.model).toBe("scripted-1");
+
+    for await (const _event of routerFor(provider, calls).streamChat(request)) void _event;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ provider: "good", model: "qwen2.5:14b", status: "success" });
+  });
+
+  it("falls back to the configured model when the stream never reports one", async () => {
+    // A `done` event with no model, and the error path before any event, can only know the
+    // default — reporting an empty label would be worse than reporting the configured one.
+    const calls: ProviderCallOutcome[] = [];
+    const provider = new ScriptedProvider("good", [
+      { ...doneEvent("good"), model: "" } as ChatStreamEvent,
+    ]);
+    for await (const _event of routerFor(provider, calls).streamChat(request)) void _event;
+    expect(calls[0]).toMatchObject({ model: "scripted-1" });
+  });
+
   it("reports a successful call with its token usage", async () => {
     const calls: ProviderCallOutcome[] = [];
     const provider = new ScriptedProvider("good", [{ type: "token", delta: "hi" }, doneEvent("good")]);

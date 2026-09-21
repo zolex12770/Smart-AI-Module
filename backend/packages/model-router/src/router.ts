@@ -300,6 +300,8 @@ export class ModelRouter {
         const retryable = classification === "retryable";
         reportCall({
           provider: provider.name,
+          // Nothing was streamed, so there is no reported model: the configured one is all
+          // this attempt ever knew (ADR-155).
           model: provider.model,
           status: "error",
           durationMs: this.now() - startedAt,
@@ -323,12 +325,23 @@ export class ModelRouter {
       // stream would report a successful call as cancelled.
       let sawDone = false;
       let usage: { inputTokens?: number; outputTokens?: number } = {};
+      /**
+       * The model that ACTUALLY answered — docs/26_DECISIONS.md ADR-155.
+       *
+       * Every outcome was reported with `provider.model`, the adapter's constructor-time
+       * default. The adapters honour a per-request override (`request.model ?? this.model`) and
+       * `chatRequestSchema` makes `model` a caller-supplied field that the chat route forwards
+       * unchanged — so a deployment whose callers name a model saw every token, every cost and
+       * every latency bucket attributed to the default instead. The `done` event reports what
+       * was used; the constructor default is only the fallback for a stream that never said.
+       */
+      let effectiveModel = provider.model;
       const settle = (status: ProviderCallOutcome["status"], errorType?: ProviderCallOutcome["errorType"]) => {
         if (settled) return;
         settled = true;
         reportCall({
           provider: provider.name,
-          model: provider.model,
+          model: effectiveModel,
           status,
           durationMs: this.now() - startedAt,
           ...(errorType ? { errorType } : {}),
@@ -339,6 +352,7 @@ export class ModelRouter {
         if (first.value.type === "done") {
           sawDone = true;
           usage = first.value.usage ?? {};
+          effectiveModel = first.value.model || effectiveModel;
         }
         yield first.value;
         while (true) {
@@ -348,6 +362,7 @@ export class ModelRouter {
           if (next.value.type === "done") {
             sawDone = true;
             usage = next.value.usage ?? {};
+            effectiveModel = next.value.model || effectiveModel;
           }
           yield next.value;
         }

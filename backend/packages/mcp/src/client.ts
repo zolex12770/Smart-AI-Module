@@ -252,15 +252,32 @@ async function openClient(
 
   if (!isHttpServerConfig(config)) {
     const client = newClient();
-    await client.connect(
-      new StdioClientTransport({
-        command: config.command,
-        args: config.args ?? [],
-        env: config.env,
-        cwd: config.cwd,
-      }),
-      { timeout }
-    );
+    try {
+      await client.connect(
+        new StdioClientTransport({
+          command: config.command,
+          args: config.args ?? [],
+          env: config.env,
+          cwd: config.cwd,
+        }),
+        { timeout }
+      );
+    } catch (err) {
+      /**
+       * Sanitised like the HTTP branch — docs/26_DECISIONS.md ADR-155.
+       *
+       * The HTTP path has `describeHttpFailure`, whose own docstring says why: `lastError` is
+       * stored on the server row and readable by anyone with `project:read`. The stdio path had
+       * no wrapper at all, so whatever Node or the SDK threw propagated verbatim into that
+       * column — a spawn failure names the absolute command path, and `config.env` is the
+       * operator's credential map for that server, which is exactly the kind of thing an error
+       * from a failed launch can echo.
+       *
+       * The raw error is kept as the cause for the log and the span; only the server id and a
+       * bounded reason reach the message.
+       */
+      throw describeStdioFailure(config.id, err);
+    }
     return { client, transport: "stdio" };
   }
 
@@ -336,6 +353,24 @@ function isWrongProtocolResponse(err: unknown): err is StreamableHTTPError {
  * Only origin + path go into the message. A URL can carry `user:password@` or a token in its
  * query string, and `lastError` is readable by anyone with `project:read`.
  */
+/**
+ * The stdio equivalent of `describeHttpFailure` — ADR-155.
+ *
+ * Deliberately says less than the underlying error does: the command line and the environment
+ * handed to a local MCP server are operator configuration, and this text is served to every
+ * project member. The three reasons below are what an operator actually acts on; the detail
+ * they need is in the log, with the error as the cause.
+ */
+function describeStdioFailure(serverId: string, err: unknown): Error {
+  const raw = err instanceof Error ? err.message : String(err);
+  const reason = /ENOENT|not recognized|no such file/i.test(raw)
+    ? "could not be started — check the configured command"
+    : /timed out|timeout/i.test(raw)
+      ? "did not complete the handshake before the connect timeout"
+      : "failed to start or did not complete the handshake";
+  return new ServiceUnavailableError(`MCP server "${serverId}" ${reason}.`, err instanceof Error ? err : undefined);
+}
+
 function describeHttpFailure(serverId: string, url: URL, err: unknown): Error {
   const endpoint = `${url.origin}${url.pathname}`;
   const detail = err instanceof Error ? err.message : String(err);

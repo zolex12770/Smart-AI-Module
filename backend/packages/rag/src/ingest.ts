@@ -262,7 +262,21 @@ export async function processDocumentIngestion(
     // generation is still the best index this document has, and deleting it would make a
     // working document unsearchable because a later pass failed. `failed` is how an operator
     // learns the index is stale.
-    await deps.documentRepo.updateStatus(document.projectId, document.id, "failed", message);
+    /**
+     * Bounded, like the media workers' (ADR-155). An embedding provider's failure names the
+     * configured endpoint, a parser's names a path on the host, and `errorMessage` is served
+     * by `GET /api/v1/files/:id` to anyone with `files:read`. The raw text is rethrown, so the
+     * worker's own error log keeps it.
+     */
+    // A refusal of the CALLER'S OWN input is kept in full: it describes their request, not the
+    // deployment, and "the path you named is outside your workspace" is the whole point of the
+    // message. The resolver already refuses to echo where a symlink actually pointed (ADR-088).
+    const stored = /zero chunks|scanned\/image-only|no extractable text|unsupported|outside the sandboxed root|not a file|too large/i.test(
+      message
+    )
+      ? message.slice(0, 300)
+      : "This document could not be ingested. The server log records why, against this document id.";
+    await deps.documentRepo.updateStatus(document.projectId, document.id, "failed", stored);
     throw err;
   }
 }

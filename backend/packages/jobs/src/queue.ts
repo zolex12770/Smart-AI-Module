@@ -222,7 +222,17 @@ export class JobQueue {
    * §1.6: "not all 150 [video] scenes fire at once") — omit it for pg-boss's own default. */
   async registerWorker<T>(
     queueName: string,
-    handler: (payload: T, jobId: string) => Promise<void>,
+    /**
+     * `attempt` is what pg-boss already told us — docs/26_DECISIONS.md ADR-155.
+     *
+     * `includeMetadata` puts `retryCount` and `retryLimit` on every job and this method read
+     * them for the dead-letter check and threw them away. `recordJobProcessed` has taken an
+     * optional `retryCount` since ADR-082 and emits `job_retry_total` only when it is above
+     * zero — and no production call site ever passed one, so that counter could not be emitted
+     * by anything. A metric the system cannot produce reads, on a dashboard, exactly like a
+     * system that is not retrying.
+     */
+    handler: (payload: T, jobId: string, attempt: { retryCount: number; retryLimit: number }) => Promise<void>,
     options?: WorkOptions
   ): Promise<void> {
     // `includeMetadata` is what puts `retryCount`/`retryLimit`/`deadLetter` on the job. pg-boss
@@ -232,7 +242,7 @@ export class JobQueue {
     const run = async (jobs: JobWithMetadata<T>[]) => {
       for (const job of jobs) {
         try {
-          await handler(job.data, job.id);
+          await handler(job.data, job.id, { retryCount: job.retryCount, retryLimit: job.retryLimit });
         } catch (err) {
           if (job.deadLetter && job.retryCount >= job.retryLimit) {
             this.onDeadLetter?.({ queue: queueName, jobId: job.id });

@@ -5,11 +5,14 @@ import type {
 } from "@ai-platform/database";
 import type { ImageProvider } from "@ai-platform/shared";
 import type { AssetStore } from "./asset-store.js";
+import { describeFailureForCaller } from "./failure-message.js";
 
 export interface ImageGenerationDeps {
   generationRepo: ImageGenerationRepository;
   assetStore: AssetStore;
   provider: ImageProvider;
+  /** Where the RAW failure goes, since the stored one is bounded (ADR-155). */
+  logger?: { error(obj: unknown, msg: string): void };
 }
 
 /**
@@ -81,9 +84,15 @@ export async function processImageGeneration(
     );
 
     if (result.status !== "succeeded" || !result.images?.length) {
+      // ADR-155 — the provider's own text names its endpoint or a host path, and this column is
+      // served straight back to the tenant. The detail is logged; the row says which stage.
+      deps.logger?.error(
+        { project_id: projectId, generation_id: generationId, err: result.error },
+        "image generation failed"
+      );
       await deps.generationRepo.updateStatus(projectId, generationId, "failed", {
         providerName: result.providerName,
-        errorMessage: result.error ?? "Provider returned no images.",
+        errorMessage: describeFailureForCaller("image", result.error ?? "Provider returned no images."),
       });
       return;
     }
@@ -93,8 +102,9 @@ export async function processImageGeneration(
       resultAssetId: result.images[0].assetId,
     });
   } catch (err) {
+    deps.logger?.error({ project_id: projectId, generation_id: generationId, err }, "image generation threw");
     await deps.generationRepo.updateStatus(projectId, generationId, "failed", {
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: describeFailureForCaller("image", err),
     });
     throw err;
   }

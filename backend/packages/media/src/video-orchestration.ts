@@ -9,6 +9,7 @@ import type { ModelCallMeter, SpeechMeter, VideoProjectRequest, VideoProvider } 
 import type { JobQueue } from "@ai-platform/jobs";
 import { writeVideoScript, type ScriptModel } from "./video-script.js";
 import type { SpeechProvider } from "./speech.js";
+import { describeFailureForCaller } from "./failure-message.js";
 import type { AssetStore } from "./asset-store.js";
 
 /**
@@ -297,8 +298,11 @@ export async function processVideoScene(
     );
 
     if (result.status !== "succeeded" || !result.video) {
+      deps.logger?.warn({ sceneId, videoProjectId: scope.videoProjectId, error: result.error }, "video scene failed");
       await deps.sceneRepo.updateStatus(scope, sceneId, "failed", {
-        lastError: result.error ?? "Provider returned no video.",
+        // ADR-155 — a provider's message names its endpoint, and `lastError` is served to the
+        // tenant on every scene of the project.
+        lastError: describeFailureForCaller("video", result.error ?? "Provider returned no video."),
         incrementRetry: true,
       });
     } else {
@@ -352,8 +356,9 @@ export async function processVideoScene(
       });
     }
   } catch (err) {
+    deps.logger?.warn({ sceneId, videoProjectId: scope.videoProjectId, error: String(err) }, "video scene threw");
     await deps.sceneRepo.updateStatus(scope, sceneId, "failed", {
-      lastError: err instanceof Error ? err.message : String(err),
+      lastError: describeFailureForCaller("video", err),
       incrementRetry: true,
     });
     /**
