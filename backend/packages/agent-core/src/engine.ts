@@ -35,6 +35,29 @@ const TERMINAL_TASK_STATES = ["COMPLETED", "FAILED", "CANCELLED"] as const;
 const TERMINAL_NODE_STATUSES = ["completed", "failed", "cancelled", "skipped"] as const;
 
 /**
+ * A node that ran out of its own time — docs/26_DECISIONS.md ADR-162.
+ *
+ * `withNodeDeadline` and `cancel` abort the SAME controller, so after ADR-146 made an abort mean
+ * "cancelled" every expired deadline was recorded as a cancellation: `status: "cancelled"`, task
+ * `CANCELLED`, no `lastError`, and no retry, because cancelled is terminal. An operator saw a
+ * task someone had apparently stopped, with nothing anywhere saying it had timed out.
+ *
+ * A distinct type rather than a string match on the message: these two are different events and
+ * the code should be able to say which it is holding without parsing English.
+ */
+export class NodeDeadlineExceededError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NodeDeadlineExceededError";
+  }
+}
+
+/** Was this abort the node's deadline rather than someone pressing Stop? */
+function abortedByDeadline(signal: AbortSignal): boolean {
+  return signal.aborted && signal.reason instanceof NodeDeadlineExceededError;
+}
+
+/**
  * Statuses in which a node is actually consuming time somewhere, and therefore the ones
  * `timeoutMs` is measured against. Mirrors `PgTaskNodeRepository`'s own list deliberately:
  * `retrying` is absent from both because a node waiting out its backoff is idle, and
@@ -145,7 +168,21 @@ export interface AgentEngineDeps {
    */
   now?: () => number;
   /** Ceilings for a `reasoning` node's loop (ADR-064). The model cannot raise them. */
-  agentLimits?: { maxIterations?: number; maxTokensPerRun?: number };
+  agentLimits?: {
+    maxIterations?: number;
+    maxTokensPerRun?: number;
+    /**
+     * Overrides the per-node deadline the planner wrote — ADR-162.
+     *
+     * The planner's `10 * 60_000` for a reasoning node is a constant, and it is the ceiling the
+     * `fix_failing_test` acceptance run has died at twice: a 7B model on four CPU cores is not
+     * slow because anything is wrong, it is slow because of what it is running on. Every other
+     * bound the engine enforces is already injectable for the same reason this one now is —
+     * `maxIterations` and `maxTokensPerRun` sit beside it — and a deployment on faster hardware
+     * has as much reason to LOWER it.
+     */
+    nodeTimeoutMs?: number;
+  };
   /**
    * Runs a `test_suite` node's command in the sandbox and reports its exit code (ADR-075).
    *
@@ -1146,7 +1183,30 @@ export class AgentEngine {
        * `cancel` still writes the `cancelled` rows and the task transition when it gets the lock;
        * settling the node here keeps the two from disagreeing in between.
        */
-      if (controller.signal.aborted) {
+      if (abortedByDeadline(controller.signal)) {
+        /**
+         * The deadline is a FAILURE, not a cancellation — ADR-162.
+         *
+         * It is the same event as `max_iterations` and `budget_exhausted` a few lines above,
+         * which are already reported "as a failure with the reason named": the harness set a
+         * bound and the model did not finish inside it. Recording it as cancelled cost the
+         * reason — no `errorMessage` was written at all — and the truth on the operator's
+         * screen, which said someone had pressed Stop. It also put the node beyond the reach of
+         * any retry policy, `cancelled` being terminal full stop; a reasoning node is planned
+         * with `maxAttempts: 1` today, so that part is latent rather than observed.
+         *
+         * Observed, not theorised: the same `fix_failing_test` brief that this document records
+         * as "two attempts, each ending FAILED at the reasoning node's 600 s ceiling" produced a
+         * single `CANCELLED` with no reason once ADR-146 landed.
+         */
+        await this.handleNodeFailure(
+          task.id,
+          node,
+          err instanceof Error ? err.message : String(err),
+          "retryable-execution",
+          activity
+        );
+      } else if (controller.signal.aborted) {
         await this.updateNode(
           node,
           {
@@ -1372,16 +1432,19 @@ export class AgentEngine {
   }
 
   private async withNodeDeadline<T>(node: TaskNodeRecord, controller: AbortController, work: Promise<T>): Promise<T> {
-    const message = `Node "${node.id}" exceeded its ${node.timeoutMs}ms timeout.`;
+    const timeoutMs = this.deps.agentLimits?.nodeTimeoutMs ?? node.timeoutMs;
+    const message = `Node "${node.id}" exceeded its ${timeoutMs}ms timeout.`;
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
         work,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            controller.abort(new Error(message));
-            reject(new Error(message));
-          }, node.timeoutMs);
+            // Typed, so the catch that settles the node can tell this from a user's Stop —
+            // ADR-162. Both used to be a bare Error, and both read as a cancellation.
+            controller.abort(new NodeDeadlineExceededError(message));
+            reject(new NodeDeadlineExceededError(message));
+          }, timeoutMs);
         }),
       ]);
     } finally {

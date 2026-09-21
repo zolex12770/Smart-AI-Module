@@ -103,7 +103,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
 
   const build = (
     turns: Array<{ text?: string; calls?: ToolCall[] }>,
-    limits?: { maxIterations?: number },
+    limits?: { maxIterations?: number; nodeTimeoutMs?: number },
     extraTools: NativeToolEntry[] = [],
     /** An already-built provider, for a test that needs to control WHEN a turn answers. */
     suppliedProvider?: ScriptedAgentProvider,
@@ -655,6 +655,103 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     // And the reason the run ended is still on the node, alongside the history.
     expect(String(node.errorMessage)).toMatch(/max_iterations|stopped after/i);
   });
+
+  /**
+   * A deadline is a FAILURE; only a person cancels — docs/26_DECISIONS.md ADR-162.
+   *
+   * `withNodeDeadline` and `cancel` abort the same AbortController, and ADR-146 taught the catch
+   * below to read "aborted" as "the user pressed Stop". So every expired deadline was recorded
+   * as a cancellation: `CANCELLED` on the operator's screen, no `lastError` written anywhere,
+   * and no retry, because cancelled is terminal.
+   *
+   * This is not hypothetical and it is a REGRESSION, with the before and after both written
+   * down. docs/LOCAL_USER_ACCEPTANCE_TEST.md's UAT-17 records the 2026-09-18 run of a
+   * `fix_failing_test` brief as "two attempts, each ending FAILED at the reasoning node's 600 s
+   * ceiling (601 s and 520 s)". Re-run on 2026-09-21 against the same model, the same brief and
+   * the same ceiling, it produced one `CANCELLED` with no reason and no second attempt.
+   */
+  it("records a node that ran out of time as FAILED, with the reason, not as cancelled", async () => {
+    // A provider that never answers. The node's deadline is the only thing that can end this.
+    const provider = new ScriptedAgentProvider([{ text: "never reached" }]);
+    provider.streamChat = async function* () {
+      yield { type: "token", delta: "thinking" } as never;
+      await new Promise(() => {});
+    };
+
+    const { engine } = build([], { nodeTimeoutMs: 400 }, [], provider);
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Take longer than you are allowed." },
+      { projectId: PROJECT, userId: USER }
+    );
+
+    const finished = await waitFor(task.id, ["FAILED", "CANCELLED", "COMPLETED"], 30_000);
+    // CANCELLED here is the defect: nobody cancelled anything.
+    expect(finished.state).toBe("FAILED");
+
+    const [node] = await nodes.listByRoot(PROJECT, task.id);
+    expect(node.status).toBe("failed");
+    // The reason is written down. Before this it was discarded entirely.
+    expect(String(node.errorMessage)).toMatch(/exceeded its 400ms timeout/i);
+  }, 40_000);
+
+  it("classifies a timeout the way every other execution failure is classified", async () => {
+    /**
+     * The second consequence, and the latent one. A reasoning node is planned with
+     * `maxAttempts: 1` today, so no retry is owed either way — but `cancelled` is terminal
+     * FULL STOP, while a failure carries a `failureClass` that the retry machinery reads. A
+     * node recorded as cancelled could never be retried by any policy; this one can.
+     */
+    const provider = new ScriptedAgentProvider([{ text: "never reached" }]);
+    provider.streamChat = async function* () {
+      yield { type: "token", delta: "thinking" } as never;
+      await new Promise(() => {});
+    };
+
+    const { engine } = build([], { nodeTimeoutMs: 300 }, [], provider);
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Stall." },
+      { projectId: PROJECT, userId: USER }
+    );
+
+    await waitFor(task.id, ["FAILED", "CANCELLED", "COMPLETED"], 30_000);
+    const [node] = await nodes.listByRoot(PROJECT, task.id);
+    expect(node.failureClass).toBe("retryable-execution");
+  }, 40_000);
+
+  it("still calls a real cancellation a cancellation", async () => {
+    // The control. A change that turned every abort into a failure would satisfy both tests
+    // above and break the thing ADR-146 was written to fix.
+    let release: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started: (() => void) | undefined;
+    const hasStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const provider = new ScriptedAgentProvider([{ text: "never reached" }]);
+    provider.streamChat = async function* () {
+      started?.();
+      yield { type: "token", delta: "thinking" } as never;
+      await blocked;
+    };
+
+    // A deadline far enough away that only the cancel can end this.
+    const { engine } = build([], { nodeTimeoutMs: 60_000 }, [], provider);
+    const task = await engine.createAndStart(
+      "autonomous",
+      { goal: "Wait to be stopped." },
+      { projectId: PROJECT, userId: USER }
+    );
+    await hasStarted;
+    await engine.cancel(task.id, "test-operator");
+    release?.();
+
+    const finished = await waitFor(task.id, ["CANCELLED", "FAILED", "COMPLETED"], 30_000);
+    expect(finished.state).toBe("CANCELLED");
+  }, 40_000);
 
   /**
    * Cancel really stops a run in flight — docs/26_DECISIONS.md ADR-146.
