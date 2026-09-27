@@ -447,15 +447,18 @@ await check("USAGE", "Tokens spent are metered", async () => {
   return { status: res.status === 200 && tokens > 0 ? PASS : FAIL, detail: `this project spent ${tokens} tokens today across the calls above (scope ${res.body?.usageScope})` };
 });
 
-await check("AUDIT", "Security-relevant actions are in the audit trail", async () => {
+await check("AUDIT", "The project's audit trail records what happened in it", async () => {
+  // The project audit is scoped to the project (project:admin): project events and every tool
+  // call an agent made in it. Sign-ins are user-level rows with no project, so they are not here.
   const res = await user.call("GET", "/api/v1/audit");
   const entries = res.body?.entries ?? [];
   const actions = [...new Set(entries.map((e) => e.action))];
-  const hasLogin = actions.some((a) => /login/.test(a));
-  const hasTool = actions.some((a) => /tool/.test(a));
+  const foreign = entries.filter((e) => e.projectId !== user.projectId).length;
+  const agentRan = results.some((r) => r.id === "CODING-AGENT");
+  const ok = res.status === 200 && actions.includes("project.create") && (!agentRan || actions.includes("tool.call")) && foreign === 0;
   return {
-    status: res.status === 200 && hasLogin && (hasTool || !passed("CODING-AGENT")) ? PASS : FAIL,
-    detail: `${entries.length} entries; actions: ${actions.slice(0, 8).join(", ")}`,
+    status: ok ? PASS : FAIL,
+    detail: `${entries.length} entries, all in this project: ${foreign === 0}; actions: ${actions.slice(0, 8).join(", ")}`,
   };
 });
 
@@ -492,11 +495,22 @@ await check("METRICS", "Prometheus metrics carry real values", async () => {
       .split("\n")
       .filter((l) => l.startsWith(name) && !l.startsWith("#"))
       .reduce((n, l) => n + Number(l.split(" ").at(-1) || 0), 0);
-  const requests = sample("http_requests_total") || sample("http_server_requests_total") || sample("api_http_requests_total");
-  const llmCalls = sample("llm_provider_calls_total") || sample("provider_calls_total") || sample("llm_request_duration_seconds_count");
+  // Every counter this journey must have moved, by its real exposition name.
+  const counters = {
+    http_requests_total: sample("http_requests_total"),
+    provider_request_count: sample("provider_request_count"),
+    token_usage_total: sample("token_usage_total"),
+    generation_total: sample("generation_total"),
+    job_processed_total: sample("job_processed_total"),
+    tool_call_count: sample("tool_call_count"),
+  };
+  const zero = Object.entries(counters).filter(([, v]) => !(v > 0)).map(([k]) => k);
   return {
-    status: res.status === 200 && text.length > 0 && requests > 0 ? PASS : FAIL,
-    detail: `${res.status}, ${text.split("\n").filter((l) => l && !l.startsWith("#")).length} samples; HTTP requests counted: ${requests}; model calls counted: ${llmCalls}`,
+    status: res.status === 200 && zero.length === 0 ? PASS : FAIL,
+    detail:
+      `${res.status}; ` +
+      Object.entries(counters).map(([k, v]) => `${k} ${v}`).join(", ") +
+      (zero.length ? `; still zero: ${zero.join(", ")}` : ""),
   };
 });
 
