@@ -177,9 +177,14 @@ export class JobQueue {
     // the default") — found by actually booting backend, not by inspection. Omit the
     // keys entirely when unset instead of passing `undefined` through.
     this.boss = new PgBoss({
-      db: options.db,
-      backend: options.backend,
-      connectionString: options.connectionString,
+      // The same rule for these three. pg-boss 12 resolves its backend with
+      // `'backend' in config`, so `backend: undefined` is not "the default" — it is an unknown
+      // backend, and the constructor throws. That broke every standalone-Postgres boot
+      // (DATABASE_URL, which passes only `connectionString`), found by starting the compose
+      // stack; the PGlite path passes a backend and so never showed it.
+      ...(options.db !== undefined ? { db: options.db } : {}),
+      ...(options.backend !== undefined ? { backend: options.backend } : {}),
+      ...(options.connectionString !== undefined ? { connectionString: options.connectionString } : {}),
       ...(options.superviseIntervalSeconds !== undefined
         ? { superviseIntervalSeconds: options.superviseIntervalSeconds }
         : {}),

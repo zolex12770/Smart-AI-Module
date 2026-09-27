@@ -186,3 +186,15 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000): Promise<void
     await new Promise((r) => setTimeout(r, 50));
   }
 }
+
+/**
+ * The standalone-Postgres configuration (DATABASE_URL) passes only a connection string. pg-boss 12
+ * treats a present-but-undefined `backend` as an unknown backend and throws in its constructor, so
+ * every production boot against a real Postgres failed — found by starting the compose stack.
+ * Construction validates configuration without connecting, so this needs no database.
+ */
+describe("JobQueue configured for a standalone Postgres", () => {
+  it("constructs from a connection string alone", () => {
+    expect(() => new JobQueue({ connectionString: "postgres://ai:secret@127.0.0.1:1/ai" })).not.toThrow();
+  });
+});

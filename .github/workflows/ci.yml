@@ -351,6 +351,38 @@ jobs:
           docker logs api-boot-check 2>&1 | grep -q "job workers registered"
           docker rm -f api-boot-check
 
+      # The same image against a REAL Postgres (DATABASE_URL) — the configuration every deployment
+      # uses. PGlite is the local default, so nothing else here exercised this path, and it was
+      # broken (pg-boss rejected an undefined `backend`) until the compose stack was started.
+      - name: Assert the API image boots against a real Postgres and applies its migrations
+        run: |
+          set -euo pipefail
+          docker network create boot-pg
+          docker run -d --name boot-postgres --network boot-pg \
+            -e POSTGRES_USER=ai -e POSTGRES_PASSWORD=ci-only -e POSTGRES_DB=ai pgvector/pgvector:pg16
+          for i in $(seq 1 60); do docker exec boot-postgres pg_isready -U ai -d ai >/dev/null 2>&1 && break; sleep 1; done
+          docker run -d --name api-pg-check --network boot-pg \
+            -e NODE_ENV=production -e ROLE=worker \
+            -e DATABASE_URL=postgres://ai:ci-only@boot-postgres:5432/ai \
+            ai-platform-api:ci
+          for i in $(seq 1 90); do
+            docker logs api-pg-check 2>&1 | grep -q "job workers registered" && break
+            if ! docker ps --filter name=api-pg-check --filter status=running -q | grep -q .; then
+              echo "::error::The API image exited instead of booting against Postgres."
+              docker logs api-pg-check || true
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs api-pg-check
+          docker logs api-pg-check 2>&1 | grep -q "job workers registered"
+          # The migrations really ran against the real database.
+          tables=$(docker exec boot-postgres psql -U ai -d ai -tAc "select count(*) from information_schema.tables where table_schema='public'")
+          echo "public tables: $tables"
+          test "$tables" -ge 23
+          docker rm -f api-pg-check boot-postgres
+          docker network rm boot-pg
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.9.8"
