@@ -99,7 +99,10 @@ for path in sorted(glob.glob("backend/src/routes/**/*.ts", recursive=True)):
                 auth = "system administrator"
             elif kind == "permission":
                 auth = f"session or API key · `{permission}`"
-            elif re.search(r'request\.auth\?\.method !== "session"', body):
+            # Inline, or through auth.ts's `requireSessionCredential` helper — the generator missed
+            # the helper when the check was factored out, and documented four session-only routes
+            # as accepting API keys.
+            elif re.search(r'request\.auth\?\.method !== "session"|requireSessionCredential\(', body):
                 auth = "session only · authentication only"
             else:
                 auth = "session or API key · authentication only"

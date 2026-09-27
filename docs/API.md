@@ -5,7 +5,7 @@ Regenerate with `npm run docs:api`; CI fails if this file differs from what the 
 produces, and `backend/src/routes/api-contract.test.ts` sends a real request for every row
 below to check that the documented access and rate limit are the ones the server applies.
 
-**66 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
+**70 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
 
 ## Conventions
 
@@ -117,8 +117,8 @@ and nothing is ever substituted with a fake result (ADR-050).
 | `POST` | `/api/v1/auth/logout` | public | global (300 / 1 minute) |
 | `GET` | `/api/v1/auth/me` | session or API key · authentication only | global (300 / 1 minute) |
 | `POST` | `/api/v1/auth/password` | session only · authentication only | 5 / 15 minutes per user |
-| `GET` | `/api/v1/auth/sessions` | session or API key · authentication only | global (300 / 1 minute) |
-| `DELETE` | `/api/v1/auth/sessions/:sessionId` | session or API key · authentication only | global (300 / 1 minute) |
+| `GET` | `/api/v1/auth/sessions` | session only · authentication only | global (300 / 1 minute) |
+| `DELETE` | `/api/v1/auth/sessions/:sessionId` | session only · authentication only | global (300 / 1 minute) |
 | `POST` | `/api/v1/auth/signup` | public | `AUTH_RATE_LIMIT_MAX` / 10 minutes |
 
 ## `/api/v1/chat`
