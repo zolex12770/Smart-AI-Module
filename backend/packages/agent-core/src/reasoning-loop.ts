@@ -5,6 +5,7 @@ import {
   type ToolCall,
   type ToolSpec,
 } from "@ai-platform/shared";
+import { recoverTextToolCalls } from "./text-tool-call.js";
 import { wrapUntrustedContent } from "./trust-boundary.js";
 
 /**
@@ -203,6 +204,12 @@ export async function runReasoningLoop(
 
     if (!sawDone) {
       throw new ProviderError("The model stream ended without a completion event.");
+    }
+
+    // A call written as text is still a call — see text-tool-call.ts. Only when the provider
+    // produced none, and only for a tool offered in this turn.
+    if (pendingCalls.length === 0 && deps.tools.length > 0) {
+      pendingCalls.push(...recoverTextToolCalls(assistantContent, deps.tools, `text-call-${transcript.length}`));
     }
 
     transcript.push({

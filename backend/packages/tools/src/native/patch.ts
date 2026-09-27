@@ -169,6 +169,33 @@ export interface ApplyResult {
 }
 
 /**
+ * Says WHICH line of a hunk is not in the file, and what the file has instead.
+ *
+ * The message used to be "The file has changed since the diff was produced" for every mismatch.
+ * In a real run nothing had changed the file: qwen2.5:7b's diffs carried `      return a - b;`
+ * where the file has `  return a - b;`, twice, and the model — told the file had changed — re-read
+ * it and made the same indentation error again. The actual cause is usually visible in one line.
+ */
+function explainMismatch(lines: string[], expected: string[]): string {
+  const missing = expected.find((line) => !lines.includes(line));
+  if (missing === undefined) {
+    return "Each of its lines exists in the file, but not in this order here. Re-read the file with code.read_lines and send a fresh diff, or use code.replace_text.";
+  }
+  const sameTextDifferentSpacing = lines.find((line) => line.trim() !== "" && line.trim() === missing.trim());
+  if (sameTextDifferentSpacing !== undefined) {
+    return (
+      `Its line ${JSON.stringify(missing)} is not in the file, which has ${JSON.stringify(sameTextDifferentSpacing)}: ` +
+      "the same text with different indentation. Copy lines exactly as code.read_lines shows them (without the line numbers), " +
+      "or use code.replace_text."
+    );
+  }
+  return (
+    `Its line ${JSON.stringify(missing)} is not in the file. Re-read the file with code.read_lines and copy lines exactly ` +
+    "(without the line numbers), or use code.replace_text."
+  );
+}
+
+/**
  * Applies one file's hunks to its content. Throws rather than guessing: if a hunk's context
  * does not match exactly at its stated line or within `searchRadius` lines of it, the whole
  * patch is refused. A partially-applied patch is worse than a rejected one.
@@ -192,7 +219,7 @@ export function applyPatchToContent(content: string, patch: FilePatch, searchRad
     if (at === -1) {
       throw new PatchError(
         `Hunk @@ -${hunk.oldStart},${hunk.oldLines} @@ does not match "${patch.newPath}" at or near line ${hunk.oldStart}. ` +
-          `The file has changed since the diff was produced; re-read it and generate a fresh patch.`
+          explainMismatch(lines, expected)
       );
     }
     if (at !== stated) offsets.push(at - stated);

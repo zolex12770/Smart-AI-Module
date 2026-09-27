@@ -238,6 +238,18 @@ describe("a patch that changes nothing is not reported as applied", () => {
     expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
   });
 
+  it("says which line did not match, and that it differs only in indentation", async () => {
+    // Verbatim from a real run: six spaces where the file has two, reported as "the file has changed".
+    writeFileSync(join(workspaceOf(root), "sum.js"), SOURCE);
+    const diff = "--- a/sum.js\n+++ b/sum.js\n@@ -2,4 +2,4 @@\n-      return a - b;\n+      return a + b;\n  }";
+    const result = await patchTool().handler({ diff }, ctx());
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toContain('"      return a - b;" is not in the file, which has "  return a - b;"');
+    expect(String(result.error)).toMatch(/different indentation.*code\.replace_text/s);
+    expect(String(result.error)).not.toMatch(/has changed since/);
+    expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
+  });
+
   it("applies a diff that really changes the line", async () => {
     // The guard must not refuse the fix the agent was actually supposed to make.
     writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);

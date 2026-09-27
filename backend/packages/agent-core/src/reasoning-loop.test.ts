@@ -331,3 +331,49 @@ describe("validateToolArguments", () => {
     expect(() => validateToolArguments(schema, {})).toThrow(ValidationError);
   });
 });
+
+/**
+ * The real run this guards: qwen2.5:7b ended three turns with a call written as text — a stray
+ * token where `<tool_call>` belonged — and each was taken as a final answer.
+ */
+describe("runReasoningLoop recovers a tool call the model wrote as text", () => {
+  const RECORDED =
+    "It appears that even after applying the patch, the test is still failing.\n\n Ronaldo\n" +
+    '{"name": "calculator", "arguments": {"expression": "17*23"}}\n</tool_call>';
+
+  it("runs it through the ordinary call path and lets the model answer from the result", async () => {
+    const provider = scriptedProvider([
+      { kind: "text", content: RECORDED },
+      { kind: "text", content: "17 times 23 is 391." },
+    ]);
+    const executeTool = vi.fn(async (): Promise<ToolExecutionOutcome> => ({ ok: true, content: "391" }));
+
+    const result = await runReasoningLoop({ streamChat: provider.streamChat, tools: [CALCULATOR], executeTool }, [
+      { role: "user", content: "What is 17*23?" },
+    ]);
+
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(executeTool.mock.calls[0][0].call).toMatchObject({ name: "calculator", arguments: { expression: "17*23" } });
+    expect(result.answer).toBe("17 times 23 is 391.");
+    // The provider saw the call as a call on the next turn, with its result after it.
+    const next = provider.seenRequests[1].messages;
+    expect(next.some((m) => m.role === "assistant" && m.toolCalls?.[0]?.name === "calculator")).toBe(true);
+    expect(next.some((m) => m.role === "tool")).toBe(true);
+  });
+
+  it("does not run a tool that was not offered, or text that merely looks like JSON", async () => {
+    for (const content of [
+      '{"name": "fs.delete_file", "arguments": {"path": "x"}}',
+      'The config is {"name": "calculator"} with no arguments.',
+      'Here is an example: {"name": "calculator", "arguments": "17*23"}',
+    ]) {
+      const provider = scriptedProvider([{ kind: "text", content }]);
+      const executeTool = vi.fn();
+      const result = await runReasoningLoop({ streamChat: provider.streamChat, tools: [CALCULATOR], executeTool }, [
+        { role: "user", content: "hi" },
+      ]);
+      expect(executeTool, content).not.toHaveBeenCalled();
+      expect(result.stopReason).toBe("answered");
+    }
+  });
+});
