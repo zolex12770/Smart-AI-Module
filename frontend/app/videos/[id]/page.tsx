@@ -78,7 +78,7 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
               {retrying ? "Retrying…" : hasFailedScenes ? "Retry failed scenes" : "Retry rendering"}
             </button>
           )}
-          {["generating_scenes", "assembling"].includes(project.status) && !project.cancelRequestedAt && (
+          {["planning", "generating_scenes", "assembling"].includes(project.status) && !project.cancelRequestedAt && (
             <button className="btn" type="button" disabled={cancelling} onClick={handleCancel}>
               {cancelling ? "Cancelling…" : "Cancel"}
             </button>
@@ -86,6 +86,16 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
           {project.cancelRequestedAt && <span className="page-subtitle">Cancellation requested</span>}
         </div>
       </div>
+
+      {project.status === "planning" ? (
+        <div className="card" role="status">
+          <strong>Writing the storyboard</strong>
+          <p className="page-subtitle">
+            The model is writing the script: one shot and one line of narration per scene. On a local model this
+            can take a few minutes; the scenes start as soon as it is done.
+          </p>
+        </div>
+      ) : null}
 
       {project.script ? (
         <div className="card">

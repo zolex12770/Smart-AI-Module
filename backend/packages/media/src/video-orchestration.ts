@@ -8,6 +8,7 @@ import type {
 import type { ModelCallMeter, SpeechMeter, VideoProjectRequest, VideoProvider } from "@ai-platform/shared";
 import type { JobQueue } from "@ai-platform/jobs";
 import { writeVideoScript, type ScriptModel } from "./video-script.js";
+import { planScenes } from "./video-storyboard.js";
 import type { SpeechProvider } from "./speech.js";
 import { describeFailureForCaller } from "./failure-message.js";
 import { watchForCancellation } from "./cancellation-watch.js";
@@ -57,30 +58,116 @@ export interface CreateVideoProjectOptions {
   request: VideoProjectRequest;
 }
 
+/** What the storyboard stage needs besides the repositories — shared by both entry points. */
+export interface VideoScriptStageDeps {
+  scriptModel?: ScriptModel;
+  /**
+   * Budget and ledger for the storyboard call — ADR-150.
+   *
+   * `POST /api/v1/videos` checked video-seconds and nothing else, so the storyboard spent real
+   * LLM tokens against no budget and wrote no usage row: the dashboard and the monthly total
+   * were both short by one model call per video, on the one path outside chat that makes one.
+   */
+  modelCallMeter?: ModelCallMeter;
+  /** Operator calibration for the storyboard call — ADR-161. Undefined keeps the stage default. */
+  scriptTimeoutMs?: number;
+  /**
+   * Where the script stage's failure detail goes — ADR-161.
+   *
+   * `writeVideoScript` has always written a `logger.warn` naming the reason it fell back, and
+   * this call site passed no logger, so on the one path that runs in production the line went
+   * nowhere. The only surviving trace was the short `fallbackReason` string on the project row.
+   */
+  logger?: { warn(obj: unknown, msg: string): void };
+}
+
+/**
+ * Creates a video project and writes its storyboard in one call — the inline path.
+ *
+ * The HTTP route no longer uses this: it creates the project in `planning` and lets the
+ * `video.plan` job write the storyboard (see `planVideoProject`), because the storyboard is a
+ * model call and a local model can need minutes for it. This remains for callers that want the
+ * whole thing done before they continue.
+ */
 export async function createVideoProject(
-  deps: Pick<VideoOrchestrationDeps, "projectRepo" | "sceneRepo"> & {
-    scriptModel?: ScriptModel;
-    /**
-     * Budget and ledger for the storyboard call — ADR-150.
-     *
-     * `POST /api/v1/videos` checked video-seconds and nothing else, so the storyboard spent real
-     * LLM tokens against no budget and wrote no usage row: the dashboard and the monthly total
-     * were both short by one model call per video, on the one path outside chat that makes one.
-     */
-    modelCallMeter?: ModelCallMeter;
-    /** Operator calibration for the storyboard call — ADR-161. Undefined keeps the 25s default. */
-    scriptTimeoutMs?: number;
-    /**
-     * Where the script stage's failure detail goes — ADR-161.
-     *
-     * `writeVideoScript` has always written a `logger.warn` naming the reason it fell back, and
-     * this call site passed no logger, so on the one path that runs in production the line went
-     * nowhere. The only surviving trace was the short `fallbackReason` string on the project row.
-     */
-    logger?: { warn(obj: unknown, msg: string): void };
-  },
+  deps: Pick<VideoOrchestrationDeps, "projectRepo" | "sceneRepo"> & VideoScriptStageDeps,
   input: CreateVideoProjectOptions
 ): Promise<VideoProject> {
+  const created = await createPlanningVideoProject(deps, input);
+  await writeStoryboard(deps, input);
+  // The row as it now stands — script written, status `generating_scenes` — not as created.
+  return (await deps.projectRepo.get(input.projectId, input.videoProjectId)) ?? created;
+}
+
+/**
+ * Creates the project row in `planning`, with no scenes yet — the part of creation that is
+ * instant. `planVideoProject` (the `video.plan` job) writes the storyboard and the scenes.
+ *
+ * `sceneCount` starts at the deterministic decomposition's count, which is what the storyboard
+ * stage is asked to fill; `applyScript` replaces it with the number actually written.
+ */
+export async function createPlanningVideoProject(
+  deps: Pick<VideoOrchestrationDeps, "projectRepo">,
+  input: CreateVideoProjectOptions
+): Promise<VideoProject> {
+  return deps.projectRepo.create({
+    id: input.videoProjectId,
+    projectId: input.projectId,
+    createdByUserId: input.createdByUserId,
+    prompt: input.request.prompt,
+    // No script yet: `applyScript` writes it when the storyboard stage finishes.
+    script: undefined,
+    targetDurationSeconds: input.request.targetDurationSeconds,
+    sceneClipSeconds: input.request.sceneClipSeconds,
+    sceneCount: planScenes(input.request).length,
+    status: "planning",
+  });
+}
+
+/**
+ * The `video.plan` job: writes a `planning` project's storyboard, then starts its scenes.
+ *
+ * WHY THIS MOVED OFF THE REQUEST. The storyboard used to be written inside `POST /api/v1/videos`,
+ * before its 202, under a 25-second ceiling chosen so the request stayed responsive. The
+ * autonomous-completion pass measured what that meant on a local 7B model on four CPU cores:
+ * "The script stage exceeded its 25s deadline", a deterministic "Scene 1 of 2: <prompt>"
+ * storyboard, and therefore no narration, no audio track and no subtitles — a degraded video on
+ * every request, from a limit that existed only because of where the call ran. As a job, the
+ * request returns at once and the storyboard gets the time a real model needs.
+ *
+ * Idempotent, so a redelivered job is harmless: only a project still in `planning` is planned. A
+ * project cancelled while planning is settled as cancelled rather than started.
+ */
+export async function planVideoProject(
+  deps: VideoOrchestrationDeps & VideoScriptStageDeps,
+  scope: VideoProjectScope,
+  requestId?: string
+): Promise<"planned" | "skipped" | "cancelled"> {
+  const project = await deps.projectRepo.get(scope.projectId, scope.videoProjectId);
+  if (!project || project.status !== "planning") return "skipped";
+  if (project.cancelRequestedAt) {
+    await deps.projectRepo.updateStatus(scope.projectId, scope.videoProjectId, "cancelled", {
+      errorMessage: "Cancelled before its storyboard was written.",
+    });
+    return "cancelled";
+  }
+  await writeStoryboard(deps, {
+    ...scope,
+    createdByUserId: project.createdByUserId,
+    request: {
+      prompt: project.prompt,
+      targetDurationSeconds: project.targetDurationSeconds,
+      sceneClipSeconds: project.sceneClipSeconds,
+    },
+  });
+  await orchestrateVideoProject(deps, scope, requestId);
+  return "planned";
+}
+
+async function writeStoryboard(
+  deps: Pick<VideoOrchestrationDeps, "projectRepo"> & VideoScriptStageDeps,
+  input: CreateVideoProjectOptions
+): Promise<void> {
   /**
    * The script and storyboard stages now really run — docs/07 Part 2 §2.2 stages 1-2, ADR-080.
    *
@@ -117,6 +204,13 @@ export async function createVideoProject(
       }
     );
   }
+  /**
+   * Persisted so the API and the UI can show what was written, and so the distinction between
+   * an authored and a mechanical storyboard survives past this function. `scenesWritten` is
+   * how much of it the model really wrote (ADR-137): a reply describing two shots for a
+   * five-scene video was padded by cycling those two while the project still recorded
+   * `scriptSource: "model"` with no qualification.
+   */
   const storedScript = {
     title: script.title,
     scriptSource: script.scriptSource,
@@ -132,37 +226,10 @@ export async function createVideoProject(
       durationSeconds: scene.durationSeconds,
     })),
   };
-
-  const project = await deps.projectRepo.create({
-    id: input.videoProjectId,
-    projectId: input.projectId,
-    createdByUserId: input.createdByUserId,
-    prompt: input.request.prompt,
-    /**
-     * Persisted so the API and the UI can show what was written, and so the distinction between
-     * an authored and a mechanical storyboard survives past this function. `scenesWritten` is
-     * how much of it the model really wrote (ADR-137): a reply describing two shots for a
-     * five-scene video was padded by cycling those two while the project still recorded
-     * `scriptSource: "model"` with no qualification.
-     */
-    script: storedScript,
-    targetDurationSeconds: input.request.targetDurationSeconds,
-    sceneClipSeconds: input.request.sceneClipSeconds,
-    sceneCount: script.scenes.length,
-    // Straight into `generating_scenes`: the script stage has already completed by the time this
-    // line runs (it is awaited above), so no stage remains that `planning` would be waiting for,
-    // and a row parked there forever would be a status that lies about what is happening.
-    status: "generating_scenes",
-  });
   /**
-   * The scenes and the parent row go in together — docs/26_DECISIONS.md ADR-157.
-   *
-   * This used to be a `create` followed by a `createMany`: two writes with no transaction, so a
-   * process that died between them left a video project claiming N scenes with none of them
-   * written, which nothing could then repair. `applyScript` was built for exactly this — its
-   * docstring says so, and it does the delete-and-replace inside one transaction with the tenant
-   * check in the `WHERE` — and it had no caller anywhere: the interface advertised a guarantee no
-   * code path provided.
+   * The scenes and the parent row go in together — docs/26_DECISIONS.md ADR-157: `applyScript`
+   * replaces the scenes and moves the project to `generating_scenes` in one transaction, with
+   * the tenant check in the `WHERE`, so no process can die between the two writes.
    */
   await deps.projectRepo.applyScript(
     input.projectId,
@@ -178,7 +245,6 @@ export async function createVideoProject(
       durationSeconds: s.durationSeconds,
     }))
   );
-  return project;
 }
 
 /**

@@ -22,6 +22,18 @@ import { planScenes, type PlannedScene } from "./video-storyboard.js";
  * authored and is not.
  */
 
+/**
+ * How long the storyboard stage may take, unless the operator says otherwise
+ * (VIDEO_SCRIPT_TIMEOUT_MS).
+ *
+ * It was 25 seconds while the stage ran inside `POST /api/v1/videos`: a person pressing a button
+ * should not conclude the page is broken. The stage now runs in the `video.plan` job, so that
+ * argument is gone, and 25 s was measured failing on the reference local runtime (qwen2.5:7b on
+ * four CPU cores) in the autonomous-completion pass. Three minutes is generous for a handful of
+ * shots on that runtime, and still bounded.
+ */
+export const DEFAULT_VIDEO_SCRIPT_TIMEOUT_MS = 180_000;
+
 export interface ScriptedScene extends PlannedScene {
   /** What the camera sees. Fed to the video provider as its prompt. */
   shotDescription: string;
@@ -122,12 +134,7 @@ export async function writeVideoScript(
     return deterministic(planned, "No chat provider is configured, so no script stage ran.");
   }
 
-  /**
-   * 25 seconds. Long enough for a local 7B model to write a handful of shots (measured at ~15s
-   * for three on this machine), short enough that a person pressing a button does not conclude
-   * the page is broken — and bounded, which is the part that was missing entirely.
-   */
-  const timeoutMs = deps.timeoutMs ?? 25_000;
+  const timeoutMs = deps.timeoutMs ?? DEFAULT_VIDEO_SCRIPT_TIMEOUT_MS;
   const controller = new AbortController();
   const deadline = setTimeout(() => controller.abort(), timeoutMs);
 

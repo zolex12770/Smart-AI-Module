@@ -370,10 +370,10 @@ const envFields = z.object({
    * no subtitles, while the render still succeeds and the project still reports `succeeded`.
    * Two consecutive real runs fell back that way.
    *
-   * The default stays 25s, because the responsiveness argument is still right and a longer
-   * default would make every deployment's POST slower to fix one deployment's slow model. What
-   * changes is that an operator who knows their runtime is slower can now say so, instead of
-   * having a silently degraded feature and no knob.
+   * The stage has since moved off the request into the `video.plan` job (the autonomous-
+   * completion pass measured the 25 s ceiling failing on every request with a local model), so
+   * the responsiveness argument is gone: the default is DEFAULT_VIDEO_SCRIPT_TIMEOUT_MS (180 s),
+   * and this remains the operator's knob for a runtime slower or faster than that.
    */
   VIDEO_SCRIPT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).optional(),
 });

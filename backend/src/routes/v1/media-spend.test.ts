@@ -4,7 +4,7 @@ import { usageRecords, type PgliteDb } from "@ai-platform/database";
 import { QuotaManager } from "@ai-platform/quota";
 import { PgUsageRecordRepository } from "@ai-platform/database";
 import { and, eq } from "drizzle-orm";
-import { buildTestApp, closeTestApp } from "../../test-app.js";
+import { buildTestApp, closeTestApp, runVideoPlan } from "../../test-app.js";
 import type { AppContext } from "../../context.js";
 
 /**
@@ -35,13 +35,22 @@ describe("media spend is budgeted and recorded", () => {
     await closeTestApp(app, db, ctx);
   });
 
-  const createVideo = () =>
-    app.inject({
+  /**
+   * The request, then the `video.plan` job it enqueued — the storyboard is written there now, so
+   * the ledger row appears once the plan has run, as it would under the API role's worker.
+   */
+  const createVideo = async () => {
+    const res = await app.inject({
       method: "POST",
       url: "/api/v1/videos",
       headers: auth.headers,
       payload: { prompt: "a harbour at dawn", targetDurationSeconds: 8, sceneClipSeconds: 4 },
     });
+    if (res.statusCode === 202) {
+      await runVideoPlan(ctx, auth.projectId, (res.json() as { project: { id: string } }).project.id);
+    }
+    return res;
+  };
 
   it("records the storyboard's model call in the ledger", async () => {
     const res = await createVideo();
@@ -57,6 +66,20 @@ describe("media spend is budgeted and recorded", () => {
     expect(rows[0].idempotencyKey).toMatch(/^llm:video\.storyboard:/);
     // Real counts from the provider's terminal event, not a placeholder.
     expect((rows[0].inputTokens ?? 0) + (rows[0].outputTokens ?? 0)).toBeGreaterThan(0);
+  });
+
+  it("charges a redelivered plan job once", async () => {
+    // pg-boss may deliver a job twice; the plan is idempotent and so is its charge.
+    const res = await createVideo();
+    const id = (res.json() as { project: { id: string } }).project.id;
+    await runVideoPlan(ctx, auth.projectId, id);
+    const rows = await db
+      .select()
+      .from(usageRecords)
+      .where(and(eq(usageRecords.projectId, auth.projectId), eq(usageRecords.kind, "llm")));
+    expect(rows).toHaveLength(1);
+    const project = await ctx.videoProjects.get(auth.projectId, id);
+    expect(project?.status).toBe("generating_scenes");
   });
 
   it("charges a second video separately, and a retried create only once", async () => {

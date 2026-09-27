@@ -239,7 +239,8 @@ export interface VideoProject {
   targetDurationSeconds: number;
   sceneClipSeconds: number;
   sceneCount: number;
-  status: "generating_scenes" | "assembling" | "succeeded" | "partially_succeeded" | "failed";
+  /** `planning`: the storyboard is being written (the `video.plan` job) and there are no scenes yet. */
+  status: "planning" | "generating_scenes" | "assembling" | "succeeded" | "partially_succeeded" | "failed" | "cancelled";
   renderStatus: "pending" | "processing" | "succeeded" | "skipped_no_ffmpeg" | "failed" | null;
   renderAssetId: string | null;
   /** Captions for the finished render (ADR-122); the VTT is what a browser <track> can show. */

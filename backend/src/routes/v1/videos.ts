@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { createVideoProject, orchestrateVideoProject, type VideoProjectScope } from "@ai-platform/media";
+import { createPlanningVideoProject, orchestrateVideoProject, type VideoProjectScope } from "@ai-platform/media";
 import {
   NotFoundError,
   PermissionError,
@@ -59,24 +59,21 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
       const quotaCheck = await ctx.quota.checkVideoSeconds(projectId, parsed.data.targetDurationSeconds);
       if (!quotaCheck.allowed) throw new QuotaExceededError(quotaCheck.reason ?? "Video-seconds quota exceeded.");
 
+      // The storyboard is a model call, so the token budget is asked NOW, while the caller can
+      // still be told no (ADR-150). The job asks again before it spends; this is the refusal a
+      // person sees, rather than a 202 for a video whose plan can never run.
+      await ctx.modelCallMeter.check(projectId, parsed.data.prompt);
+
       const scope: VideoProjectScope = { projectId, videoProjectId: uuid() };
-      const project = await createVideoProject(
-        {
-          projectRepo: ctx.videoProjects,
-          sceneRepo: ctx.videoScenes,
-          // The script/storyboard stage (ADR-080). The router IS the script model — one chat
-          // path, so the storyboard benefits from the same fallback, retry and circuit breaking
-          // as every other model call. Absent only when no chat provider is configured, which is
-          // exactly when the deterministic planner should take over.
-          scriptModel: ctx.router,
-          // ADR-150: the storyboard is a real model call, so it is budgeted and recorded like
-          // every other one. It was neither.
-          modelCallMeter: ctx.modelCallMeter,
-          // ADR-161 — the operator's ceiling for this stage, and somewhere for it to say why it
-          // gave up. Without the logger the stage's own diagnosis was written to nothing.
-          ...(ctx.videoScriptTimeoutMs !== undefined ? { scriptTimeoutMs: ctx.videoScriptTimeoutMs } : {}),
-          logger: request.log,
-        },
+      /**
+       * Created in `planning` and handed to the `video.plan` job, which writes the storyboard
+       * (a model call — ADR-080, ADR-150 metering) and then starts the scenes. The storyboard
+       * used to be written here, before the 202, under a 25-second ceiling chosen only so this
+       * request stayed responsive; on a local CPU model that ceiling was the reason every video
+       * lost its narration and subtitles (see `planVideoProject`).
+       */
+      const project = await createPlanningVideoProject(
+        { projectRepo: ctx.videoProjects },
         {
           ...scope,
           // Attribution from the credential, never from the body (ADR-049).
@@ -84,13 +81,9 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
           request: parsed.data,
         }
       );
-      // docs/20_OBSERVABILITY.md §3.2 — see the matching comment in video-orchestration.ts
-      // for how this id then reaches every scene job and the eventual render job.
-      await orchestrateVideoProject(
-        { projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue },
-        scope,
-        request.id
-      );
+      // docs/20_OBSERVABILITY.md §3.2 — the request id travels into the plan job, and from
+      // there into every scene job and the eventual render job.
+      await ctx.jobQueue.enqueue("video.plan", { ...scope, userId: authCtx.user.id, requestId: request.id });
 
       reply.status(202).send({ project });
     }
@@ -155,15 +148,27 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
      * video-seconds budget and this one did not, so a project over its limit could keep
      * regenerating scenes through the retry button indefinitely.
      */
-    const pendingSeconds = (await ctx.videoScenes.listByVideoProject({ projectId, videoProjectId: project.id }))
-      .filter((scene) => scene.status !== "succeeded")
-      .reduce((total, scene) => total + (scene.durationSeconds ?? 0), 0);
+    // A project still planning has no scenes yet, so all of it is still to generate: counting
+    // its (absent) scenes would read zero and wave the retry past the budget.
+    const pendingSeconds =
+      project.status === "planning"
+        ? project.targetDurationSeconds
+        : (await ctx.videoScenes.listByVideoProject({ projectId, videoProjectId: project.id }))
+            .filter((scene) => scene.status !== "succeeded")
+            .reduce((total, scene) => total + (scene.durationSeconds ?? 0), 0);
     if (pendingSeconds > 0) {
       const quotaCheck = await ctx.quota.checkVideoSeconds(projectId, pendingSeconds);
       if (!quotaCheck.allowed) throw new QuotaExceededError(quotaCheck.reason ?? "Video quota exceeded.");
     }
 
     const scope: VideoProjectScope = { projectId, videoProjectId: project.id };
+    // A project still in `planning` has no scenes to resume: its storyboard job never finished
+    // (dead-lettered, or lost), so the retry is another plan. `planVideoProject` is idempotent.
+    if (project.status === "planning") {
+      await ctx.jobQueue.enqueue("video.plan", { ...scope, userId: authCtx.user.id, requestId: request.id });
+      reply.status(202).send({ project });
+      return;
+    }
     await orchestrateVideoProject(
       { projectRepo: ctx.videoProjects, sceneRepo: ctx.videoScenes, jobQueue: ctx.jobQueue },
       scope,

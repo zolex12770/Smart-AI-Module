@@ -44,6 +44,8 @@ import {
   processImageGeneration,
   processVideoRender,
   processVideoScene,
+  planVideoProject,
+  DEFAULT_VIDEO_SCRIPT_TIMEOUT_MS,
   type AssetStore,
   watchForCancellation,
   type SpeechProvider,
@@ -174,6 +176,8 @@ const videoSceneJobSchema = jobScopeSchema.extend({
   sceneId: z.string().min(1),
 });
 const videoRenderJobSchema = jobScopeSchema.extend({ videoProjectId: z.string().min(1) });
+/** The storyboard stage for one video project (`planVideoProject`). */
+const videoPlanJobSchema = jobScopeSchema.extend({ videoProjectId: z.string().min(1) });
 
 /**
  * Registers the platform's LLM providers, in priority order — docs/26_DECISIONS.md ADR-056.
@@ -791,6 +795,13 @@ async function main() {
     retryLimit: 1,
     expireInSeconds: Math.ceil(videoSceneDeadlineMs / 1000) + 300,
   });
+  // The storyboard stage, off the request path (see `planVideoProject`). Its claim window sits
+  // above the stage's own deadline so the stage always gives up first.
+  const videoScriptTimeoutMs = config.VIDEO_SCRIPT_TIMEOUT_MS ?? DEFAULT_VIDEO_SCRIPT_TIMEOUT_MS;
+  await jobQueue.ensureQueueWithDeadLetter("video.plan", {
+    retryLimit: 1,
+    expireInSeconds: Math.ceil(videoScriptTimeoutMs / 1000) + 120,
+  });
 
   logger.info(
     {
@@ -1146,7 +1157,10 @@ async function main() {
             }
           });
         },
-        { localConcurrency: 3 }
+        // Three at once unless the provider says it can do fewer: a local diffusion model runs one
+        // generation at a time, and three concurrent scene jobs would each hold a job claim while
+        // queued behind the others.
+        { localConcurrency: videoProvider.getCapabilities().maxConcurrency ?? 3 }
       );
 
     await jobQueue.registerWorker<unknown>("video.render", async (raw, _jobId, attempt) => {
@@ -1285,6 +1299,33 @@ async function main() {
         });
       }
     },
+  });
+
+  /**
+   * The `video.plan` job — the storyboard stage (see `planVideoProject`).
+   *
+   * Registered in the HTTP role, not the worker role, because it is a model call and the API is
+   * where the model is: the worker pool deliberately has no LLM configuration (ADR-056), and a
+   * storyboard job there would always fall back to the deterministic plan. In `ROLE=all` the one
+   * process does both. A crash mid-plan is pg-boss's to redeliver; the job is idempotent.
+   */
+  await jobQueue.registerWorker<unknown>("video.plan", async (raw, _jobId, attempt) => {
+    const { projectId, videoProjectId, requestId } = videoPlanJobSchema.parse(raw);
+    await runJob(logger, { queue: "video.plan", jobId: videoProjectId, projectId, requestId, retryCount: attempt.retryCount }, async () => {
+      await planVideoProject(
+        {
+          projectRepo: videoProjects,
+          sceneRepo: videoScenes,
+          jobQueue,
+          scriptModel: registry.list().length > 0 ? modelRouter : undefined,
+          modelCallMeter,
+          scriptTimeoutMs: videoScriptTimeoutMs,
+          logger,
+        },
+        { projectId, videoProjectId },
+        requestId
+      );
+    });
   });
 
   const cookieSecure = config.COOKIE_SECURE ? config.COOKIE_SECURE === "true" : config.NODE_ENV === "production";
@@ -1500,7 +1541,7 @@ async function main() {
     usage,
     quota,
     ragMaxDistance: config.RAG_MAX_COSINE_DISTANCE,
-    videoScriptTimeoutMs: config.VIDEO_SCRIPT_TIMEOUT_MS,
+    videoScriptTimeoutMs,
     modelCallMeter,
     speechMeter,
     scanner,

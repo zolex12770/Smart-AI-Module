@@ -4,6 +4,7 @@ const WARNING = new Set([
   "processing",
   "pending",
   "scanning",
+  "planning",
   "generating_scenes",
   "assembling",
   "ingesting",

@@ -20,7 +20,9 @@ import { v4 as uuid } from "uuid";
 import { LocalAssetStore } from "./asset-store.js";
 import {
   checkProjectCompletion,
+  createPlanningVideoProject,
   createVideoProject,
+  planVideoProject,
   orchestrateVideoProject,
   processVideoScene,
   type VideoProjectScope,
@@ -484,6 +486,64 @@ describe("Duplicate-work guards (real PGlite Postgres + real pg-boss)", () => {
  * parsed out of `storagePath`, which only the AssetStore that wrote it may interpret
  * (ADR-040) — under `CloudStorageAssetStore` that field is a `gs://` URI, not a filename.
  */
+/**
+ * The storyboard as a job — `planVideoProject`, found necessary by the autonomous-completion pass:
+ * inside the request it ran under a 25 s ceiling that a local CPU model could not meet, and every
+ * video lost its narration and subtitles.
+ */
+describe("planVideoProject (real PGlite Postgres + real pg-boss)", () => {
+  let db: PgliteDb;
+  let queue: RecordingJobQueue;
+  let projectRepo: PgVideoProjectRepository;
+  let sceneRepo: PgVideoSceneRepository;
+  let tenantId: string;
+  const request = { prompt: "a harbour at dawn", targetDurationSeconds: 8, sceneClipSeconds: 4 };
+
+  beforeEach(async () => {
+    db = await createDb(":memory:");
+    await runMigrations(db);
+    tenantId = await seedProject(db, "video plan");
+    projectRepo = new PgVideoProjectRepository(db);
+    sceneRepo = new PgVideoSceneRepository(db);
+    queue = new RecordingJobQueue({ db: fromPglite(db.$client), backend: "pglite" });
+    await queue.start();
+    await queue.ensureQueue("video.generate_scene", { retryLimit: 0, expireInSeconds: 30 });
+  });
+
+  afterEach(async () => {
+    await queue.stop().catch(() => {});
+    await db.$client.close();
+  });
+
+  it("creates the project in planning with no scenes, then plans it once and starts its scenes", async () => {
+    const videoProjectId = uuid();
+    const created = await createPlanningVideoProject({ projectRepo }, { projectId: tenantId, videoProjectId, createdByUserId: null, request });
+    expect(created.status).toBe("planning");
+    expect(await sceneRepo.listByVideoProject({ projectId: tenantId, videoProjectId })).toHaveLength(0);
+
+    const deps = { projectRepo, sceneRepo, jobQueue: queue };
+    expect(await planVideoProject(deps, { projectId: tenantId, videoProjectId })).toBe("planned");
+    const planned = await projectRepo.get(tenantId, videoProjectId);
+    expect(planned?.status).toBe("generating_scenes");
+    expect((planned?.script as { scriptSource: string }).scriptSource).toBe("deterministic");
+    expect(await sceneRepo.listByVideoProject({ projectId: tenantId, videoProjectId })).toHaveLength(2);
+    expect(queue.sendCount("video.generate_scene")).toBe(2);
+
+    // A redelivered plan job changes nothing and enqueues nothing.
+    expect(await planVideoProject(deps, { projectId: tenantId, videoProjectId })).toBe("skipped");
+    expect(queue.sendCount("video.generate_scene")).toBe(2);
+  });
+
+  it("settles a project cancelled while planning as cancelled, without planning it", async () => {
+    const videoProjectId = uuid();
+    await createPlanningVideoProject({ projectRepo }, { projectId: tenantId, videoProjectId, createdByUserId: null, request });
+    await projectRepo.requestCancel(tenantId, videoProjectId);
+    expect(await planVideoProject({ projectRepo, sceneRepo, jobQueue: queue }, { projectId: tenantId, videoProjectId })).toBe("cancelled");
+    expect((await projectRepo.get(tenantId, videoProjectId))?.status).toBe("cancelled");
+    expect(await sceneRepo.listByVideoProject({ projectId: tenantId, videoProjectId })).toHaveLength(0);
+  });
+});
+
 describe("extensionForMimeType", () => {
   it("maps the mock provider's real GIF clips and the rendered MP4", () => {
     expect(extensionForMimeType("image/gif")).toBe("gif");

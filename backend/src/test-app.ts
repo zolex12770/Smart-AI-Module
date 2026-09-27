@@ -27,7 +27,7 @@ import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings
 import { MemoryService } from "@ai-platform/memory";
 import { fromPglite, JobQueue } from "@ai-platform/jobs";
 import { MockLLMProvider } from "@ai-platform/llm-mock";
-import { LocalAssetStore, PiperSpeechProvider } from "@ai-platform/media";
+import { LocalAssetStore, PiperSpeechProvider, planVideoProject } from "@ai-platform/media";
 import { McpManager } from "@ai-platform/mcp";
 import { estimatePromptTokens, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { QuotaManager } from "@ai-platform/quota";
@@ -128,7 +128,7 @@ export async function buildTestApp(): Promise<{
   // Must mirror every queue index.ts ensures — pg-boss's send() to a queue that was never
   // created throws, which surfaced as a 500 from the upload route the first time a test
   // configured a scanner (ADR-042) before `document.scan` was listed here.
-  for (const queue of ["document.scan", "document.ingest", "audio.generate", "image.generate", "video.generate_scene", "video.render"]) {
+  for (const queue of ["document.scan", "document.ingest", "audio.generate", "image.generate", "video.plan", "video.generate_scene", "video.render"]) {
     await jobQueue.ensureQueue(queue);
   }
 
@@ -341,4 +341,22 @@ export async function closeTestApp(app: FastifyInstance, db: PgliteDb, ctx: AppC
   await app.close();
   await ctx.jobQueue.stop();
   await db.$client.close();
+}
+
+/**
+ * Runs a video project's `video.plan` job now, in the test, as the API role's worker would —
+ * the storyboard, then the scene jobs. Route tests have no job workers running, and waiting on
+ * pg-boss's poll would make them slow and timing-dependent.
+ */
+export async function runVideoPlan(ctx: AppContext, projectId: string, videoProjectId: string): Promise<void> {
+  await planVideoProject(
+    {
+      projectRepo: ctx.videoProjects,
+      sceneRepo: ctx.videoScenes,
+      jobQueue: ctx.jobQueue,
+      scriptModel: ctx.router,
+      modelCallMeter: ctx.modelCallMeter,
+    },
+    { projectId, videoProjectId }
+  );
 }
