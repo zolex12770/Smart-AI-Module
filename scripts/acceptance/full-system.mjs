@@ -160,23 +160,28 @@ await check("CHAT-STREAM", "A real model answers, streamed progressively", async
 
 await check("CHAT-HISTORY", "The conversation is stored and continues", async () => {
   if (!chatConversationId) return { status: FAIL, detail: "the chat response carried no X-Conversation-Id header" };
-  // A fact planted in one turn and asked for in the next, inside the same conversation: only the
-  // conversation's own history can carry it (a colour made up for this run).
+  // A fact planted in one turn and asked for in the next, inside the same conversation (a colour
+  // made up for this run). The chat API is stateless about history, as OpenAI's is: the client
+  // sends the turns and the server windows and summarises them (ADR-103/110). So each turn here
+  // is sent the way ChatView sends it after a reload — the conversation's STORED messages plus
+  // the new one — which makes the answer depend on what the server persisted.
   const colour = `vermilion-${Math.floor(Math.random() * 900 + 100)}`;
-  await user.stream("/api/v1/chat", {
-    conversationId: chatConversationId,
-    messages: [{ role: "user", content: `For this conversation, the password word is ${colour}. Reply with just: noted.` }],
-  });
-  const second = await user.stream("/api/v1/chat", {
-    conversationId: chatConversationId,
-    messages: [{ role: "user", content: "What is the password word I gave you earlier in this conversation? Reply with just the word." }],
-  });
+  const storedTurns = async () => {
+    const r = await user.call("GET", `/api/v1/conversations/${chatConversationId}/messages`);
+    return (r.body?.messages ?? []).map(({ role, content }) => ({ role, content }));
+  };
+  const turn = async (content) =>
+    user.stream("/api/v1/chat", {
+      conversationId: chatConversationId,
+      messages: [...(await storedTurns()), { role: "user", content }],
+    });
+  await turn(`For this conversation, my code word is ${colour}. Reply with just: noted.`);
+  const second = await turn("What is the code word I gave you earlier in this conversation? Reply with just the word.");
   const answer = second.events.find((e) => e.type === "done")?.message?.content ?? "";
-  const stored = await user.call("GET", `/api/v1/conversations/${chatConversationId}/messages`);
-  const messages = stored.body?.messages ?? [];
+  const messages = await storedTurns();
   return {
     status: messages.length >= 6 && answer.includes(colour) ? PASS : FAIL,
-    detail: `${messages.length} messages persisted in conversation ${chatConversationId.slice(0, 8)}…; asked for the word planted two turns earlier (${colour}), it answered "${answer.trim().slice(0, 40)}"`,
+    detail: `${messages.length} messages persisted in conversation ${chatConversationId.slice(0, 8)}…; continued from the stored history, asked for the word planted two turns earlier (${colour}), it answered "${answer.trim().slice(0, 40)}"`,
   };
 });
 
