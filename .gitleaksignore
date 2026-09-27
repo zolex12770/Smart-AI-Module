@@ -1,9 +1,11 @@
-# Findings gitleaks' generic-api-key rule raised on the first CI run (2026-09-27), each checked
+# Findings gitleaks' generic-api-key rule raised on the first CI runs (2026-09-27), each checked
 # by hand and confirmed not to be a credential. Listed by exact fingerprint, so the scanner stays
 # fully enabled for every other line and every future commit.
 #
-# A session-secret fixture: the 32-character sequence 0123456789abcdef0123456789abcdef, used
-# only to satisfy the config schema's length rule in a boot test.
+# A session-secret fixture: the 32-character sequence 0123456789abcdef repeated twice, used only
+# to satisfy the config schema's length rule in a boot test.
 41c267ab750ecc624f32bffd79fe9616e907f4d8:backend/src/role-boot.test.ts:generic-api-key:34
-# An actions/cache key naming the pinned stable-diffusion weights ("key: sd-turbo-fp16-v1").
+# An actions/cache key naming the pinned stable-diffusion weights (the sd-turbo fp16 v1 bundle).
 3f0988c9695f476e123648c62e8adf5966cee016:.github/workflows/ci.yml:generic-api-key:138
+# The first version of THIS file quoted that cache key in a comment, which the same rule matched.
+0555a543ca28adb21666a2bec9673b3ffe7c80d7:.gitleaksignore:generic-api-key:8
