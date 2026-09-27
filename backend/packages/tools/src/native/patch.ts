@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 /**
@@ -98,12 +98,37 @@ export function parseUnifiedDiff(diff: string): FilePatch[] {
   closeHunk();
 
   if (patches.length === 0) throw new PatchError("The diff contained no file headers (expected `--- ` / `+++ `).");
+  for (const patch of patches) for (const h of patch.hunks) checkHunkCounts(patch, h);
   for (const patch of patches) {
     if (patch.hunks.length === 0 && !patch.isNewFile && !patch.isDeletedFile) {
       throw new PatchError(`The patch for "${patch.newPath}" contained no hunks.`);
     }
   }
   return patches;
+}
+
+/**
+ * A hunk must contain exactly the lines its header counts — the check GNU `patch` and
+ * `git apply` both make, and this parser did not.
+ *
+ * Found in a real coding run: qwen2.5:7b sent `@@ -1,2 +1,3 @@` over one `-` line and two `+`
+ * lines. The header promised two old lines and three new ones; the body had one and two. Applied
+ * anyway, it replaced a line it should have kept, and the file no longer parsed. A header that
+ * disagrees with its body means the diff is not the one its author meant, and guessing which of
+ * the two is right is how a patch tool corrupts a file.
+ */
+function checkHunkCounts(patch: FilePatch, hunk: Hunk): void {
+  const oldCount = hunk.lines.filter((l) => l.startsWith(" ") || l.startsWith("-")).length;
+  const newCount = hunk.lines.filter((l) => l.startsWith(" ") || l.startsWith("+")).length;
+  if (oldCount !== hunk.oldLines || newCount !== hunk.newLines) {
+    throw new PatchError(
+      `Malformed hunk in the diff for "${patch.newPath}": its header @@ -${hunk.oldStart},${hunk.oldLines} ` +
+        `+${hunk.newStart},${hunk.newLines} @@ counts ${hunk.oldLines} old and ${hunk.newLines} new line(s), but the ` +
+        `hunk contains ${oldCount} old (" " and "-") and ${newCount} new (" " and "+") line(s). Every line of a hunk ` +
+        `starts with exactly one of " ", "-" or "+", followed by the file's text. Re-read the file and send a diff ` +
+        `whose header matches its lines.`
+    );
+  }
 }
 
 function stripPrefix(path: string): string {
@@ -195,11 +220,13 @@ export function applyUnifiedDiff(
   fs: {
     readFileSync: typeof readFileSync;
     writeFileSync: typeof writeFileSync;
+    existsSync: (p: string) => boolean;
     rmSync?: (p: string) => void;
     mkdirSync?: (p: string, options: { recursive: true }) => void;
   } = {
     readFileSync,
     writeFileSync,
+    existsSync,
     mkdirSync,
   }
 ): AppliedFile[] {
@@ -234,6 +261,22 @@ export function applyUnifiedDiff(
     if (patch.isDeletedFile) {
       staged.push({ absolute, content: null, result: { path: relative, action: "deleted", hunksApplied: patch.hunks.length, offsets: [] } });
       continue;
+    }
+
+    /**
+     * A creation diff must not land on a file that exists — `git apply` refuses the same way.
+     *
+     * Found in a real coding run: asked to fix `sum.js`, the model sent `--- /dev/null` /
+     * `+++ b/sum.js`, and this overwrote the existing file wholesale — its `module.exports`
+     * included — reporting "created". A /dev/null diff states that there is nothing there to
+     * lose; when that statement is false, the only safe answer is to refuse and say what is there.
+     */
+    if (patch.isNewFile && fs.existsSync(absolute)) {
+      throw new PatchError(
+        `This diff creates "${relative}" (it starts from /dev/null), but "${relative}" already exists. ` +
+          `A creation diff would replace the whole file. Read it with code.read_lines and send a diff ` +
+          `against its current content (--- a/${relative} / +++ b/${relative}) instead.`
+      );
     }
 
     let existing = "";

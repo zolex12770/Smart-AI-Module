@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { PERMISSION_LEVEL_DEFAULTS, ValidationError, type ToolDefinition } from "@ai-platform/shared";
 import { applyUnifiedDiff, PatchError } from "./patch.js";
 import { resolveSandboxedPath } from "./sandbox-path.js";
@@ -81,7 +81,8 @@ export function createCodingTools(root: string): NativeToolEntry[] {
         [
           "Apply a unified diff to the workspace. This is how you edit code.",
           "Supply a standard `--- a/path` / `+++ b/path` diff with `@@` hunks; several files may be changed in one call.",
-          "Create a file with `--- /dev/null`. This tool does NOT delete files — deleting one is a destructive action that needs human approval, so call `fs.delete_file` for that.",
+          "Every hunk line starts with exactly ONE of ' ' (context), '-' (removed) or '+' (added), followed by the line's text; the `@@ -start,count +start,count @@` counts must equal the hunk's lines, or the diff is refused.",
+          "Create a NEW file with `--- /dev/null`; an existing file is changed with a diff against its current content, never re-created. This tool does NOT delete files — deleting one is a destructive action that needs human approval, so call `fs.delete_file` for that.",
           "The patch is applied atomically: if any hunk does not match, NOTHING is written and you get an error describing which hunk failed — read the file again and produce a fresh diff rather than retrying the same one.",
         ].join(" "),
         {
@@ -101,6 +102,7 @@ export function createCodingTools(root: string): NativeToolEntry[] {
           const applied = applyUnifiedDiff(diff, (relativePath) => resolveIn(context, relativePath), {
             readFileSync,
             writeFileSync,
+            existsSync,
             rmSync: (p: string) => rmSync(p, { force: true }),
           });
           return {

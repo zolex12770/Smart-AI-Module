@@ -111,15 +111,17 @@ describe("a patch that changes nothing is not reported as applied", () => {
   const patchTool = () => createCodingTools(root).find((t) => t.definition.id === "code.apply_patch")!;
   const SOURCE = "function sum(a, b) {\n  return a - b;\n}\nmodule.exports = { sum };\n";
 
-  it("refuses the exact no-op diff the failed run produced", async () => {
+  it("refuses the model's no-op diff — its body, with a header that counts it correctly", async () => {
     writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);
 
-    // Byte-for-byte the model's own diff: the `+` line repeats the `-` line, and the real bug
-    // (`a - b`) is never touched.
+    // The model's own hunk body: the `+` line repeats the `-` line, and the real bug (`a - b`) is
+    // never touched. Its original header (`@@ -2,3 +2,3 @@` over four lines) is now refused as
+    // malformed before this guard is reached — see the next test — so the header here is the
+    // correct one, to keep the no-op guard itself covered.
     const diff = [
       "--- a/sum.cjs",
       "+++ b/sum.cjs",
-      "@@ -2,3 +2,3 @@",
+      "@@ -1,4 +1,4 @@",
       " function sum(a, b) {",
       "   return a - b;",
       " }",
@@ -134,6 +136,47 @@ describe("a patch that changes nothing is not reported as applied", () => {
     expect(String(result.error)).toMatch(/changed nothing|byte-for-byte identical/i);
     // And the file is untouched, rather than rewritten with identical content.
     expect(readFileSync(join(workspaceOf(root), "sum.cjs"), "utf8")).toBe(SOURCE);
+  });
+
+  it("refuses the recorded no-op diff verbatim, as malformed: its header does not count its lines", async () => {
+    writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);
+    const diff = [
+      "--- a/sum.cjs",
+      "+++ b/sum.cjs",
+      "@@ -2,3 +2,3 @@",
+      " function sum(a, b) {",
+      "   return a - b;",
+      " }",
+      "-module.exports = { sum };",
+      "+module.exports = { sum };",
+      "",
+    ].join("\n");
+    const result = await patchTool().handler({ diff }, ctx());
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toMatch(/Malformed hunk.*counts 3 old and 3 new.*contains 4 old.*4 new/s);
+    expect(readFileSync(join(workspaceOf(root), "sum.cjs"), "utf8")).toBe(SOURCE);
+  });
+
+  /**
+   * The autonomous-completion pass's real run (qwen2.5:7b, fix_failing_test on sum.js). Two
+   * diffs, both applied, which together left `sum.js` unparseable and without its export.
+   */
+  it("refuses a creation diff aimed at a file that already exists, instead of overwriting it", async () => {
+    writeFileSync(join(workspaceOf(root), "sum.js"), SOURCE);
+    const diff = "--- /dev/null\n+++ b/sum.js\n@@ -0,0 +1,3 @@\n+function sum(a, b) {\n++    return a + b;\n++}\n";
+    const result = await patchTool().handler({ diff }, ctx());
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toMatch(/already exists.*code\.read_lines/s);
+    expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
+  });
+
+  it("refuses the run's second diff: a header of 2 old / 3 new over a body of 1 / 2", async () => {
+    writeFileSync(join(workspaceOf(root), "sum.js"), SOURCE);
+    const diff = "--- a/sum.js\n+++ b/sum.js\n@@ -1,2 +1,3 @@\n-function sum(a, b) {\n+function sum(a, b) {\n++    return a + b;\n";
+    const result = await patchTool().handler({ diff }, ctx());
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toMatch(/Malformed hunk/);
+    expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
   });
 
   it("applies a diff that really changes the line", async () => {

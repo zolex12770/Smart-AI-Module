@@ -114,6 +114,7 @@ describe("applyUnifiedDiff", () => {
     return {
       files,
       removed,
+      existsSync: (p: string) => p in files,
       readFileSync: ((p: string) => {
         if (!(p in files)) throw new Error("ENOENT");
         return files[p];
