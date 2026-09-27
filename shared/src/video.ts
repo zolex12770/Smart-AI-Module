@@ -51,6 +51,8 @@ export interface VideoProviderCapabilities {
    * timeout cannot silently invalidate the window sized against it.
    */
   worstCaseDeadlineMs: number;
+  /** As `ImageProviderCapabilities.maxConcurrency`: absent means no stated limit. */
+  maxConcurrency?: number;
 }
 
 export interface VideoProvider {

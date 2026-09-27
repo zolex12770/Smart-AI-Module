@@ -139,6 +139,28 @@ describe("ImageMotionVideoProvider mechanics", () => {
     return { impl, seen };
   };
 
+  it("inherits the still provider's concurrency and deadline, instead of assuming them", async () => {
+    const serial = stillProvider({
+      getCapabilities: () => ({
+        supportsNegativePrompt: true,
+        supportsSeed: true,
+        maxImagesPerCall: 1,
+        supportedAspectRatios: ["1:1"],
+        hasFastTier: true,
+        maxConcurrency: 1,
+        worstCaseDeadlineMs: 1_800_000,
+      }),
+    });
+    const caps = new ImageMotionVideoProvider({ imageProvider: serial, ffmpegPath, timeoutMs: 120_000 }).getCapabilities();
+    expect(caps.maxConcurrency).toBe(1);
+    // An operator who raised the image deadline to 30 minutes is not told the clip takes 12.
+    expect(caps.worstCaseDeadlineMs).toBe(1_800_000 + 120_000);
+    // A still provider that states nothing keeps the documented default and no limit.
+    const plain = new ImageMotionVideoProvider({ imageProvider: stillProvider(), ffmpegPath, timeoutMs: 120_000 }).getCapabilities();
+    expect(plain.worstCaseDeadlineMs).toBe(600_000 + 120_000);
+    expect(plain.maxConcurrency).toBeUndefined();
+  });
+
   it("asks ffmpeg for the requested duration, frame rate and codec", async () => {
     const { impl, seen } = fakeFfmpeg({});
     const provider = new ImageMotionVideoProvider({ imageProvider: stillProvider(), ffmpegPath, spawnImpl: impl, fps: 24 });

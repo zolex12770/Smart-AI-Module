@@ -111,6 +111,43 @@ describe("SdCppImageProvider mechanics", () => {
   const provider = (impl: ReturnType<typeof fakeSpawn>["impl"], over: Record<string, unknown> = {}) =>
     new SdCppImageProvider({ binaryPath, modelPath, spawnImpl: impl, ...over });
 
+  it("runs one generation at a time, and says so in its capabilities", async () => {
+    // Two scene stills requested together used to spawn two diffusion processes at once; on a
+    // 15 GB machine with a chat model loaded, that ended in the OOM killer.
+    let running = 0;
+    let peak = 0;
+    const { impl: inner, seen } = fakeSpawn({});
+    const impl = ((file: string, args: string[], options: { env?: Record<string, string> }) => {
+      running++;
+      peak = Math.max(peak, running);
+      const child = (inner as unknown as (...a: unknown[]) => EventEmitter)(file, args, options);
+      child.on("close", () => running--);
+      return child;
+    }) as unknown as typeof inner;
+    const p = provider(impl);
+
+    const results = await Promise.all([
+      p.generateImage(request({ prompt: "scene one" }), async () => "a1"),
+      p.generateImage(request({ prompt: "scene two" }), async () => "a2"),
+      p.generateImage(request({ prompt: "scene three" }), async () => "a3"),
+    ]);
+
+    expect(results.map((r) => r.status)).toEqual(["succeeded", "succeeded", "succeeded"]);
+    expect(seen).toHaveLength(3);
+    expect(peak).toBe(1);
+    expect(p.getCapabilities()).toMatchObject({ maxConcurrency: 1, worstCaseDeadlineMs: 600_000 });
+  });
+
+  it("keeps serving after a failed run: one failure does not block the queue", async () => {
+    const failing = fakeSpawn({ exit: 1, stderr: "boom", png: false });
+    const p = provider(failing.impl);
+    const first = await p.generateImage(request(), async () => "x").catch((e: Error) => ({ status: "threw", error: e.message }));
+    expect(first.status).not.toBe("succeeded");
+    const second = await p.generateImage(request(), async () => "y").catch((e: Error) => ({ status: "threw", error: e.message }));
+    expect(second.status).not.toBe("succeeded");
+    expect(failing.seen).toHaveLength(2);
+  });
+
   it("passes the prompt as an argument, never through a shell", async () => {
     const { impl, seen } = fakeSpawn({});
     const hostile = 'a cat"; rm -rf / & echo $(whoami) `id`';

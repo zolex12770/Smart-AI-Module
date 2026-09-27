@@ -115,10 +115,35 @@ export class SdCppImageProvider implements ImageProvider {
       // "fast" is the only tier a local CPU has; saying otherwise would promise latency it cannot
       // meet. The request's `quality` is honoured through the step count below.
       hasFastTier: true,
+      // One run at a time (see `generateImage`), and the queue workers are sized from this.
+      maxConcurrency: 1,
+      worstCaseDeadlineMs: this.options.timeoutMs,
     };
   }
 
+  /** The end of the queue of runs; each new one starts only after this settles. */
+  private tail: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Runs one generation at a time — found by the autonomous-completion pass. A two-scene video
+   * started both scenes' stills at once: two SDXL processes (~4 GB each) beside the chat model
+   * on a 15 GB, 4-core machine. Neither went faster, and the kernel's OOM killer took the chat
+   * runtime and then one of the two. The image and video queues share this instance, so the
+   * serialisation lives here, where both meet; each run's own deadline starts when it starts.
+   */
   async generateImage(
+    req: ImageGenerationRequest,
+    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
+  ): Promise<ImageResult> {
+    const run = this.tail.then(
+      () => this.generateOne(req, store),
+      () => this.generateOne(req, store)
+    );
+    this.tail = run.catch(() => undefined);
+    return run;
+  }
+
+  private async generateOne(
     req: ImageGenerationRequest,
     store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
   ): Promise<ImageResult> {

@@ -80,14 +80,17 @@ export class ImageMotionVideoProvider implements VideoProvider {
   }
 
   getCapabilities(): VideoProviderCapabilities {
+    const imageCaps = this.options.imageProvider.getCapabilities();
     return {
       maxDurationSeconds: MAX_DURATION_SECONDS,
       supportsSeed: true,
       hasFastTier: true,
       // A still from the image provider, and THEN ffmpeg over it: two deadlines, not one
-      // (ADR-150). The image provider's own ceiling is not visible from here, so its documented
-      // default is used — the caller may pass a larger `timeoutMs` and this follows it.
-      worstCaseDeadlineMs: this.options.timeoutMs + 600_000,
+      // (ADR-150). The image provider's own ceiling when it states one (a deployment can raise
+      // IMAGE_SD_TIMEOUT_MS well past the old assumed 600 s), else that documented default.
+      worstCaseDeadlineMs: this.options.timeoutMs + (imageCaps.worstCaseDeadlineMs ?? 600_000),
+      // Every clip starts with a still, so this runs no more at once than the still's provider.
+      ...(imageCaps.maxConcurrency !== undefined ? { maxConcurrency: imageCaps.maxConcurrency } : {}),
     };
   }
 
