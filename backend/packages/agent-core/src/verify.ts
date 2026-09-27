@@ -147,7 +147,10 @@ export async function verifyNodeOutput(
         citations,
         retrievedCount: results.length,
       });
-      return verdict.grounded ? { pass: true } : { pass: false, reason: verdict.reason };
+      // An honest refusal passes the node (it is the truthful answer when the passages are
+      // silent), and so does an empty one (the schema check owns "no content"); neither is
+      // `grounded`, which is reserved for an answer tied to a cited passage.
+      return verdict.outcome === "violation" ? { pass: false, reason: verdict.reason } : { pass: true };
     }
 
     /**

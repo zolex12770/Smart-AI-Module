@@ -134,3 +134,64 @@ describe("Ask screen citations", () => {
     expect(screen.queryByRole("link", { name: "runbook.md" })).toBeNull();
   });
 });
+
+describe("Ask screen outcomes", () => {
+  const withAnswer = (body: Record<string, unknown>) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/v1/auth/me")) {
+          return json({
+            user: { id: "u1", email: "a@example.com", displayName: "A", isSystemAdmin: false },
+            projects: [{ id: "project-1", name: "Default", organizationId: "org-1", role: "admin" }],
+          });
+        }
+        if (url.includes("/api/v1/rag/query")) return json({ ...ANSWER, ...body });
+        return json({ error: { code: "NOT_FOUND", message: url } }, 404);
+      })
+    );
+
+  beforeEach(() => {
+    document.cookie = "aip_csrf=csrf-token-value";
+  });
+
+  afterEach(() => {
+    window.localStorage.clear();
+    document.cookie = "aip_csrf=; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  });
+
+  it("shows a refusal as a refusal: no error, and the passages are not called sources", async () => {
+    withAnswer({
+      answer: "The provided documents do not contain the answer to this question.",
+      grounded: false,
+      outcome: "refused",
+    });
+    await ask();
+
+    expect(await screen.findByRole("status")).toHaveTextContent(/do not answer this question/);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Passages searched" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Sources" })).toBeNull();
+  });
+
+  it("shows a rejected answer as an error", async () => {
+    withAnswer({
+      answer: "The model answered without citing any passage.",
+      grounded: false,
+      outcome: "violation",
+      groundingViolation: "uncited_answer",
+      groundingReason: "The answer cites none of the retrieved passages.",
+    });
+    await ask();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/rejected/);
+    expect(screen.getByRole("heading", { name: "Passages searched" })).toBeInTheDocument();
+  });
+
+  it("calls the passages of a grounded answer its sources", async () => {
+    withAnswer({ outcome: "grounded" });
+    await ask();
+    expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
+  });
+});

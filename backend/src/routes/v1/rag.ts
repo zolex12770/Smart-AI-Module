@@ -353,7 +353,8 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       }));
 
       if (parsed.data.retrieveOnly) {
-        return reply.send({ question: parsed.data.question, answer: null, sources, grounded: true });
+        // No answer was produced, so nothing is grounded; `outcome` says why there is no answer.
+        return reply.send({ question: parsed.data.question, answer: null, sources, grounded: false, outcome: "retrieve_only" });
       }
 
       // No passages, no model call. Deterministic, and it cannot fabricate — which is exactly
@@ -363,7 +364,9 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
           question: parsed.data.question,
           answer: NO_EVIDENCE_ANSWER,
           sources: [],
-          grounded: true,
+          // A correct refusal, and never `grounded`: there was no evidence to ground anything in.
+          grounded: false,
+          outcome: "refused",
           retrievedCount: 0,
         });
       }
@@ -455,6 +458,24 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
         }
       }
       const verdict = checkGrounding({ answer, citations, retrievedCount: results.length });
+      if (verdict.outcome === "refused" || verdict.outcome === "empty") {
+        /**
+         * The passages were retrieved and did not answer the question, and the model said so —
+         * the correct behaviour. Reported as the canonical refusal, with any marker it attached
+         * dropped: "does not contain the answer [1]" cites [1] as evidence for the absence of
+         * evidence. The sources are still listed, because what was searched is useful to know.
+         */
+        return reply.send({
+          question: parsed.data.question,
+          answer: NO_EVIDENCE_ANSWER,
+          sources,
+          grounded: false,
+          outcome: "refused",
+          retrievedCount: results.length,
+          model: usedModel,
+          provider: usedProvider,
+        });
+      }
       if (!verdict.grounded) {
         /**
          * The fallback sentence has to match the violation — ADR-161.
@@ -470,7 +491,9 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
         const fallbackAnswer =
           verdict.violation === "citation_without_answer"
             ? "The model did not write an answer, only a citation. The passages it was given are listed below."
-            : NO_EVIDENCE_ANSWER;
+            : verdict.violation === "uncited_answer"
+              ? "The model answered without citing any passage, so its answer could not be tied to your documents. The passages it was given are listed below."
+              : NO_EVIDENCE_ANSWER;
         // Returned, not thrown, and NOT silently replaced by the refusal text: the caller gets
         // the sources that really existed and an explicit `grounded: false`, so a client can
         // tell "the model went off-piste" from "there was nothing to find". Hiding it would
@@ -480,6 +503,7 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
           answer: fallbackAnswer,
           sources,
           grounded: false,
+          outcome: "violation",
           groundingViolation: verdict.violation,
           groundingReason: verdict.reason,
           retrievedCount: results.length,
@@ -491,6 +515,7 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
         answer,
         sources,
         grounded: true,
+        outcome: "grounded",
         retrievedCount: results.length,
         model: usedModel,
         provider: usedProvider,

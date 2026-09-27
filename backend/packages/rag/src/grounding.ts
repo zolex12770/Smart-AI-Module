@@ -46,10 +46,22 @@ export interface GroundingCheckInput {
   retrievedCount: number;
 }
 
+/**
+ * What kind of answer this was — the autonomous-completion pass (see the note on `checkGrounding`).
+ *
+ * `grounded` is the only outcome in which the caller was handed an answer tied to evidence.
+ * `refused` is the model correctly saying the passages do not answer the question — honest, and
+ * acceptable, but NOT grounded: nothing was evidenced. `empty` is no content at all (the schema
+ * check owns that). `violation` names what went wrong in `violation`.
+ */
+export type GroundingOutcome = "grounded" | "refused" | "empty" | "violation";
+
 export interface GroundingResult {
+  /** True only when `outcome` is `grounded`. Never true for a refusal or an uncited answer. */
   grounded: boolean;
+  outcome: GroundingOutcome;
   /** Machine-readable so a caller can branch; the message is for humans. */
-  violation?: "answered_without_evidence" | "fabricated_citation" | "citation_without_answer";
+  violation?: "answered_without_evidence" | "fabricated_citation" | "citation_without_answer" | "uncited_answer";
   reason?: string;
   /** Markers the model wrote that were never offered to it. */
   invalidMarkers?: string[];
@@ -103,11 +115,27 @@ const REFUSAL_MARKERS = [
   "not found in the",
   "not mentioned",
   "no matching",
+  "don't know",
+  "do not know",
 ];
 
 function looksLikeRefusal(answer: string): boolean {
   const lower = answer.toLowerCase();
   return REFUSAL_MARKERS.some((marker) => lower.includes(marker));
+}
+
+/**
+ * A refusal is judged on the answer's FIRST sentence, with markers removed.
+ *
+ * `looksLikeRefusal` is deliberately generous, which is safe when nothing was retrieved (there
+ * is no evidence to lose) but not when something was: "Engineers get 27 days [1]. Carry-over is
+ * not mentioned." contains "not mentioned" and is a grounded answer. Its first sentence is the
+ * answer; a real refusal leads with the refusal.
+ */
+function leadsWithRefusal(answer: string): boolean {
+  const text = answer.replace(/\[\d+\]/g, "").trim();
+  const firstSentence = text.split(/(?<=[.!?])\s+/)[0] ?? text;
+  return looksLikeRefusal(firstSentence);
 }
 
 /**
@@ -123,17 +151,29 @@ export function checkGrounding(input: GroundingCheckInput): GroundingResult {
 
   // An empty answer cites nothing and claims nothing. Let the schema check own that case;
   // reporting it as a grounding violation would attribute the wrong cause.
-  if (answer === "") return { grounded: true };
+  if (answer === "") return { grounded: false, outcome: "empty" };
 
   if (input.retrievedCount === 0) {
-    if (looksLikeRefusal(answer)) return { grounded: true };
+    if (looksLikeRefusal(answer)) return { grounded: false, outcome: "refused" };
     return {
       grounded: false,
+      outcome: "violation",
       violation: "answered_without_evidence",
       reason:
         "Retrieval returned no passages, so no answer can be grounded — the model answered substantively instead of saying it could not.",
     };
   }
+
+  /**
+   * A refusal is a refusal whatever it cites. Found by the autonomous-completion pass's real
+   * run: asked about a policy the handbook does not contain, qwen2.5:7b replied "The provided
+   * documents do not contain the answer to this question. [1]" and the endpoint reported
+   * `grounded: true` with [1] as its source — a citation offered as evidence for the absence of
+   * evidence. The refusal itself is correct and is accepted; the marker is not evidence of
+   * anything, so the outcome is `refused`, never `grounded`. Checked before the marker rules so
+   * "I don't know [7]" is reported as what it is, a refusal.
+   */
+  if (leadsWithRefusal(answer)) return { grounded: false, outcome: "refused" };
 
   const offered = new Set(input.citations.map((c) => c.marker));
   const markers = extractCitationMarkers(answer);
@@ -141,6 +181,7 @@ export function checkGrounding(input: GroundingCheckInput): GroundingResult {
   if (invalid.length > 0) {
     return {
       grounded: false,
+      outcome: "violation",
       violation: "fabricated_citation",
       invalidMarkers: invalid,
       reason: `Answer cited ${invalid.join(", ")}, which ${
@@ -150,9 +191,9 @@ export function checkGrounding(input: GroundingCheckInput): GroundingResult {
   }
 
   /**
-   * Markers, and nothing else — ADR-161. Checked last, after the markers have been shown to be
-   * real ones: "[9]" alone is a fabricated citation first and an empty answer second, and
-   * naming the stronger fault is more useful to whoever reads the violation.
+   * Markers, and nothing else — ADR-161. Checked after the markers have been shown to be real
+   * ones: "[9]" alone is a fabricated citation first and an empty answer second, and naming the
+   * stronger fault is more useful to whoever reads the violation.
    *
    * Only bracketed markers and punctuation are stripped. A one-word answer ("27.") survives,
    * and must: brevity is not the defect, absence is.
@@ -160,12 +201,29 @@ export function checkGrounding(input: GroundingCheckInput): GroundingResult {
   if (markers.length > 0 && stripMarkersAndPunctuation(answer) === "") {
     return {
       grounded: false,
+      outcome: "violation",
       violation: "citation_without_answer",
       reason: `Answer was ${markers.join(", ")} and nothing else — a citation with no claim attached to it, so there is no answer to be grounded.`,
     };
   }
 
-  return { grounded: true };
+  /**
+   * No citation at all. Earlier revisions accepted this as grounded ("not citing is a quality
+   * problem, not a fabrication"). It is not grounded: `grounded: true` is the platform's
+   * assurance that the answer is tied to a passage, and an answer that names no passage cannot
+   * be tied to one — the model may have answered from its own training data while passages sat
+   * unused in its prompt. Reported as its own violation so a caller can tell it from fabrication.
+   */
+  if (markers.length === 0) {
+    return {
+      grounded: false,
+      outcome: "violation",
+      violation: "uncited_answer",
+      reason: "The answer cites none of the retrieved passages, so it cannot be tied to your documents.",
+    };
+  }
+
+  return { grounded: true, outcome: "grounded" };
 }
 
 /** What is left of an answer once its citation markers and punctuation are removed. */

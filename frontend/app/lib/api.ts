@@ -528,6 +528,12 @@ export interface RagAnswer {
    * off-piste and we rejected it" — two different situations with different remedies.
    */
   grounded: boolean;
+  /**
+   * What kind of answer this is. `grounded` is the only one tied to cited evidence; `refused` is
+   * the model correctly saying the passages do not answer the question (not an error, and not
+   * grounded); `violation` is an answer the API rejected, named in `groundingViolation`.
+   */
+  outcome?: "grounded" | "refused" | "violation" | "retrieve_only";
   groundingViolation?: string;
   groundingReason?: string;
   retrievedCount?: number;

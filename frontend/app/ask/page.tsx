@@ -118,11 +118,22 @@ function AskView() {
       {answer ? (
         <>
           <h2>Answer</h2>
-          {answer.grounded === false ? (
+          {answer.outcome === "refused" ? (
+            /*
+             * An honest "your documents do not say" is not an error and is not evidence either.
+             * It gets its own notice so it is never mistaken for a grounded answer (the passages
+             * below were searched, not cited) nor for a rejected one.
+             */
+            <p className="page-subtitle" role="status">
+              Your documents do not answer this question. The passages below were searched but
+              none of them contains the answer.
+            </p>
+          ) : answer.grounded === false ? (
             /*
              * Shown, not swallowed. The API caught the model citing a source it was never given
-             * (ADR-075); hiding that would leave the user unable to distinguish it from an honest
-             * "no documents matched", which is a different situation with a different remedy.
+             * (ADR-075), or answering without citing anything; hiding that would leave the user
+             * unable to distinguish it from an honest "no documents matched", which is a
+             * different situation with a different remedy.
              */
             <p className="auth-error" role="alert">
               The model produced an answer that was not supported by your documents, so it was
@@ -132,7 +143,7 @@ function AskView() {
 
           <p style={{ whiteSpace: "pre-wrap" }}>{answer.answer}</p>
 
-          <h2>Sources</h2>
+          <h2>{answer.grounded ? "Sources" : "Passages searched"}</h2>
           {answer.sources.length === 0 ? (
             <p>No passages matched closely enough to be used as evidence.</p>
           ) : (

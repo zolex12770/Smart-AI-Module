@@ -137,10 +137,48 @@ describe("RAG grounding, at the route", () => {
     await seedHandbook();
     answerWith("Every engineer receives 27 days of paid leave per calendar year [1].");
 
-    const body = (await ask()).json() as { answer: string; grounded: boolean; retrievedCount: number };
+    const body = (await ask()).json() as { answer: string; grounded: boolean; outcome: string; retrievedCount: number };
     expect(body.grounded).toBe(true);
+    expect(body.outcome).toBe("grounded");
     expect(body.answer).toContain("27 days");
     expect(body.retrievedCount).toBeGreaterThan(0);
+  });
+
+  it("reports a refusal that carries a citation as a refusal, never grounded", async () => {
+    // The exact text qwen2.5:7b returned in the autonomous-completion pass's real run, which the
+    // endpoint used to report as `grounded: true` with [1] as its source.
+    await seedHandbook();
+    answerWith("The provided documents do not contain the answer to this question. [1]");
+
+    const body = (await ask("What is the parental leave policy for adopting parents?")).json() as {
+      answer: string;
+      grounded: boolean;
+      outcome: string;
+      sources: unknown[];
+      groundingViolation?: string;
+    };
+    expect(body.grounded).toBe(false);
+    expect(body.outcome).toBe("refused");
+    expect(body.groundingViolation).toBeUndefined();
+    expect(body.answer).toBe("The provided documents do not contain the answer to this question.");
+    expect(body.sources.length).toBeGreaterThan(0);
+  });
+
+  it("does not call an answer that cites nothing grounded", async () => {
+    await seedHandbook();
+    answerWith("Every engineer receives 27 days of paid leave per calendar year.");
+
+    const body = (await ask()).json() as { answer: string; grounded: boolean; outcome: string; groundingViolation?: string };
+    expect(body.grounded).toBe(false);
+    expect(body.outcome).toBe("violation");
+    expect(body.groundingViolation).toBe("uncited_answer");
+    expect(body.answer).toMatch(/without citing any passage/);
+  });
+
+  it("reports the no-evidence path as a refusal, not as grounded", async () => {
+    answerWith("should never be asked");
+    const body = (await ask()).json() as { grounded: boolean; outcome: string; retrievedCount: number };
+    expect(body).toMatchObject({ grounded: false, outcome: "refused", retrievedCount: 0 });
   });
 
   it("passes a one-word answer through — brevity is not the defect", async () => {

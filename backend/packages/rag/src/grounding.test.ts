@@ -35,23 +35,30 @@ describe("checkGrounding — no evidence at all", () => {
     expect(result.violation).toBe("answered_without_evidence");
   });
 
-  it("accepts an honest refusal when retrieval returned nothing", () => {
+  it("accepts an honest refusal when retrieval returned nothing — as a refusal, not as grounded", () => {
     // The correct behaviour must not be punished — failing the node for saying "I don't know"
-    // would train the plan away from the only truthful answer available.
+    // would train the plan away from the only truthful answer available. But nothing was
+    // evidenced, so it is never `grounded`.
     for (const answer of [
       "The provided documents do not contain the answer to this question.",
       "I cannot answer that from the supplied context.",
       "No relevant passages were found, so there is no evidence for an answer.",
       "That information is not mentioned in the documents.",
     ]) {
-      expect(checkGrounding({ answer, citations: [], retrievedCount: 0 }).grounded).toBe(true);
+      const result = checkGrounding({ answer, citations: [], retrievedCount: 0 });
+      expect(result.outcome).toBe("refused");
+      expect(result.grounded).toBe(false);
+      expect(result.violation).toBeUndefined();
     }
   });
 
   it("treats an empty answer as someone else's problem", () => {
     // An empty string claims nothing and cites nothing. Reporting it as a grounding violation
     // would attribute the wrong cause; the schema check owns "there is no content".
-    expect(checkGrounding({ answer: "   ", citations: [], retrievedCount: 0 }).grounded).toBe(true);
+    const result = checkGrounding({ answer: "   ", citations: [], retrievedCount: 0 });
+    expect(result.outcome).toBe("empty");
+    expect(result.grounded).toBe(false);
+    expect(result.violation).toBeUndefined();
   });
 });
 
@@ -81,13 +88,13 @@ describe("checkGrounding — fabricated citations", () => {
     ).toBe(true);
   });
 
-  it("accepts a grounded answer that cites nothing at all", () => {
-    // Not citing is a quality problem, not a fabrication. Failing it here would conflate two
-    // different faults and make the violation label useless.
-    expect(
-      checkGrounding({ answer: "The rollback is a single command.", citations: citations(1), retrievedCount: 1 })
-        .grounded
-    ).toBe(true);
+  it("does NOT call an answer that cites nothing grounded — it has its own violation", () => {
+    // Earlier revisions accepted this. An answer that names no passage cannot be tied to one;
+    // it is labelled separately so a caller can tell it from fabrication.
+    const result = checkGrounding({ answer: "The rollback is a single command.", citations: citations(1), retrievedCount: 1 });
+    expect(result.grounded).toBe(false);
+    expect(result.outcome).toBe("violation");
+    expect(result.violation).toBe("uncited_answer");
   });
 
   it("reports every fabricated marker, not just the first", () => {
@@ -144,12 +151,54 @@ describe("checkGrounding — a citation with nothing attached to it", () => {
     expect(result.violation).toBe("fabricated_citation");
   });
 
-  it("leaves an answer with no markers at all to the other rules", () => {
+  it("leaves an answer with no markers at all to the uncited rule, not this one", () => {
     // No marker means nothing to strip; this rule must not fire on prose that simply did not
-    // cite, which is a different (and, with evidence retrieved, permitted) case.
-    expect(checkGrounding({ answer: "Engineers get 27 days.", citations: citations(1), retrievedCount: 1 }).grounded).toBe(
-      true
+    // cite — that is `uncited_answer`, a different fault.
+    expect(checkGrounding({ answer: "Engineers get 27 days.", citations: citations(1), retrievedCount: 1 }).violation).toBe(
+      "uncited_answer"
     );
+  });
+});
+
+/**
+ * Found by the autonomous-completion pass against a REAL model: asked about a policy the
+ * handbook does not contain, qwen2.5:7b answered "The provided documents do not contain the
+ * answer to this question. [1]" and the endpoint reported `grounded: true` with [1] as its source.
+ */
+describe("checkGrounding — a refusal that carries a citation", () => {
+  it("is a refusal, never grounded, whatever marker it carries", () => {
+    for (const answer of [
+      "The provided documents do not contain the answer to this question. [1]",
+      "I don't know [1]",
+      "I do not know. [1][2]",
+      "The passages do not contain that information [2].",
+    ]) {
+      const result = checkGrounding({ answer, citations: citations(2), retrievedCount: 2 });
+      expect(result, answer).toMatchObject({ grounded: false, outcome: "refused" });
+    }
+  });
+
+  it("is a refusal even when the marker it carries was never offered", () => {
+    expect(checkGrounding({ answer: "I don't know [7]", citations: citations(1), retrievedCount: 1 }).outcome).toBe("refused");
+  });
+
+  it("does not mistake a grounded answer that mentions a gap for a refusal", () => {
+    // The refusal phrase is only a refusal when it leads: this answers first, then notes a gap.
+    const result = checkGrounding({
+      answer: "Engineers receive 27 days of paid leave per year [1]. Carry-over is not mentioned.",
+      citations: citations(1),
+      retrievedCount: 1,
+    });
+    expect(result).toEqual({ grounded: true, outcome: "grounded" });
+  });
+});
+
+describe("checkGrounding — the one grounded shape", () => {
+  it("is a substantive answer citing only offered markers", () => {
+    expect(checkGrounding({ answer: "27 days per calendar year [1].", citations: citations(1), retrievedCount: 1 })).toEqual({
+      grounded: true,
+      outcome: "grounded",
+    });
   });
 });
 
