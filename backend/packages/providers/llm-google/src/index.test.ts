@@ -146,6 +146,16 @@ describe("GoogleProvider tool calling", () => {
     expect(body.generationConfig).toEqual({ maxOutputTokens: 512 });
   });
 
+  it("maps a JSON response format onto responseMimeType", async () => {
+    const fetchImpl = streamOf(FIXTURE_SSE);
+    const provider = new GoogleProvider({ apiKey: "test-key", fetchImpl });
+    for await (const _ of provider.streamChat({ messages: [{ role: "user", content: "hi" }], responseFormat: "json_object" })) {
+      // drain
+    }
+    const body = JSON.parse((fetchImpl as any).mock.calls[0][1].body);
+    expect(body.generationConfig).toEqual({ responseMimeType: "application/json" });
+  });
+
   it("parses a functionCall part into a tool call and reports finishReason tool_calls", async () => {
     const provider = new GoogleProvider({ apiKey: "test-key", fetchImpl: streamOf(FUNCTION_CALL_SSE) });
 

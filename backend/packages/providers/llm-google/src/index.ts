@@ -110,6 +110,7 @@ export class GoogleProvider implements LLMProvider {
     const generationConfig: Record<string, unknown> = {};
     if (request.maxOutputTokens !== undefined) generationConfig.maxOutputTokens = request.maxOutputTokens;
     if (request.temperature !== undefined) generationConfig.temperature = request.temperature;
+    if (request.responseFormat === "json_object") generationConfig.responseMimeType = "application/json";
     if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
     if (request.tools?.length) {
       // docs/04 §3.3 — one `tools` entry holding all functionDeclarations, each

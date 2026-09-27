@@ -78,6 +78,8 @@ export interface ScriptModel {
   streamChat(
     request: {
       messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+      /** Grammar-constrained JSON where the provider has it — see `ChatRequest.responseFormat`. */
+      responseFormat?: "json_object";
     },
     /**
      * Cancellation, because this call happens inside an HTTP request — ADR-137.
@@ -139,7 +141,7 @@ export async function writeVideoScript(
   const deadline = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const raw = await completeText(deps.model, [
+    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
       { role: "system", content: SCRIPT_SYSTEM_PROMPT },
       {
         role: "user",
@@ -148,17 +150,62 @@ export async function writeVideoScript(
           `Total duration: ${request.targetDurationSeconds} seconds.\n` +
           `Write exactly ${planned.length} scenes, each about ${request.sceneClipSeconds} seconds long.`,
       },
-    ], controller.signal);
-
-    const parsed = parseScriptJson(raw, planned.length);
+    ];
+    let raw = await completeText(deps.model, messages, controller.signal);
+    let parsed = parseScriptJson(raw, planned.length);
+    /**
+     * One corrective round — measured, not assumed. A real qwen2.5:7b storyboard for "how bees
+     * make honey" came back well-formed in a direct call and unusable through the job (its reply
+     * began `{ "title": "Bees Making Honey Explainer", "scenes": [ ...`), and the video then
+     * rendered with no narration, no audio and no subtitles. JSON mode removes most syntax
+     * failures where the provider has it; this covers the rest, and providers without it, at the
+     * cost of one more call inside the same deadline. Both calls are metered.
+     */
+    let usage = raw.usage;
+    if (!parsed && raw.finishReason !== "length") {
+      deps.logger?.warn({ error: describeUnusableReply(raw) }, "script stage reply unusable; asking the model once more");
+      let retry: Awaited<ReturnType<typeof completeText>>;
+      try {
+        retry = await completeText(
+          deps.model,
+          [
+            ...messages,
+            { role: "assistant", content: raw.text },
+            {
+              role: "user",
+              content:
+                "That reply could not be parsed as the JSON object described (check quotes inside strings are escaped, " +
+                "and that the object is complete). Reply again with ONLY the corrected JSON object.",
+            },
+          ],
+          controller.signal
+        );
+      } catch (error) {
+        // The first call completed and was paid for, so a failed retry still carries its cost out
+        // — the catch below would report the stage as free.
+        const why = controller.signal.aborted
+          ? `the retry exceeded the ${Math.round(timeoutMs / 1000)}s deadline`
+          : error instanceof Error ? error.message : String(error);
+        const reason = `${describeUnusableReply(raw)} A corrective retry failed: ${why}.`;
+        deps.logger?.warn({ error: reason }, "script stage failed; falling back to the deterministic storyboard");
+        return { ...deterministic(planned, reason), provider: raw.provider, usage };
+      }
+      usage = { inputTokens: usage.inputTokens + retry.usage.inputTokens, outputTokens: usage.outputTokens + retry.usage.outputTokens };
+      raw = retry;
+      parsed = parseScriptJson(raw, planned.length);
+    }
     if (!parsed) {
+      const reason = describeUnusableReply(raw);
+      // Logged as well as stored: the thrown-error path below always logged, and this one — the
+      // likelier of the two on a small local model — left its only trace on the project row.
+      deps.logger?.warn({ error: reason, finish_reason: raw.finishReason }, "script stage reply unusable; falling back to the deterministic storyboard");
       // The call happened and the tokens were spent, so the cost is carried out even though the
       // storyboard is the mechanical one (ADR-150). Reporting a fallback as free would understate
       // the bill in exactly the case a model is behaving badly and being retried.
       return {
-        ...deterministic(planned, describeUnusableReply(raw)),
+        ...deterministic(planned, reason),
         provider: raw.provider,
-        usage: raw.usage,
+        usage,
       };
     }
 
@@ -176,7 +223,7 @@ export async function writeVideoScript(
       scriptSource: "model",
       model: raw.model,
       provider: raw.provider,
-      usage: raw.usage,
+      usage,
       fallbackReason: null,
       scenesWritten: parsed.scenesWritten,
     };
@@ -252,7 +299,7 @@ async function completeText(
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
   signal?: AbortSignal
 ): Promise<{ text: string; model: string; provider: string; usage: ScriptUsage; finishReason?: string }> {
-  for await (const event of model.streamChat({ messages }, { signal })) {
+  for await (const event of model.streamChat({ messages, responseFormat: "json_object" }, { signal })) {
     if (event.type === "done") {
       // The provider and the token counts are carried out (ADR-150) so the caller can write the
       // usage row this call never had: the storyboard spends real LLM tokens on every video and

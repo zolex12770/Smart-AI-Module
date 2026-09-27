@@ -209,6 +209,95 @@ describe("the script stage reports what it wrote, and gives up in time", () => {
     });
   });
 
+  /**
+   * The corrective round. A real qwen2.5:7b storyboard came back unusable through the job and
+   * the video rendered with no narration, no audio track and no subtitles. The likeliest shape,
+   * and the one modelled here, is valid JSON broken by an unescaped quote inside a string.
+   */
+  describe("recovers from one unusable reply", () => {
+    const BROKEN = '{"title": "Bees", "scenes": [{"shotDescription": "A bee on clover", "narration": "Bees store nectar in their "honey stomach"."}]}';
+    const GOOD = JSON.stringify({
+      title: "Bees",
+      scenes: Array.from({ length: 5 }, (_u, i) => ({ shotDescription: `Shot ${i + 1}`, narration: `Line ${i + 1}` })),
+    });
+    const done = (text: string, tokens: number) =>
+      ({
+        type: "done",
+        message: { role: "assistant", content: text },
+        usage: { inputTokens: tokens, outputTokens: tokens },
+        provider: "test",
+        model: "test-model",
+        finishReason: "stop",
+      }) as never;
+
+    /** Replies in order, recording every request it was sent. */
+    const scripted = (...replies: Array<string | Error>) => {
+      const requests: Array<Parameters<ScriptModel["streamChat"]>[0]> = [];
+      const model: ScriptModel = {
+        async *streamChat(req) {
+          requests.push(req);
+          const next = replies[Math.min(requests.length - 1, replies.length - 1)];
+          if (next instanceof Error) throw next;
+          yield done(next, 10 * requests.length);
+        },
+      };
+      return { model, requests };
+    };
+
+    it("asks the provider for JSON mode", async () => {
+      const { model, requests } = scripted(GOOD);
+      await writeVideoScript({ model }, request);
+      expect(requests[0].responseFormat).toBe("json_object");
+    });
+
+    it("asks once more, showing the model its own reply, and uses the corrected storyboard", async () => {
+      const { model, requests } = scripted(BROKEN, GOOD);
+      const script = await writeVideoScript({ model }, request);
+
+      expect(script.scriptSource).toBe("model");
+      expect(script.scenes.map((sc) => sc.narration)).toEqual(["Line 1", "Line 2", "Line 3", "Line 4", "Line 5"]);
+      expect(requests).toHaveLength(2);
+      const retryMessages = requests[1].messages;
+      expect(retryMessages.at(-2)).toEqual({ role: "assistant", content: BROKEN });
+      expect(retryMessages.at(-1)?.content).toMatch(/could not be parsed/i);
+      // Both calls were spent, so both are charged (10 for the first, 20 for the retry).
+      expect(script.usage).toEqual({ inputTokens: 30, outputTokens: 30 });
+    });
+
+    it("gives up after that one retry, and still charges for both calls", async () => {
+      const { model, requests } = scripted(BROKEN, BROKEN, GOOD);
+      const script = await writeVideoScript({ model }, request);
+
+      expect(requests).toHaveLength(2);
+      expect(script.scriptSource).toBe("deterministic");
+      expect(script.fallbackReason).toMatch(/did not return a usable storyboard JSON object/i);
+      expect(script.usage).toEqual({ inputTokens: 30, outputTokens: 30 });
+    });
+
+    it("does not retry a reply that was cut off by the token limit", async () => {
+      let calls = 0;
+      const model: ScriptModel = {
+        async *streamChat() {
+          calls++;
+          yield { ...(done('{"title": "Bees", "scenes": [{"shotDe', 5) as object), finishReason: "length" } as never;
+        },
+      };
+      const script = await writeVideoScript({ model }, request);
+      expect(calls).toBe(1);
+      expect(script.fallbackReason).toMatch(/cut off/i);
+    });
+
+    it("charges for the first call when the retry itself fails", async () => {
+      const { model } = scripted(BROKEN, new Error("connection reset"));
+      const script = await writeVideoScript({ model }, request);
+
+      expect(script.scriptSource).toBe("deterministic");
+      expect(script.fallbackReason).toMatch(/corrective retry failed: connection reset/i);
+      expect(script.usage).toEqual({ inputTokens: 10, outputTokens: 10 });
+      expect(script.provider).toBe("test");
+    });
+  });
+
   it("gives up on a model that never answers, and says that is why", async () => {
     // A provider that hangs. Before the deadline this held the HTTP request open with no bound.
     const hanging: ScriptModel = {

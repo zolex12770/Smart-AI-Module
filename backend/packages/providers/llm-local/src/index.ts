@@ -103,6 +103,8 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
     };
     if (request.temperature !== undefined) body.temperature = request.temperature;
     if (request.maxOutputTokens !== undefined) body.max_tokens = request.maxOutputTokens;
+    // Grammar-constrained JSON on Ollama, vLLM and llama.cpp's server; a server without it ignores it.
+    if (request.responseFormat === "json_object") body.response_format = { type: "json_object" };
     if (request.tools?.length) {
       if (!this.supportsTools) {
         throw new ProviderError(`Model "${model}" on ${this.name} is not configured for tool calling.`);

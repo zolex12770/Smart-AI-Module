@@ -153,6 +153,17 @@ describe("OpenAIProvider tool calling", () => {
     expect(body.max_output_tokens).toBe(512);
   });
 
+  it("maps a JSON response format onto the Responses API's text.format", async () => {
+    const fetchImpl = streamOf(FIXTURE_SSE);
+    const provider = new OpenAIProvider({ apiKey: "sk-test", fetchImpl });
+    for await (const _ of provider.streamChat({ messages: [{ role: "user", content: "hi" }], responseFormat: "json_object" })) {
+      // drain
+    }
+    const body = JSON.parse((fetchImpl as any).mock.calls[0][1].body);
+    expect(body.text).toEqual({ format: { type: "json_object" } });
+    expect(body.response_format).toBeUndefined();
+  });
+
   it("reassembles a streamed function_call item and emits it exactly once", async () => {
     const provider = new OpenAIProvider({ apiKey: "sk-test", fetchImpl: streamOf(TOOL_CALL_SSE) });
 

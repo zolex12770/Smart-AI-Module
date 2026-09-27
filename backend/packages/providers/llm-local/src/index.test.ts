@@ -78,6 +78,17 @@ describe("LocalOpenAICompatibleProvider", () => {
     expect(body.tool_choice).toBe("auto");
   });
 
+  it("asks for grammar-constrained JSON only when the caller does", async () => {
+    const fetchImpl = respondWith(sse({ choices: [{ delta: { content: "{}" }, finish_reason: "stop" }] }));
+    const provider = new LocalOpenAICompatibleProvider({ ...base, fetchImpl });
+    await collect(provider, { messages: [{ role: "user", content: "hi" }], responseFormat: "json_object" });
+    await collect(provider, { messages: [{ role: "user", content: "hi" }] });
+
+    const calls = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls as Array<[string, RequestInit]>;
+    expect(JSON.parse(String(calls[0][1].body)).response_format).toEqual({ type: "json_object" });
+    expect(JSON.parse(String(calls[1][1].body))).not.toHaveProperty("response_format");
+  });
+
   it("reassembles a tool call fragmented across chunks, which is how these runtimes stream them", async () => {
     const fetchImpl = respondWith(
       sse(

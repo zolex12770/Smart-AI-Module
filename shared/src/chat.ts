@@ -56,6 +56,13 @@ export const chatRequestSchema = z.object({
   toolChoice: toolChoiceSchema.optional(),
   maxOutputTokens: z.number().int().positive().max(200_000).optional(),
   temperature: z.number().min(0).max(2).optional(),
+  /**
+   * `json_object` asks the provider to constrain the reply to one valid JSON object — Ollama,
+   * vLLM, llama.cpp and OpenAI enforce it with a grammar, Gemini with `responseMimeType`.
+   * Providers with no such mode (Anthropic) ignore it, so a caller still validates what comes
+   * back. It is a guarantee about SYNTAX only; the shape is still the caller's to check.
+   */
+  responseFormat: z.enum(["text", "json_object"]).optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

@@ -112,6 +112,8 @@ export class AnthropicProvider implements LLMProvider {
       stream: true,
     };
     if (request.temperature !== undefined) body.temperature = request.temperature;
+    // `responseFormat` has no Messages API equivalent and is deliberately not mapped: the
+    // callers that ask for it instruct JSON in the prompt and validate the reply either way.
     if (request.tools?.length) {
       // docs/04 §1.2 — a top-level `tools` array of {name, description, input_schema}.
       // `strict: true` is deliberately NOT set: it additionally requires every schema to

@@ -121,6 +121,8 @@ export class OpenAIProvider implements LLMProvider {
     };
     if (request.temperature !== undefined) body.temperature = request.temperature;
     if (request.maxOutputTokens !== undefined) body.max_output_tokens = request.maxOutputTokens;
+    // The Responses API's JSON mode (`text.format`), not Chat Completions' `response_format`.
+    if (request.responseFormat === "json_object") body.text = { format: { type: "json_object" } };
     if (request.tools?.length) {
       // docs/04 §2.2 — Responses takes the FLAT tool shape; the nested
       // `{type:"function", function:{...}}` form belongs to Chat Completions and is rejected

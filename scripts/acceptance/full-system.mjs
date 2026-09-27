@@ -367,7 +367,7 @@ await check("VIDEO", "Prompt → script → storyboard → narration → subtitl
   const p = finalState.project;
   const narrated = finalState.scenes.filter((s) => s.audioAssetId).length;
   if (p.renderStatus !== "succeeded" || !p.renderAssetId) {
-    return { status: FAIL, detail: `project ${p.status}, render ${p.renderStatus}: ${p.renderError ?? p.errorMessage ?? "no render"}` };
+    return { status: FAIL, detail: `project ${p.status}, render ${p.renderStatus}: ${p.renderError ?? p.errorMessage ?? "no render"}; storyboard ${p.script?.scriptSource ?? "unknown"}` };
   }
   const file = await user.download(`/api/v1/assets/${p.renderAssetId}?projectId=${user.projectId}`);
   const vtt = p.subtitleVttAssetId ? await user.download(`/api/v1/assets/${p.subtitleVttAssetId}?projectId=${user.projectId}`) : null;
@@ -384,7 +384,8 @@ await check("VIDEO", "Prompt → script → storyboard → narration → subtitl
   return {
     status: ok ? PASS : FAIL,
     detail:
-      `${p.status} in ${secondsSince(t)} s: ${scriptLines} scene(s), ${narrated} narrated; MP4 ${file.bytes.length} bytes, ${duration.toFixed(1)} s, ` +
+      `${p.status} in ${secondsSince(t)} s: ${scriptLines} scene(s), ${narrated} narrated, storyboard ${p.script?.scriptSource ?? "unknown"}` +
+      `${p.script?.fallbackReason ? ` (fallback: ${p.script.fallbackReason.slice(0, 160)})` : ""}; MP4 ${file.bytes.length} bytes, ${duration.toFixed(1)} s, ` +
       `streams [${streams.join(", ")}]; WebVTT ${vttOk ? "valid" : "missing/invalid"}`,
     evidence: { probe, scenes: finalState.scenes.map((s) => ({ index: s.sceneIndex, status: s.status, narration: s.narration })) },
   };
