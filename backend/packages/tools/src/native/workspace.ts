@@ -16,12 +16,11 @@ import type { ToolInvocationContext } from "@ai-platform/shared";
  * authorization model (ADR-049) had no equivalent. Every repository takes a project and puts it
  * in the SQL `WHERE`; the filesystem had no `WHERE` at all.
  *
- * Containment still runs on top of this (ADR-088 resolves symlinks before checking), and it
- * checks against the DEPLOYMENT root rather than the project's subdirectory. That is deliberate
- * and worth stating: this function decides which directory a tool operates in, and
- * `resolveSandboxedPath` decides what may not be escaped. Narrowing containment to the project
- * directory as well would be stricter still, and is a separate change — the escape that matters
- * today is leaving the deployment root entirely.
+ * Containment runs on top of this (ADR-088 resolves symlinks before checking), and every native
+ * tool now checks it against THIS directory — `resolveSandboxedPath(projectWorkspace(...), path)`
+ * — so `../<another project id>/...` is refused, not merely a path out of the deployment root.
+ * The bundled MCP filesystem server, which is launched over the whole root, is confined the same
+ * way per call (`scopePathArguments` in @ai-platform/mcp).
  */
 
 /**

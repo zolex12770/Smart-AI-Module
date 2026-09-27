@@ -1245,6 +1245,8 @@ async function main() {
             command: process.execPath,
             args: [fileURLToPath(import.meta.resolve("@modelcontextprotocol/server-filesystem/dist/index.js")), sandboxRoot],
             cwd: sandboxRoot,
+            // One server over every project's workspace, so each call is confined to the caller's.
+            workspaceScope: { root: sandboxRoot },
           },
         ];
   await mcpManager.startAll(mcpServers);

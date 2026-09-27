@@ -154,6 +154,15 @@ key, `DATABASE_URL`), and the "timeout" only rejected a promise while the child 
 - MCP-discovered tools register **disabled**; enabling one is an explicit, authenticated,
   permission-checked action. Verified live on a running platform: 14 discovered tools, 0 enabled,
   against 8 native tools all enabled.
+- **The bundled MCP filesystem server is confined to the caller's project workspace.** It is
+  launched once over the whole `SANDBOX_ROOT`, so until 2026-09-27 an operator who enabled
+  `read_text_file` also let any tenant's agent read another tenant's workspace by
+  `../<project id>/...`, an absolute path or a symlink. Every path argument (`path`, `paths`,
+  `source`, `destination`) is now resolved inside the calling project's workspace by the same
+  containment check the native tools use, and refused outside it
+  (`backend/src/mcp-workspace-scope.test.ts`, against the real server, with a control case that
+  shows the read succeeding unscoped). A server configured through `MCP_SERVERS` gets no such
+  scoping: only connect one that is either not filesystem-shaped or already scoped itself.
 - **A remote (HTTP) MCP server is untrusted third-party code supplying tool DEFINITIONS** — a
   materially different position from a local subprocess an operator launched (ADR-083). An id
   collision is refused rather than resolved, so a server cannot rename its tool to `fs.write_file`

@@ -7,7 +7,7 @@ import {
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { PermissionLevel, ToolDefinition } from "@ai-platform/shared";
 import { PERMISSION_LEVEL_DEFAULTS, ServiceUnavailableError, ValidationError } from "@ai-platform/shared";
-import type { ToolRegistry } from "@ai-platform/tools";
+import { projectWorkspace, resolveSandboxedPath, type ToolRegistry } from "@ai-platform/tools";
 
 /** A LOCAL MCP server the platform launches as a subprocess. The original transport. */
 export interface McpStdioServerConfig {
@@ -16,6 +16,12 @@ export interface McpStdioServerConfig {
   args?: string[];
   env?: Record<string, string>;
   cwd?: string;
+  /**
+   * Confines a FILESYSTEM server's path arguments to the calling project's workspace under
+   * `root` — see `scopePathArguments`. Set for the bundled reference server, which is launched
+   * over the whole sandbox root and so, unscoped, would let one tenant's agent read another's.
+   */
+  workspaceScope?: { root: string };
 }
 
 /**
@@ -173,7 +179,15 @@ export async function connectMcpServer(
       };
 
       try {
-        registry.register(definition, async (args) => {
+        registry.register(definition, async (rawArgs, context) => {
+          let args = rawArgs;
+          if (!isHttpServerConfig(config) && config.workspaceScope) {
+            try {
+              args = scopePathArguments(rawArgs, config.workspaceScope.root, context);
+            } catch (error) {
+              return { ok: false, error: error instanceof Error ? error.message : String(error) };
+            }
+          }
           /**
            * The tool's own bound, passed to the SDK — docs/26_DECISIONS.md ADR-158.
            *
@@ -469,4 +483,37 @@ function inferPermissionLevel(toolName: string): PermissionLevel {
   if (/delete|remove|drop/.test(name)) return "destructive";
   if (/write|create|move|rename|edit/.test(name)) return "write_local";
   return "read_only";
+}
+
+/** Argument names the reference filesystem server (and servers like it) treat as paths. */
+const PATH_ARGUMENTS = ["path", "source", "destination"] as const;
+
+/**
+ * Rewrites a filesystem MCP tool's path arguments into the calling project's workspace.
+ *
+ * The bundled `@modelcontextprotocol/server-filesystem` is launched once, over the whole
+ * `SANDBOX_ROOT`, and the per-project directories (ADR-090) are subdirectories of that root. The
+ * server cannot know which project is calling, so without this an enabled `read_text_file` given
+ * `../<another project id>/notes.txt` — or that directory's absolute path — read another tenant's
+ * workspace. Each path is resolved the way the native tools resolve theirs: relative to the
+ * project workspace, symlinks followed before the containment check (`resolveSandboxedPath`), and
+ * refused if it leaves the workspace. The server then receives the absolute, contained path.
+ */
+export function scopePathArguments(
+  args: Record<string, unknown>,
+  root: string,
+  context: Parameters<typeof projectWorkspace>[1]
+): Record<string, unknown> {
+  const workspace = projectWorkspace(root, context);
+  const scoped: Record<string, unknown> = { ...args };
+  for (const key of PATH_ARGUMENTS) {
+    if (typeof scoped[key] === "string") scoped[key] = resolveSandboxedPath(workspace, scoped[key] as string);
+  }
+  if (Array.isArray(scoped.paths)) {
+    scoped.paths = scoped.paths.map((p) => {
+      if (typeof p !== "string") throw new Error("Every entry of `paths` must be a string.");
+      return resolveSandboxedPath(workspace, p);
+    });
+  }
+  return scoped;
 }
