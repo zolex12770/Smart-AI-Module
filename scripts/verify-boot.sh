@@ -15,12 +15,32 @@ PASS=0; FAIL=0; LAST_LOG=""
 ok()   { echo "  PASS  $*"; PASS=$((PASS+1)); }
 bad()  { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
 
+# Frees a port a previous run may have left bound. This was Windows-only (netstat -ano and
+# taskkill), so on Linux -- where CI runs -- it did nothing, no server was ever stopped, and the
+# script hung in `wait`. The runner's own process is now killed directly (see `exec` below);
+# this remains as a best-effort sweep for a leftover from an interrupted run, on either platform.
 free_port() {
   local p=$1
   local pid
-  pid=$(netstat -ano 2>/dev/null | grep ":$p " | grep LISTENING | awk '{print $5}' | head -1)
-  [ -n "${pid:-}" ] && taskkill //F //PID "$pid" >/dev/null 2>&1
+  if command -v taskkill >/dev/null 2>&1; then
+    pid=$(netstat -ano 2>/dev/null | grep ":$p " | grep LISTENING | awk '{print $5}' | head -1)
+    [ -n "${pid:-}" ] && taskkill //F //PID "$pid" >/dev/null 2>&1
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser -k "$p/tcp" >/dev/null 2>&1
+  elif command -v lsof >/dev/null 2>&1; then
+    pid=$(lsof -t -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | head -1)
+    [ -n "${pid:-}" ] && kill "$pid" 2>/dev/null
+  fi
   return 0
+}
+
+# Stops the server a case started. `$runner` IS the node process (the subshell `exec`s it), so
+# this kills the server itself rather than a wrapper that would leave it running.
+stop_runner() {
+  kill "$1" 2>/dev/null
+  for _ in $(seq 1 20); do kill -0 "$1" 2>/dev/null || break; sleep 0.5; done
+  kill -9 "$1" 2>/dev/null
+  wait "$1" 2>/dev/null
 }
 
 # Boots the built entrypoint with the given env, waits for health, and reports.
@@ -37,7 +57,7 @@ boot_case() {
   local log; log=$(mktemp)
   free_port "$port"
   rm -rf "backend/data/pgdata-verify-$port"
-  ( cd backend && env "$@" PORT="$port" DATABASE_DIR="./data/pgdata-verify-$port" \
+  ( cd backend && exec env "$@" PORT="$port" DATABASE_DIR="./data/pgdata-verify-$port" \
       node dist/index.js >"$log" 2>&1 ) &
   local runner=$!
 
@@ -56,9 +76,8 @@ boot_case() {
       bad "$label — did not reach a running worker state"
       tail -12 "$log"
     fi
+    stop_runner "$runner"
     free_port "$port"
-    kill "$runner" 2>/dev/null
-    wait "$runner" 2>/dev/null
     rm -rf "backend/data/pgdata-verify-$port"
     LAST_LOG="$log"
     return 0
@@ -89,8 +108,8 @@ boot_case() {
     fi
   fi
 
+  stop_runner "$runner"
   free_port "$port"
-  wait "$runner" 2>/dev/null
   rm -rf "backend/data/pgdata-verify-$port"
   LAST_LOG="$log"
 }
