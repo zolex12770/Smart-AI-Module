@@ -66,7 +66,9 @@ providers and checks the **content** of each result, not its status code:
 | AUDIO | a WAV of plausible duration whose samples are not silence (RMS) |
 | VIDEO | an MP4 with H.264 + AAC + subtitle streams (ffprobe), a WebVTT asset, narrated scenes |
 | CODING-AGENT | a failing test in a real project is made to pass by editing the source; the test file is unchanged |
+| MCP | the bundled MCP filesystem server reads a planted word inside an agent task and the model answers with it; the same tool refuses another project's directory |
 | USAGE, AUDIT | real token counts; the project's own audit rows and no other project's |
+| QUOTA | with `MONTHLY_VIDEO_SECONDS_LIMIT` set, a video over the remaining budget is refused with 429 `QUOTA_EXCEEDED` and nothing is created (BLOCKED_EXTERNAL when no limit is configured) |
 | TENANT-ISOLATION | a second account gets 404 for the first account's resources |
 | METRICS | the Prometheus counters for requests, provider calls, tokens, generations, jobs and tool calls are non-zero |
 | PERSISTENCE | after logout and login, the conversations, memories, documents and media are still there |
@@ -81,9 +83,13 @@ ACCEPT_ADMIN_EMAIL=admin@example.com ACCEPT_ADMIN_PASSWORD=... \
 ACCEPT_OUT=./acceptance-out node scripts/acceptance/full-system.mjs
 ```
 
-The admin credentials are needed for the METRICS check (`/api/v1/admin/metrics` is
-system-administrator only). The latest committed results are in
+The admin credentials are needed for the METRICS and MCP checks (reading metrics and enabling an
+MCP tool are system-administrator actions). The latest committed results are in
 [evidence/](evidence/).
+
+`scripts/acceptance/latency.mjs` measures a running stack without asserting anything: liveness,
+an authenticated read, the database/queue readiness probe, an embedding call, and chat time to
+first token and inter-token interval, each as p50/p95/max.
 
 ## CI
 

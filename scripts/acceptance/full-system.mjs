@@ -447,10 +447,107 @@ await check("CODING-AGENT", "The agent fixes the SOURCE so the test passes, and 
 
 // ---- accounting, audit, isolation --------------------------------------------------------------
 
+// ---- MCP -------------------------------------------------------------------------------------
+
+await check("MCP", "A tool served by a real MCP server runs inside an agent task, in this project only", async () => {
+  const TOOL = "mcp.reference-filesystem.read_text_file";
+  const servers = (await user.call("GET", "/api/v1/mcp")).body?.servers ?? [];
+  const server = servers.find((s) => (s.toolIds ?? []).includes(TOOL));
+  if (!server) {
+    return { status: FAIL, detail: `no connected MCP server offers ${TOOL}; servers: ${JSON.stringify(servers.map((s) => [s.id, s.status]))}` };
+  }
+  if (server.status !== "connected") return { status: FAIL, detail: `MCP server ${server.id} is ${server.status}: ${server.lastError ?? ""}` };
+  // MCP tools register DISABLED and enabling one is a deployment-wide, system-administrator action.
+  const email = process.env.ACCEPT_ADMIN_EMAIL;
+  if (!email) return { status: BLOCKED, detail: `${server.id} connected with ${server.toolCount} tools, but ACCEPT_ADMIN_EMAIL/PASSWORD were not supplied, so no MCP tool can be enabled for the call` };
+  const admin = new Client("admin");
+  await admin.login(email, process.env.ACCEPT_ADMIN_PASSWORD);
+  const wasEnabled = ((await user.call("GET", "/api/v1/tools")).body?.tools ?? []).find((t) => t.id === TOOL)?.enabled === true;
+  const enable = (enabled) => admin.raw("POST", `/api/v1/tools/${TOOL}/enable`, { enabled }, { headers: { "x-project-id": "" } });
+  if (!wasEnabled && (await enable(true)).status !== 200) return { status: FAIL, detail: `enabling ${TOOL} as the administrator failed` };
+  try {
+    const word = `lantern-${Math.floor(Math.random() * 900 + 100)}`;
+    const w = await user.call("POST", "/api/v1/workspace/files", { path: "mcp-note.txt", content: `The keeper's code word is ${word}.\n` });
+    if (w.status !== 201) return { status: FAIL, detail: `writing mcp-note.txt -> ${w.status}` };
+    const created = await user.call("POST", "/api/v1/agent/tasks", {
+      taskType: "mcp_read_and_summarize",
+      input: { path: "mcp-note.txt", question: "What is the keeper's code word? Reply with just the word." },
+    });
+    if (created.status !== 201 && created.status !== 202) return { status: FAIL, detail: `POST /agent/tasks -> ${created.status}: ${created.text.slice(0, 160)}` };
+    const taskId = created.body.task.id;
+    const final = await waitFor(
+      async () => {
+        const r = await user.call("GET", `/api/v1/agent/tasks/${taskId}`);
+        const waiting = (r.body.nodes ?? []).find((n) => n.status === "waiting_approval");
+        if (waiting) await user.call("POST", `/api/v1/agent/tasks/${taskId}/approve`, { nodeId: waiting.id });
+        return ["COMPLETED", "FAILED", "CANCELLED"].includes(r.body.task?.state) ? r.body : null;
+      },
+      { timeoutMs: 600_000, everyMs: 3_000, label: "the MCP task" }
+    );
+    const readNode = (final.nodes ?? []).find((n) => n.toolId === TOOL);
+    const answerNode = (final.nodes ?? []).find((n) => n.kind === "model_call");
+    const readText = String(readNode?.output?.content ?? "");
+    const answer = String(answerNode?.output?.content ?? "");
+    // The same tool, asked for another project's directory — inside the server's own allowed root,
+    // so only the per-project scope can refuse it — must refuse.
+    const probe = await user.call("POST", "/api/v1/agent/tasks", {
+      taskType: "mcp_read_and_summarize",
+      input: { path: "../00000000-0000-4000-8000-000000000000/escape-probe.txt", question: "?" },
+    });
+    const probeId = probe.body?.task?.id;
+    const probeFinal = probeId
+      ? await waitFor(
+          async () => {
+            const r = await user.call("GET", `/api/v1/agent/tasks/${probeId}`);
+            const waiting = (r.body.nodes ?? []).find((n) => n.status === "waiting_approval");
+            if (waiting) await user.call("POST", `/api/v1/agent/tasks/${probeId}/approve`, { nodeId: waiting.id });
+            return ["COMPLETED", "FAILED", "CANCELLED"].includes(r.body.task?.state) ? r.body : null;
+          },
+          { timeoutMs: 300_000, everyMs: 3_000, label: "the escape probe" }
+        )
+      : null;
+    const escapeRefused = probeFinal?.task?.state === "FAILED" && /outside the sandboxed root/i.test(JSON.stringify(probeFinal));
+    const ok = final.task.state === "COMPLETED" && readText.includes(word) && answer.includes(word) && escapeRefused;
+    return {
+      status: ok ? PASS : FAIL,
+      detail:
+        `task ${final.task.state}: ${server.id} (${server.transport}) read "${readText.trim().slice(0, 60)}"; the model answered "${answer.trim().slice(0, 40)}" ` +
+        `(expected ${word}); a path outside the workspace: ${escapeRefused ? "refused" : `NOT refused (${probeFinal?.task?.state})`}`,
+    };
+  } finally {
+    if (!wasEnabled) await enable(false);
+  }
+});
+
 await check("USAGE", "Tokens spent are metered", async () => {
   const res = await user.call("GET", "/api/v1/usage");
   const tokens = res.body?.projectUsage?.llm?.tokensToday ?? 0;
   return { status: res.status === 200 && tokens > 0 ? PASS : FAIL, detail: `this project spent ${tokens} tokens today across the calls above (scope ${res.body?.usageScope})` };
+});
+
+await check("QUOTA", "A request over a configured limit is refused before any work, and says why", async () => {
+  // Quotas are deployment settings (MONTHLY_VIDEO_SECONDS_LIMIT and friends), enforced per
+  // organization. Video seconds are used because a refusal there is checked BEFORE anything is
+  // queued, so observing it spends nothing.
+  const usage = await user.call("GET", "/api/v1/usage");
+  const limit = usage.body?.limits?.monthlyVideoSecondsLimit ?? null;
+  if (!limit) {
+    return {
+      status: BLOCKED,
+      detail: "this deployment has no MONTHLY_VIDEO_SECONDS_LIMIT, so no limit can be exceeded without spending real budget (enforcement is covered by the quota integration tests)",
+    };
+  }
+  const used = usage.body?.usage?.video?.secondsGeneratedThisMonth ?? 0;
+  const ask = Math.max(4, limit - used + 4);
+  if (ask > 1800) return { status: BLOCKED, detail: `the limit (${limit} s) is above the largest single request (1800 s)` };
+  const before = ((await user.call("GET", "/api/v1/videos")).body?.projects ?? []).length;
+  const r = await user.call("POST", "/api/v1/videos", { prompt: "quota probe", targetDurationSeconds: ask, sceneClipSeconds: 30 });
+  const after = ((await user.call("GET", "/api/v1/videos")).body?.projects ?? []).length;
+  const ok = r.status === 429 && r.body?.error?.code === "QUOTA_EXCEEDED" && after === before;
+  return {
+    status: ok ? PASS : FAIL,
+    detail: `limit ${limit} s/month, ${used} s used; asked for ${ask} s -> ${r.status} ${r.body?.error?.code ?? ""}: "${String(r.body?.error?.message ?? "").slice(0, 120)}"; video projects before/after: ${before}/${after}`,
+  };
 });
 
 await check("AUDIT", "The project's audit trail records what happened in it", async () => {
