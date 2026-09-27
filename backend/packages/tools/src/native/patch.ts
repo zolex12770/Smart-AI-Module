@@ -126,7 +126,8 @@ function checkHunkCounts(patch: FilePatch, hunk: Hunk): void {
         `+${hunk.newStart},${hunk.newLines} @@ counts ${hunk.oldLines} old and ${hunk.newLines} new line(s), but the ` +
         `hunk contains ${oldCount} old (" " and "-") and ${newCount} new (" " and "+") line(s). Every line of a hunk ` +
         `starts with exactly one of " ", "-" or "+", followed by the file's text. Re-read the file and send a diff ` +
-        `whose header matches its lines.`
+        `whose header matches its lines — or, for a small change, use code.replace_text with the exact old and new text, ` +
+        `which needs no line counts.`
     );
   }
 }
