@@ -77,7 +77,17 @@ describe("loadDotEnvFiles", () => {
  * anywhere. These check the schema-level fix at the boundary where it belongs.
  */
 describe("loadConfig treats an empty environment value as unset", () => {
-  const KEYS = ["GOOGLE_API_KEY", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DATABASE_URL", "CLAMD_HOST"];
+  const KEYS = [
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "DATABASE_URL",
+    "CLAMD_HOST",
+    "MONTHLY_VIDEO_SECONDS_LIMIT",
+    "DAILY_TOKEN_LIMIT",
+    "LLM_CONTEXT_WINDOW",
+  ];
   const saved: Record<string, string | undefined> = {};
 
   beforeEach(() => {
@@ -118,6 +128,16 @@ describe("loadConfig treats an empty environment value as unset", () => {
     const config = loadConfig();
     expect(config.DATABASE_URL).toBeUndefined();
     expect(config.CLAMD_HOST).toBeUndefined();
+  });
+
+  it("reads a blank numeric limit as unset — a compose file's `${LIMIT:-}` must not stop the boot", () => {
+    process.env.MONTHLY_VIDEO_SECONDS_LIMIT = "";
+    process.env.DAILY_TOKEN_LIMIT = "  ";
+    process.env.LLM_CONTEXT_WINDOW = "16384";
+    const config = loadConfig();
+    expect(config.MONTHLY_VIDEO_SECONDS_LIMIT).toBeUndefined();
+    expect(config.DAILY_TOKEN_LIMIT).toBeUndefined();
+    expect(config.LLM_CONTEXT_WINDOW).toBe(16384);
   });
 });
 

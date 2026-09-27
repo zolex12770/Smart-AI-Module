@@ -64,6 +64,17 @@ const optionalString = z.preprocess(
 );
 
 /**
+ * An optional positive integer where an EMPTY value means unset, as it does for `optionalString`.
+ * A compose file or manifest that passes `LIMIT: ${LIMIT:-}` hands the process an empty string,
+ * which `z.coerce.number()` reads as 0 and `.positive()` then rejects — so a deployment that
+ * merely declared a limit it did not set refused to boot.
+ */
+const optionalPositiveInt = z.preprocess(
+  (v) => (typeof v === "string" && v.trim() === "" ? undefined : v),
+  z.coerce.number().int().positive().optional()
+);
+
+/**
  * Single point of env loading — see docs/17_BACKEND_ARCHITECTURE.md. Fails fast on boot
  * with a clear error rather than letting a missing/malformed variable surface later as a
  * confusing runtime failure.
@@ -135,7 +146,7 @@ const envFields = z.object({
   LLM_BASE_URL: optionalString,
   LLM_MODEL: optionalString,
   LLM_API_KEY: optionalString,
-  LLM_CONTEXT_WINDOW: z.coerce.number().int().positive().optional(),
+  LLM_CONTEXT_WINDOW: optionalPositiveInt,
 
   /**
    * Rolling conversation summarization — FR-030, ADR-103.
@@ -330,12 +341,12 @@ const envFields = z.object({
   // FR-063 (docs/22_COST_AND_QUOTA_STRATEGY.md) — single-operator scope (ADR-008), so these
   // are global, not per-user, limits. All optional: unset means "no limit configured," the
   // same opt-in default docs/22's own design calls for.
-  DAILY_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
-  MONTHLY_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
-  DAILY_IMAGE_LIMIT: z.coerce.number().int().positive().optional(),
-  DAILY_SPEECH_CHARACTER_LIMIT: z.coerce.number().int().positive().optional(),
-  MONTHLY_SPEECH_CHARACTER_LIMIT: z.coerce.number().int().positive().optional(),
-  MONTHLY_VIDEO_SECONDS_LIMIT: z.coerce.number().int().positive().optional(),
+  DAILY_TOKEN_LIMIT: optionalPositiveInt,
+  MONTHLY_TOKEN_LIMIT: optionalPositiveInt,
+  DAILY_IMAGE_LIMIT: optionalPositiveInt,
+  DAILY_SPEECH_CHARACTER_LIMIT: optionalPositiveInt,
+  MONTHLY_SPEECH_CHARACTER_LIMIT: optionalPositiveInt,
+  MONTHLY_VIDEO_SECONDS_LIMIT: optionalPositiveInt,
   /**
    * Embedding spend, budgeted apart from chat — docs/26_DECISIONS.md ADR-131, wired by ADR-150.
    *
@@ -357,8 +368,8 @@ const envFields = z.object({
    * Cosine distance, so 0 is identical and 2 is opposite; the default is 0.6.
    */
   RAG_MAX_COSINE_DISTANCE: z.coerce.number().min(0).max(2).optional(),
-  DAILY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
-  MONTHLY_EMBEDDING_TOKEN_LIMIT: z.coerce.number().int().positive().optional(),
+  DAILY_EMBEDDING_TOKEN_LIMIT: optionalPositiveInt,
+  MONTHLY_EMBEDDING_TOKEN_LIMIT: optionalPositiveInt,
   /**
    * How long the storyboard stage may spend in the model — ADR-161.
    *

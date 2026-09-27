@@ -43,6 +43,11 @@ x-api-environment: &api-environment
   # Optional real image generation through any OpenAI-compatible images server.
   IMAGE_BASE_URL: ${IMAGE_BASE_URL:-}
   IMAGE_MODEL: ${IMAGE_MODEL:-}
+  # Optional quotas, per organization; unset means unlimited (docs/22_COST_AND_QUOTA_STRATEGY.md).
+  DAILY_TOKEN_LIMIT: ${DAILY_TOKEN_LIMIT:-}
+  MONTHLY_TOKEN_LIMIT: ${MONTHLY_TOKEN_LIMIT:-}
+  DAILY_IMAGE_LIMIT: ${DAILY_IMAGE_LIMIT:-}
+  MONTHLY_VIDEO_SECONDS_LIMIT: ${MONTHLY_VIDEO_SECONDS_LIMIT:-}
 
 services:
   postgres:
