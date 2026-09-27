@@ -272,7 +272,7 @@ If the context does not contain the answer, reply exactly: "The provided documen
  * loop at all, and letting the model discover that at turn one spends a real model call to
  * reach the same conclusion the planner could have reached for free.
  */
-const CODING_AGENT_REQUIRED_TOOLS = ["terminal.run_command", "code.read_lines", "code.apply_patch"] as const;
+const CODING_AGENT_REQUIRED_TOOLS = ["terminal.run_command", "code.read_lines", "code.replace_text", "code.apply_patch"] as const;
 
 /**
  * Navigation tools the loop is far better with and still correct without — they are how the
@@ -347,8 +347,10 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
     `1. Run the test with terminal.run_command and read the ACTUAL failure output.`,
     `2. Locate the source the test exercises and read the relevant lines with code.read_lines`,
     `   before changing anything. Do not patch a file you have not read.`,
-    `3. Fix the SOURCE, not the test: apply a unified diff with code.apply_patch. Never edit`,
-    `   ${testFile} to agree with the code, and never weaken or delete an assertion.`,
+    `3. Fix the SOURCE, not the test. For a small change use code.replace_text: quote the exact`,
+    `   current text (copied from code.read_lines, without the line numbers) and its replacement.`,
+    `   For larger changes apply a unified diff with code.apply_patch. Never edit ${testFile}`,
+    `   to agree with the code, and never weaken or delete an assertion.`,
     `4. Run the test again. If it still fails, read the new failure and return to step 2.`,
     ``,
     `When the test exits 0, reply with what was broken, what you changed, and the exit code of`,

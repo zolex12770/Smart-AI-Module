@@ -158,5 +158,84 @@ export function createCodingTools(root: string): NativeToolEntry[] {
         }
       },
     },
+    {
+      /**
+       * An exact search-and-replace edit — found necessary by the autonomous-completion pass.
+       *
+       * With `code.apply_patch` as the only way to change a file, a real fix_failing_test run
+       * (qwen2.5:7b) read the right file, knew the right change, and then sent five diffs whose
+       * `@@` header counts disagreed with their bodies; each was correctly refused, and the run
+       * ended at its turn limit with the bug still there. Counting diff lines is a known weakness
+       * of language models, which is why coding agents commonly offer this shape alongside diffs:
+       * quote the exact text, give its replacement.
+       *
+       * It is as strict as the patch tool where strictness protects the file: the old text must
+       * occur EXACTLY ONCE (zero matches means the model is working from a stale or imagined
+       * version; several means the edit is ambiguous), and an edit that changes nothing is
+       * refused rather than reported as done (ADR-145's reasoning).
+       */
+      definition: toolDefinition(
+        "code.replace_text",
+        "Replace exact text in a file",
+        [
+          "Edit a file by replacing one exact, unique piece of its current text with new text.",
+          "`oldText` must match the file character for character (including indentation) and occur exactly once — copy it from code.read_lines output WITHOUT the line numbers, and include a neighbouring line if the text alone is not unique.",
+          "`newText` replaces it. For larger or multi-file changes use code.apply_patch.",
+        ].join(" "),
+        {
+          type: "object",
+          properties: {
+            path: { type: "string", description: "Path relative to the workspace root." },
+            oldText: { type: "string", minLength: 1, description: "The exact text to replace; must occur exactly once." },
+            newText: { type: "string", description: "The replacement text." },
+          },
+          required: ["path", "oldText", "newText"],
+          additionalProperties: false,
+        },
+        "write_local"
+      ),
+      handler: async (args, context) => {
+        const path = String(args.path ?? "");
+        const oldText = String(args.oldText ?? "");
+        const newText = String(args.newText ?? "");
+        if (!oldText) return { ok: false, error: "oldText was empty: quote the exact text to replace." };
+        if (oldText === newText) {
+          return { ok: false, error: "oldText and newText are identical, so this edit would change nothing." };
+        }
+        try {
+          const absolute = resolveIn(context, path);
+          if (!existsSync(absolute)) {
+            return { ok: false, error: `"${path}" does not exist. To create a file, use code.apply_patch with a --- /dev/null diff.` };
+          }
+          const content = readFileSync(absolute, "utf8");
+          // Match against the file's own line endings, whatever the model sent.
+          const eol = content.includes("\r\n") ? "\r\n" : "\n";
+          const find = oldText.replace(/\r\n|\r|\n/g, eol);
+          const replacement = newText.replace(/\r\n|\r|\n/g, eol);
+          const first = content.indexOf(find);
+          if (first === -1) {
+            return {
+              ok: false,
+              error:
+                `oldText was not found in "${path}". It must match the current file exactly, including ` +
+                `indentation and without line numbers. Read the file again with code.read_lines and copy the text.`,
+            };
+          }
+          const occurrences = content.split(find).length - 1;
+          if (occurrences > 1) {
+            return {
+              ok: false,
+              error: `oldText occurs ${occurrences} times in "${path}", so the edit is ambiguous. Include a neighbouring line to make it unique.`,
+            };
+          }
+          const updated = content.slice(0, first) + replacement + content.slice(first + find.length);
+          writeFileSync(absolute, updated, "utf8");
+          const line = content.slice(0, first).split(eol).length;
+          return { ok: true, output: { path, replacedAtLine: line, linesRemoved: find.split(eol).length, linesAdded: replacement.split(eol).length } };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+    },
   ];
 }

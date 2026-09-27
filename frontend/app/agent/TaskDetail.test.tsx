@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { Task, TaskNode } from "@ai-platform/shared";
@@ -241,6 +242,39 @@ describe("TaskDetail coding tabs", () => {
     // Twice on purpose: the Activity card (ADR-134) shows the same result as the Commands tab.
     // Two views of one run is the intent, so this asserts presence rather than uniqueness.
     expect(screen.getAllByText(/1 failed/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("shows what each coding edit changed: a patch's files and diff, a replacement's old and new text", async () => {
+    hookResult.task = codingTask();
+    hookResult.nodes = [];
+    hookResult.activity = [
+      {
+        kind: "tool_call",
+        callId: "p1",
+        name: "code.apply_patch",
+        arguments: { diff: "--- a/sum.js\n+++ b/sum.js\n@@ -2 +2 @@\n-  return a - b;\n+  return a * b;\n" },
+        iteration: 1,
+      },
+      { kind: "tool_result", callId: "p1", ok: false, preview: "Malformed hunk", iteration: 1 },
+      {
+        kind: "tool_call",
+        callId: "r1",
+        name: "code.replace_text",
+        arguments: { path: "sum.js", oldText: "return a - b;", newText: "return a + b;" },
+        iteration: 2,
+      },
+      { kind: "tool_result", callId: "r1", ok: true, preview: "{}", iteration: 2 },
+    ];
+
+    render(<TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={[]} variant="coding" />);
+    await userEvent.click(screen.getByText(/Files changed \(2\)/));
+
+    expect(screen.getByText("refused: sum.js")).toBeInTheDocument();
+    expect(screen.getByText("edited sum.js")).toBeInTheDocument();
+    expect(screen.getByText(/\+ return a \+ b;/)).toBeInTheDocument();
+    // The refused patch's own diff is shown, so a reader can see what was attempted.
+    // (The Activity card shows the raw arguments too, hence the <pre> selector.)
+    expect(screen.getByText(/\+\+\+ b\/sum\.js.*\+ return a \* b;/s, { selector: "pre" })).toBeInTheDocument();
   });
 
   it("reads a finished run's activity off the node, with no stream to listen to", () => {

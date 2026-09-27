@@ -385,7 +385,11 @@ function CodingTabs({ nodes, activity }: { nodes: TaskNode[]; activity: TaskActi
    * filter for the autonomous variant, which does hold them.
    */
   const fileWrites = calls.filter(
-    (c) => c.name === "code.apply_patch" || c.name === "fs.write_file" || c.name === "fs.delete_file"
+    (c) =>
+      c.name === "code.apply_patch" ||
+      c.name === "code.replace_text" ||
+      c.name === "fs.write_file" ||
+      c.name === "fs.delete_file"
   );
 
   return (
@@ -424,18 +428,39 @@ function CodingTabs({ nodes, activity }: { nodes: TaskNode[]; activity: TaskActi
           <p className="empty-state">No file changes yet.</p>
         ) : (
           fileWrites.map((call, i) => {
-            const args = call.arguments as { path?: unknown; content?: unknown } | undefined;
+            const args = call.arguments as
+              | { path?: unknown; content?: unknown; diff?: unknown; oldText?: unknown; newText?: unknown }
+              | undefined;
             const result = resultFor(call.callId);
+            // A patch names its files inside the diff; show the diff itself, which is the change.
+            const diff = typeof args?.diff === "string" ? args.diff : null;
+            const patchedPaths = diff ? [...diff.matchAll(/^\+\+\+ (?:b\/)?(.+)$/gm)].map((m) => m[1]).join(", ") : "";
+            const verb =
+              call.name === "fs.delete_file" ? "deleted " : call.name === "fs.write_file" ? "wrote " : "edited ";
             return (
               <div key={call.callId ?? i} style={{ marginBottom: 12 }}>
                 <div className="mono">
-                  {call.name === "fs.delete_file" ? "deleted " : "wrote "}
-                  {String(args?.path ?? "")}
+                  {result && !result.ok ? "refused: " : verb}
+                  {diff ? patchedPaths : String(args?.path ?? "")}
                 </div>
                 {result && !result.ok && <div className="mono error-text">{result.preview}</div>}
                 {typeof args?.content === "string" && (
                   <pre className="mono" style={{ color: "var(--success)" }}>
                     {args.content.slice(0, 1_000)}
+                  </pre>
+                )}
+                {diff && <pre className="mono">{diff.slice(0, 2_000)}</pre>}
+                {typeof args?.oldText === "string" && typeof args?.newText === "string" && (
+                  <pre className="mono">
+                    {args.oldText
+                      .split("\n")
+                      .map((l) => `- ${l}`)
+                      .join("\n")}
+                    {"\n"}
+                    {args.newText
+                      .split("\n")
+                      .map((l) => `+ ${l}`)
+                      .join("\n")}
                   </pre>
                 )}
               </div>
