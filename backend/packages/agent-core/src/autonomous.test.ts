@@ -110,7 +110,9 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     /** A real meter, for the tests that assert what the run charged for (ADR-156). */
     meter?: AgentEngineDeps["meter"],
     /** The audit sink the composition root supplies, for the tests that read the trail. */
-    auditSink?: (entry: { toolId: string; ok: boolean; outcome: string }) => void
+    auditSink?: (entry: { toolId: string; ok: boolean; outcome: string }) => void,
+    /** Anything else the composition root would supply, e.g. `runTestCommand`. */
+    extraDeps: Partial<AgentEngineDeps> = {}
   ) => {
     const provider = suppliedProvider ?? new ScriptedAgentProvider(turns);
     const registry = new ModelRegistry();
@@ -135,6 +137,7 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
       workspaceRoot: sandboxRoot,
       agentLimits: limits,
       ...(meter ? { meter } : {}),
+      ...extraDeps,
     });
     return { engine, provider, toolRegistry };
   };
@@ -719,6 +722,54 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     const [node] = await nodes.listByRoot(PROJECT, task.id);
     expect(node.failureClass).toBe("retryable-execution");
   }, 40_000);
+
+  /**
+   * A test-judged node is corrected with the TEST's output, not a model's opinion — found by the
+   * autonomous-completion pass: a real fix_failing_test run answered after one failed patch and
+   * was never shown that the test still failed.
+   */
+  it("hands the model the real test failure when it answers too early, and completes once the test passes", async () => {
+    const [anyTool] = createCodingTools(sandboxRoot);
+    const terminalStub: NativeToolEntry = {
+      definition: { ...anyTool.definition, id: "terminal.run_command", name: "Run a command" },
+      handler: async () => ({ ok: true, output: { exitCode: 0 } }),
+    };
+    const results = [
+      { exitCode: 1, stdout: "", stderr: "AssertionError: -1 !== 5" },
+      { exitCode: 0, stdout: "ok", stderr: "" },
+      { exitCode: 0, stdout: "ok", stderr: "" },
+    ];
+    const runs: string[] = [];
+    const runTestCommand = async (spec: { command: string; args?: string[] }) => {
+      runs.push(`${spec.command} ${(spec.args ?? []).join(" ")}`);
+      return results[Math.min(runs.length - 1, results.length - 1)];
+    };
+    const { engine, provider } = build(
+      [{ text: "I fixed it." }, { text: "Fixed: sum now adds. The test exits 0." }],
+      { maxIterations: 6 },
+      [terminalStub],
+      undefined,
+      undefined,
+      undefined,
+      { runTestCommand }
+    );
+
+    const task = await engine.createAndStart(
+      "fix_failing_test",
+      { testFile: "sum.test.cjs" },
+      { projectId: PROJECT, userId: USER }
+    );
+    const finished = await waitFor(task.id, ["COMPLETED", "FAILED", "CANCELLED"]);
+
+    expect(finished.state).toBe("COMPLETED");
+    expect(runs[0]).toBe("node sum.test.cjs");
+    // The second turn was shown the failure the test actually produced.
+    const correction = provider.requestsSeen[1].messages.find((m) => m.role === "user" && /test still fails/.test(m.content));
+    expect(correction?.content).toMatch(/test still fails.*exited 1.*-1 !== 5/s);
+    expect(provider.turnsSeen.length).toBe(2);
+    // And no model was asked for an opinion instead: every request offered tools.
+    expect(provider.toolsOfferedSeen.every((n) => n > 0)).toBe(true);
+  });
 
   it("persists the operator's deadline override on the node, so the sweeper agrees with the timer", async () => {
     // Before: the override lived only in the in-process timer, the stored timeout_ms stayed at

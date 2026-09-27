@@ -147,3 +147,37 @@ describe("runReasoningLoop with a context window", () => {
     expect(seen[0].content).toHaveLength(100000);
   });
 });
+
+describe("runReasoningLoop correction rounds", () => {
+  const answering = (texts: string[]) => {
+    let i = 0;
+    return async function* (): AsyncGenerator<ChatStreamEvent> {
+      const text = texts[Math.min(i++, texts.length - 1)];
+      yield { type: "done", message: { role: "assistant", content: text }, usage: { inputTokens: 1, outputTokens: 1 }, provider: "p", model: "m", finishReason: "stop" };
+    };
+  };
+
+  it("allows one correction by default, and still reports the verdict on the corrected answer", async () => {
+    let checks = 0;
+    const result = await runReasoningLoop(
+      { tools: [], streamChat: answering(["a", "b", "c", "d"]), executeTool: async () => ({ ok: true, content: "" }), verify: async () => ({ ok: false, reason: `check ${++checks}` }) },
+      [{ role: "user", content: GOAL }]
+    );
+    expect(result.iterations).toBe(2);
+    // The corrected answer is checked too; its failure is reported, not hidden.
+    expect(checks).toBe(2);
+    expect(result.verification).toEqual({ ok: false, reason: "check 2" });
+  });
+
+  it("allows up to maxCorrections when the caller's check is deterministic", async () => {
+    let checks = 0;
+    const result = await runReasoningLoop(
+      { tools: [], streamChat: answering(["a", "b", "c", "d", "e"]), executeTool: async () => ({ ok: true, content: "" }), verify: async () => ({ ok: ++checks >= 4, reason: "still failing" }) },
+      [{ role: "user", content: GOAL }],
+      { maxCorrections: 3 }
+    );
+    expect(checks).toBe(4);
+    expect(result.stopReason).toBe("answered");
+    expect(result.verification?.ok).toBe(true);
+  });
+});

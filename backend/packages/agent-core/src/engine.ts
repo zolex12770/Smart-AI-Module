@@ -28,7 +28,7 @@ import { planTask } from "./planner.js";
 import { runReasoningLoop } from "./reasoning-loop.js";
 import { resolveNodeInput } from "./template.js";
 import { UNTRUSTED_CONTENT_SYSTEM_PROMPT, wrapUntrustedContent } from "./trust-boundary.js";
-import { verifyNodeOutput, type VerificationContext } from "./verify.js";
+import { verifyNodeOutput, type TestSuiteSpec, type VerificationContext } from "./verify.js";
 import { withSpan } from "@ai-platform/observability";
 
 const TERMINAL_TASK_STATES = ["COMPLETED", "FAILED", "CANCELLED"] as const;
@@ -1027,6 +1027,28 @@ export class AgentEngine {
              */
             verify: async (answer, transcript) => {
               if (!answer.trim()) return { ok: false, reason: "The run produced no answer." };
+              /**
+               * A node that will be judged by a TEST is checked by that test here too — found by
+               * the autonomous-completion pass. A real fix_failing_test run sent one patch that
+               * did not apply, then answered; the in-loop check was a model's opinion of the
+               * transcript, and the run ended FAILED without the model ever being shown that the
+               * test still failed. Running the node's own test_suite gives the correction turn
+               * the actual failure output — evidence, not a verdict.
+               */
+              if (node.verificationMethod === "test_suite" && this.deps.runTestCommand) {
+                const spec = node.verificationSpec as unknown as TestSuiteSpec | undefined;
+                if (spec?.command) {
+                  const run = await this.deps.runTestCommand(spec);
+                  if (run.exitCode === 0) return { ok: true };
+                  const detail = `${run.stdout}\n${run.stderr}`.trim().slice(-1500);
+                  return {
+                    ok: false,
+                    reason:
+                      `the test still fails — \`${spec.command} ${(spec.args ?? []).join(" ")}\` exited ${run.exitCode}. ` +
+                      `Its output:\n${detail}\nRead the failure, fix the source, and run the test again before answering`,
+                  };
+                }
+              }
               const verdict = await this.verifyAutonomousAnswer(goal, answer, transcript, controller.signal, {
                 taskId: task.id,
                 nodeId: node.id,
@@ -1120,6 +1142,8 @@ export class AgentEngine {
             maxIterations: this.deps.agentLimits?.maxIterations,
             maxTotalTokens: this.deps.agentLimits?.maxTokensPerRun,
             contextWindow: this.deps.agentLimits?.contextWindow,
+            // A test verdict is evidence, so a failing test may send the model back more than once.
+            maxCorrections: node.verificationMethod === "test_suite" ? 3 : 1,
           }
         )
       );
@@ -1185,6 +1209,9 @@ export class AgentEngine {
         toolCallCount: result.toolCallCount,
         iterations: result.iterations,
         usage: result.usage,
+        // The in-loop check's verdict on the FINAL answer, kept with it: a run whose last
+        // correction still failed says so, rather than presenting an unchecked answer.
+        ...(result.verification ? { verification: result.verification } : {}),
         // Persisted beside the answer, so "what did this run do" is answerable after the fact
         // and not only while someone happened to be watching (ADR-134).
         activity,

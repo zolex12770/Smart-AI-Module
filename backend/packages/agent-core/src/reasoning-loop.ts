@@ -81,6 +81,13 @@ export interface ReasoningLoopOptions {
    * see `fitToContextWindow`. Absent means unknown, and nothing is elided.
    */
   contextWindow?: number;
+  /**
+   * How many times a failed `verify` may send the model back to work. One by default: when the
+   * verdict is a model's opinion, an unbounded correct-then-recheck cycle is how agents burn
+   * budget. A caller whose verdict is a deterministic check (a test run) may allow more, because
+   * each failure then hands the model new, real evidence. `maxIterations` still bounds the run.
+   */
+  maxCorrections?: number;
   /** Hard ceiling on total tokens across the whole run. */
   maxTotalTokens?: number;
   maxOutputTokensPerTurn?: number;
@@ -129,7 +136,8 @@ export async function runReasoningLoop(
   const transcript: ChatMessage[] = [...initialMessages];
   const usage = { inputTokens: 0, outputTokens: 0 };
   let toolCallCount = 0;
-  let correctionUsed = false;
+  let correctionsUsed = 0;
+  const maxCorrections = options.maxCorrections ?? 1;
   const emit = (event: ReasoningEvent) => {
     try {
       deps.onEvent?.(event);
@@ -258,13 +266,16 @@ export async function runReasoningLoop(
     }
 
     // --- the model answered ---------------------------------------------------------------
-    if (deps.verify && !correctionUsed) {
+    // Every final answer is checked, including the one after the last correction: before, the
+    // corrected answer was accepted unchecked, so a run whose correction also failed ended with
+    // no verdict at all. Corrections are what is bounded, not verification.
+    if (deps.verify) {
       const verdict = await deps.verify(assistantContent, transcript);
       emit({ type: "verification", ok: verdict.ok, reason: verdict.reason });
-      if (!verdict.ok) {
-        // Self-correction: hand the model its own failure and let it fix the answer. One
-        // round only — an unbounded correct-then-recheck cycle is how agents burn budget.
-        correctionUsed = true;
+      if (!verdict.ok && correctionsUsed < maxCorrections) {
+        // Self-correction: hand the model its own failure and let it fix the answer, a bounded
+        // number of times (`maxCorrections`) — unbounded, this is how agents burn budget.
+        correctionsUsed++;
         transcript.push({
           role: "user",
           content:

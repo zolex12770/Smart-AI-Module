@@ -333,19 +333,23 @@ jobs:
       - name: Assert the API image boots in the worker role with no LLM key
         run: |
           set -euo pipefail
-          docker run --rm -d --name api-boot-check \
+          # No --rm: a container that exits must still be there for `docker logs`. With --rm the
+          # first CI run's failure printed "No such container" instead of the reason (2026-09-27).
+          docker run -d --name api-boot-check \
             -e NODE_ENV=production -e ROLE=worker -e DATABASE_DIR=/tmp/pgdata \
             ai-platform-api:ci
           for i in $(seq 1 30); do
             if ! docker ps --filter name=api-boot-check --filter status=running -q | grep -q .; then
               echo "::error::The worker-role container exited instead of running."
               docker logs api-boot-check || true
+              docker rm -f api-boot-check >/dev/null 2>&1 || true
               exit 1
             fi
             sleep 1
           done
           docker logs api-boot-check
-          docker stop api-boot-check
+          docker logs api-boot-check 2>&1 | grep -q "job workers registered"
+          docker rm -f api-boot-check
 
       - uses: hashicorp/setup-terraform@v3
         with:
