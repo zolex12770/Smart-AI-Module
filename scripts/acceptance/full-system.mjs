@@ -160,16 +160,23 @@ await check("CHAT-STREAM", "A real model answers, streamed progressively", async
 
 await check("CHAT-HISTORY", "The conversation is stored and continues", async () => {
   if (!chatConversationId) return { status: FAIL, detail: "the chat response carried no X-Conversation-Id header" };
+  // A fact planted in one turn and asked for in the next, inside the same conversation: only the
+  // conversation's own history can carry it (a colour made up for this run).
+  const colour = `vermilion-${Math.floor(Math.random() * 900 + 100)}`;
+  await user.stream("/api/v1/chat", {
+    conversationId: chatConversationId,
+    messages: [{ role: "user", content: `For this conversation, the password word is ${colour}. Reply with just: noted.` }],
+  });
   const second = await user.stream("/api/v1/chat", {
     conversationId: chatConversationId,
-    messages: [{ role: "user", content: "Repeat the key noun of your previous answer in one word." }],
+    messages: [{ role: "user", content: "What is the password word I gave you earlier in this conversation? Reply with just the word." }],
   });
   const answer = second.events.find((e) => e.type === "done")?.message?.content ?? "";
   const stored = await user.call("GET", `/api/v1/conversations/${chatConversationId}/messages`);
   const messages = stored.body?.messages ?? [];
   return {
-    status: messages.length >= 4 && /test/i.test(answer) ? PASS : FAIL,
-    detail: `${messages.length} messages persisted in conversation ${chatConversationId.slice(0, 8)}…; the follow-up answered "${answer.trim().slice(0, 40)}"`,
+    status: messages.length >= 6 && answer.includes(colour) ? PASS : FAIL,
+    detail: `${messages.length} messages persisted in conversation ${chatConversationId.slice(0, 8)}…; asked for the word planted two turns earlier (${colour}), it answered "${answer.trim().slice(0, 40)}"`,
   };
 });
 

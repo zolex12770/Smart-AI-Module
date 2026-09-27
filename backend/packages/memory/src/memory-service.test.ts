@@ -249,6 +249,16 @@ describe("MemoryService", () => {
       ]);
     });
 
+    it("drops a bare value with no subject — the fact a real run extracted and could not recall", () => {
+      // qwen2.5:7b, told "my project codename is NIGHTHAWK-172918", returned the codename alone.
+      const raw = '{"facts":[{"content":"NIGHTHAWK-172918","scope":"user"},{"content":"The user\'s project codename is NIGHTHAWK-172918.","scope":"user"}]}';
+      expect(parseExtractedFacts(raw)).toEqual([{ content: "The user's project codename is NIGHTHAWK-172918.", scope: "user" }]);
+    });
+
+    it("asks the model for self-contained sentences", () => {
+      expect(MEMORY_EXTRACTION_PROMPT).toMatch(/ONE complete sentence that names what it is about/);
+    });
+
     it("treats malformed or empty output as nothing to remember, never as an error", () => {
       expect(parseExtractedFacts("I could not find anything.")).toEqual([]);
       expect(parseExtractedFacts('{"facts": "not an array"}')).toEqual([]);
@@ -257,8 +267,8 @@ describe("MemoryService", () => {
     });
 
     it("defaults an unrecognised scope to user rather than dropping the fact", () => {
-      expect(parseExtractedFacts('{"facts":[{"content":"Something","scope":"nonsense"}]}')).toEqual([
-        { content: "Something", scope: "user" },
+      expect(parseExtractedFacts('{"facts":[{"content":"Something durable","scope":"nonsense"}]}')).toEqual([
+        { content: "Something durable", scope: "user" },
       ]);
     });
 

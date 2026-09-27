@@ -396,6 +396,10 @@ export const MEMORY_EXTRACTION_PROMPT = [
   "Do NOT extract: anything specific to this one question, transient state, anything the",
   "assistant said, or anything you inferred rather than were told.",
   "",
+  "Write each fact as ONE complete sentence that names what it is about, so it still makes sense",
+  "when read alone months later, e.g. \"The user's project codename is NIGHTHAWK.\" — never a bare",
+  "value such as \"NIGHTHAWK\".",
+  "",
   'Reply with JSON only: {"facts":[{"content":"...","scope":"user|project"}]}.',
   'If nothing is worth remembering, reply exactly {"facts":[]}.',
 ].join("\n");
@@ -409,6 +413,15 @@ export function parseExtractedFacts(raw: string): Array<{ content: string; scope
     if (!Array.isArray(parsed.facts)) return [];
     return parsed.facts
       .filter((f): f is { content: string; scope?: string } => typeof f?.content === "string")
+      /**
+       * A fact has to say what it is about — found by the autonomous-completion pass. Told "my
+       * project codename is NIGHTHAWK-172918", qwen2.5:7b extracted the bare string
+       * "NIGHTHAWK-172918"; a later "what is my project codename?" could not be matched to it, and
+       * the model invented one. A single bare token cannot carry its own subject ("Prefers
+       * TypeScript" can: its subject is the user), so it is dropped rather than stored as a memory
+       * nothing can use.
+       */
+      .filter((f) => f.content.trim().split(/\s+/).length >= 2)
       /**
        * A model-proposed fact is always `user`-scoped — ADR-149.
        *
