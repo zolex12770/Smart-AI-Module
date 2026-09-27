@@ -156,6 +156,107 @@ describe("ModelRouter (real fallback state machine)", () => {
  * `provider: "mock", status: "success"`. These lock in that every skipped provider is
  * handed to the caller, which is what makes a failed real call visible in the JSON logs.
  */
+/**
+ * A mock is a last resort, never a substitute — docs/26_DECISIONS.md ADR-163.
+ *
+ * Found by running the platform, not by reading it. A chat turn whose local model call aborted
+ * came back as "[mock response — no real model produced this] ..." with HTTP 200 and a usage
+ * row, and the only way to discover that the real model had failed was the server log.
+ *
+ * `SelectionCriteria.excludeMocks` had been implemented in the registry since it was written
+ * and passed by nobody. These tests assert the behaviour rather than the flag, so a future
+ * rewrite that drops the flag but keeps the behaviour still passes.
+ */
+class FakeMock implements LLMProvider {
+  readonly isMock = true;
+  readonly model = "mock-1";
+  calls = 0;
+  constructor(readonly name: string) {}
+  capabilities(): ProviderCapabilities {
+    return { streaming: true, toolCalling: true, structuredOutput: false, vision: false, contextWindow: null };
+  }
+  async *streamChat(): AsyncGenerator<ChatStreamEvent, void, unknown> {
+    this.calls++;
+    yield doneEvent(this.name);
+  }
+}
+
+describe("a mock is never what a real provider falls back to", () => {
+  it("fails the call instead of answering from the mock", async () => {
+    const broken = new ScriptedProvider("local", () => {
+      throw new Error("Could not reach the local model runtime: This operation was aborted");
+    });
+    const mock = new FakeMock("mock");
+    const registry = new ModelRegistry();
+    registry.register(broken, { asDefault: true });
+    registry.register(mock);
+
+    const events: ChatStreamEvent[] = [];
+    await expect(async () => {
+      for await (const e of new ModelRouter(registry).streamChat(request)) events.push(e);
+    }).rejects.toThrow();
+
+    // The load-bearing assertion: the caller got an error, not invented text.
+    expect(mock.calls).toBe(0);
+    expect(events.find((e) => e.type === "done")).toBeUndefined();
+  });
+
+  it("still falls back between two REAL providers", async () => {
+    // The control. A change that simply stopped falling back would satisfy the test above.
+    const broken = new ScriptedProvider("first", () => {
+      throw new Error("down");
+    });
+    const healthy = new ScriptedProvider("second", [doneEvent("second")]);
+    const registry = new ModelRegistry();
+    registry.register(broken, { asDefault: true });
+    registry.register(healthy);
+
+    const events: ChatStreamEvent[] = [];
+    for await (const e of new ModelRouter(registry).streamChat(request)) events.push(e);
+    expect(events.find((e) => e.type === "done")?.provider).toBe("second");
+    expect(healthy.calls).toBe(1);
+  });
+
+  it("uses the mock when it is the ONLY provider — the zero-configuration local loop", async () => {
+    // The other control, and the reason the mock exists at all. A machine with no credentials
+    // and no local runtime must still be able to run the product end to end.
+    const mock = new FakeMock("mock");
+    const registry = new ModelRegistry();
+    registry.register(mock, { asDefault: true });
+
+    const events: ChatStreamEvent[] = [];
+    for await (const e of new ModelRouter(registry).streamChat(request)) events.push(e);
+    expect(events.find((e) => e.type === "done")?.provider).toBe("mock");
+    expect(mock.calls).toBe(1);
+  });
+
+  it("does not consult the mock even when the real provider is merely unsuitable", async () => {
+    // A tools request against a real provider that cannot call tools: the mock CAN, so before
+    // this change the selection would have handed the whole turn to it.
+    class NoTools extends ScriptedProvider {
+      capabilities(): ProviderCapabilities {
+        return { streaming: true, toolCalling: false, structuredOutput: false, vision: false, contextWindow: null };
+      }
+    }
+    const real = new NoTools("local", [doneEvent("local")]);
+    const mock = new FakeMock("mock");
+    const registry = new ModelRegistry();
+    registry.register(real, { asDefault: true });
+    registry.register(mock);
+
+    const toolRequest: ChatRequest = {
+      messages: [{ role: "user", content: "hello" }],
+      tools: [{ name: "t", description: "d", inputSchema: { type: "object", properties: {} } }],
+    };
+    await expect(async () => {
+      for await (const _ of new ModelRouter(registry).streamChat(toolRequest)) {
+        /* drain */
+      }
+    }).rejects.toThrow(/No configured model provider/);
+    expect(mock.calls).toBe(0);
+  });
+});
+
 describe("ModelRouter fallback reporting", () => {
   it("hands each skipped provider to a per-call onFallback hook, naming the failure stage", async () => {
     const throwing = new ScriptedProvider("throwing", () => {

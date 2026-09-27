@@ -175,10 +175,51 @@ export class ModelRouter {
       requiresTools: (callOptions.criteria?.requiresTools ?? this.options.criteria?.requiresTools) || Boolean(request.tools?.length),
     };
 
-    const candidates = this.registry.select(criteria);
-    if (candidates.length === 0) {
+    const selected = this.registry.select(criteria);
+    if (selected.length === 0) {
       throw new ProviderError(
         `No configured model provider satisfies this request (tools required: ${Boolean(request.tools?.length)}).`
+      );
+    }
+
+    /**
+     * A mock may be the ONLY provider. It may never be the one a real provider falls back to —
+     * docs/26_DECISIONS.md ADR-163.
+     *
+     * `SelectionCriteria.excludeMocks` has existed since the registry was written, the filter
+     * implementing it is right there in `select`, and a repo-wide search found no caller passing
+     * it. The consequence was found by running the platform: a chat turn whose local model call
+     * aborted produced
+     *
+     *   "[mock response — no real model produced this] ..."
+     *
+     * delivered through the ordinary success path, HTTP 200, with a usage row written for it.
+     * The reply is labelled — `done.provider` says `mock` and the text says so too — so this is
+     * not a lie, but it is a fabricated answer to a real question arriving where a real answer
+     * goes, and the only way to learn that the real model had failed was to read the server log.
+     *
+     * The mock exists so a machine with no credentials and no local runtime can still run the
+     * product end to end. That purpose is served entirely by it being SELECTED when it is all
+     * there is. Standing in for a provider that broke is a different job, and not one a thing
+     * that invents text should be given: a real failure must reach the caller as a failure.
+     * `chat.ts` already renders that as an in-band `error` event (ADR-151), so the client is
+     * told rather than misled.
+     *
+     * Production is unaffected either way — `index.ts` registers no mock under
+     * NODE_ENV=production and `no-fake-in-production.test.ts` holds it to that. This is about
+     * the local loop, which is where people form their impression of whether the thing works.
+     */
+    const hasRealProvider = this.registry.list().some((p) => !p.isMock);
+    const candidates = hasRealProvider ? selected.filter((p) => !p.isMock) : selected;
+    if (candidates.length === 0) {
+      // Every eligible candidate was a mock, and this deployment has a real provider — so the
+      // honest answer is that nothing here can serve the request. Reached when the real
+      // provider is unsuitable rather than broken (a tools request against a model that cannot
+      // call them), which used to hand the whole turn to the mock: an agent run answered by
+      // invented tool calls looks exactly like one answered by real ones.
+      throw new ProviderError(
+        `No configured model provider satisfies this request (tools required: ${Boolean(request.tools?.length)}). ` +
+          `A mock provider is registered but is never substituted for a real one.`
       );
     }
 
