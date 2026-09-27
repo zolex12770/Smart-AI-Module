@@ -138,7 +138,7 @@ describe("a patch that changes nothing is not reported as applied", () => {
     expect(readFileSync(join(workspaceOf(root), "sum.cjs"), "utf8")).toBe(SOURCE);
   });
 
-  it("refuses the recorded no-op diff verbatim, as malformed: its header does not count its lines", async () => {
+  it("refuses the recorded no-op diff verbatim: its header is recounted, and it changes nothing", async () => {
     writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);
     const diff = [
       "--- a/sum.cjs",
@@ -153,8 +153,34 @@ describe("a patch that changes nothing is not reported as applied", () => {
     ].join("\n");
     const result = await patchTool().handler({ diff }, ctx());
     expect(result.ok).toBe(false);
-    expect(String(result.error)).toMatch(/Malformed hunk.*counts 3 old and 3 new.*contains 4 old.*4 new/s);
+    expect(String(result.error)).toMatch(/changed nothing/);
     expect(readFileSync(join(workspaceOf(root), "sum.cjs"), "utf8")).toBe(SOURCE);
+  });
+
+  it("applies a right body under a miscounted header, as git apply --recount does, and says so", async () => {
+    // The shape a real run sent repeatedly: `-2,5 +2,5` over a three-line body that is correct.
+    writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);
+    const diff = "--- a/sum.cjs\n+++ b/sum.cjs\n@@ -2,5 +2,5 @@\n function sum(a, b) {\n-  return a - b;\n+  return a + b;\n";
+    const result = await patchTool().handler({ diff }, ctx());
+    expect(result.ok).toBe(true);
+    expect(readFileSync(join(workspaceOf(root), "sum.cjs"), "utf8")).toBe(SOURCE.replace("a - b", "a + b"));
+    expect(JSON.stringify(result.output)).toMatch(/"hunksRecounted":1/);
+  });
+
+  it("still refuses a miscounted body whose context does not match the file", async () => {
+    writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);
+    const diff = "--- a/sum.cjs\n+++ b/sum.cjs\n@@ -2,5 +2,5 @@\n function sum(x, y) {\n-  return x - y;\n+  return x + y;\n";
+    const result = await patchTool().handler({ diff }, ctx());
+    expect(result.ok).toBe(false);
+    expect(readFileSync(join(workspaceOf(root), "sum.cjs"), "utf8")).toBe(SOURCE);
+  });
+
+  it("accepts a doubled marker when the header counts it correctly — a Markdown list item is a real '+-' line", async () => {
+    writeFileSync(join(workspaceOf(root), "notes.md"), "# Notes\n- one\n");
+    const diff = "--- a/notes.md\n+++ b/notes.md\n@@ -1,2 +1,3 @@\n # Notes\n - one\n+- two\n";
+    const result = await patchTool().handler({ diff }, ctx());
+    expect(result.ok).toBe(true);
+    expect(readFileSync(join(workspaceOf(root), "notes.md"), "utf8")).toBe("# Notes\n- one\n- two\n");
   });
 
   /**
@@ -175,7 +201,7 @@ describe("a patch that changes nothing is not reported as applied", () => {
     const diff = "--- a/sum.js\n+++ b/sum.js\n@@ -1,2 +1,3 @@\n-function sum(a, b) {\n+function sum(a, b) {\n++    return a + b;\n";
     const result = await patchTool().handler({ diff }, ctx());
     expect(result.ok).toBe(false);
-    expect(String(result.error)).toMatch(/Malformed hunk/);
+    expect(String(result.error)).toMatch(/Malformed hunk.*two diff markers/s);
     expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
   });
 

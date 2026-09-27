@@ -26,6 +26,8 @@ export interface Hunk {
   newLines: number;
   /** Each line prefixed with " " (context), "-" (removed) or "+" (added). */
   lines: string[];
+  /** True when the header's counts disagreed with the body and were recomputed from it. */
+  recounted?: boolean;
 }
 
 export interface FilePatch {
@@ -108,28 +110,41 @@ export function parseUnifiedDiff(diff: string): FilePatch[] {
 }
 
 /**
- * A hunk must contain exactly the lines its header counts — the check GNU `patch` and
- * `git apply` both make, and this parser did not.
+ * A hunk whose header miscounts its body is RECOUNTED from the body — `git apply --recount`'s
+ * semantics — with one guard. History, because both halves were found in real runs:
  *
- * Found in a real coding run: qwen2.5:7b sent `@@ -1,2 +1,3 @@` over one `-` line and two `+`
- * lines. The header promised two old lines and three new ones; the body had one and two. Applied
- * anyway, it replaced a line it should have kept, and the file no longer parsed. A header that
- * disagrees with its body means the diff is not the one its author meant, and guessing which of
- * the two is right is how a patch tool corrupts a file.
+ * 1. This parser used to apply a hunk without looking at its counts at all. qwen2.5:7b sent
+ *    `@@ -1,2 +1,3 @@` over `-function sum(a, b) {` / `+function sum(a, b) {` /
+ *    `++    return a + b;` — a doubled `+` marker — and the literal `+    return a + b;` line landed
+ *    in the file, which no longer parsed.
+ * 2. Counts were then enforced strictly, as GNU patch does. The next runs sent diffs whose bodies
+ *    were right and whose headers said `-2,5 +2,5` over three lines; every one was refused, and a
+ *    run that had found the right fix ended at its turn limit. Counting diff lines is a known
+ *    weakness of language models, and the header adds no safety the body does not already
+ *    provide: every context and removed line must still match the file EXACTLY where it applies.
+ *
+ * So the body is authoritative, and the one pattern that made case 1 dangerous is refused when —
+ * and only when — the header is already wrong: a line carrying a doubled marker (`++`, `+-`,
+ * `--`, `-+`). A correctly counted hunk may contain such lines (a Markdown list item added,
+ * `--flag` removed); a miscounted one containing them is the signature of a mangled diff.
  */
 function checkHunkCounts(patch: FilePatch, hunk: Hunk): void {
   const oldCount = hunk.lines.filter((l) => l.startsWith(" ") || l.startsWith("-")).length;
   const newCount = hunk.lines.filter((l) => l.startsWith(" ") || l.startsWith("+")).length;
-  if (oldCount !== hunk.oldLines || newCount !== hunk.newLines) {
+  if (oldCount === hunk.oldLines && newCount === hunk.newLines) return;
+  const doubled = hunk.lines.find((l) => /^[+-][+-]/.test(l));
+  if (doubled !== undefined) {
     throw new PatchError(
       `Malformed hunk in the diff for "${patch.newPath}": its header @@ -${hunk.oldStart},${hunk.oldLines} ` +
-        `+${hunk.newStart},${hunk.newLines} @@ counts ${hunk.oldLines} old and ${hunk.newLines} new line(s), but the ` +
-        `hunk contains ${oldCount} old (" " and "-") and ${newCount} new (" " and "+") line(s). Every line of a hunk ` +
-        `starts with exactly one of " ", "-" or "+", followed by the file's text. Re-read the file and send a diff ` +
-        `whose header matches its lines — or, for a small change, use code.replace_text with the exact old and new text, ` +
-        `which needs no line counts.`
+        `+${hunk.newStart},${hunk.newLines} @@ does not count its ${oldCount} old and ${newCount} new line(s), and the ` +
+        `line ${JSON.stringify(doubled)} carries two diff markers. Every line of a hunk starts with exactly ONE of ` +
+        `" ", "-" or "+", followed by the file's text. Re-read the file and send a corrected diff — or, for a small ` +
+        `change, use code.replace_text with the exact old and new text, which needs no markers or counts.`
     );
   }
+  hunk.oldLines = oldCount;
+  hunk.newLines = newCount;
+  hunk.recounted = true;
 }
 
 function stripPrefix(path: string): string {
@@ -208,6 +223,8 @@ export interface AppliedFile {
   action: "modified" | "created" | "deleted";
   hunksApplied: number;
   offsets: number[];
+  /** Hunks whose header counts were wrong and were recomputed from their bodies. */
+  hunksRecounted?: number;
 }
 
 /**
@@ -319,6 +336,8 @@ export function applyUnifiedDiff(
         action: patch.isNewFile ? "created" : "modified",
         hunksApplied: applied.hunksApplied,
         offsets: applied.offsets,
+        // Said back to the model, so a miscounted header is visible without being fatal.
+        ...(patch.hunks.some((h) => h.recounted) ? { hunksRecounted: patch.hunks.filter((h) => h.recounted).length } : {}),
       },
     });
   }
