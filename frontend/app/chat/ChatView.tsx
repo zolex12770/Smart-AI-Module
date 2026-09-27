@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { streamChat, type ChatMessage } from "../lib/chat-stream";
-import { listConversations, type Conversation, type Message } from "../lib/api";
+import { listConversations, listModels, type Conversation, type Message, type ModelInfo } from "../lib/api";
 import { historyForRequest } from "../lib/chat-history";
 import { useSession } from "../lib/session-context";
 
@@ -37,6 +37,12 @@ export default function ChatView({
   const [messages, setMessages] = useState<DisplayMessage[]>(toDisplay(initialMessages));
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  /**
+   * Which model answers, as the API reports it. The header used to say "mock by default", which
+   * stopped being true when mocks became opt-in and was false on every real deployment.
+   * `undefined` while loading or if it could not be read; `null` when no model is configured.
+   */
+  const [chatModel, setChatModel] = useState<ModelInfo | null | undefined>(undefined);
   const conversationIdRef = useRef<string | undefined>(conversationId);
   const controllerRef = useRef<AbortController | null>(null);
 
@@ -51,6 +57,13 @@ export default function ChatView({
       })
       .catch((e: unknown) => setSidebarError(e instanceof Error ? e.message : String(e)));
   }, [conversationId, projectId]);
+
+  useEffect(() => {
+    listModels()
+      .then((r) => setChatModel(r.models.find((m) => m.isDefault) ?? null))
+      // Not knowing which model answers is not a reason to block chat; the header just stays quiet.
+      .catch(() => setChatModel(undefined));
+  }, [projectId]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -182,7 +195,23 @@ export default function ChatView({
       <div className="chat-page">
         <header className="chat-header">
           <h1>Chat</h1>
-          <p>Running against whichever provider is configured (mock by default) — see README for real provider setup.</p>
+          {chatModel ? (
+            <p>
+              Answers come from <strong>{chatModel.provider}</strong> ({chatModel.model})
+              {chatModel.isMock ? (
+                <>
+                  {" "}
+                  — <strong>a mock</strong>: its replies are canned text for testing, not a model&apos;s
+                </>
+              ) : null}
+              .
+            </p>
+          ) : chatModel === null ? (
+            <p className="error-text" role="status">
+              No language model is configured on this deployment, so chat will report that instead of answering. An
+              operator can start Ollama or set LLM_BASE_URL and LLM_MODEL — see docs/PROVIDERS.md.
+            </p>
+          ) : null}
         </header>
 
         <div className="messages">

@@ -123,6 +123,16 @@ export interface ProvidersResponse {
 
 export const getProviders = () => request<ProvidersResponse>("/api/v1/providers");
 
+/** The chat models the API can route to; `default` is null when none is configured. */
+export interface ModelInfo {
+  provider: string;
+  model: string;
+  isMock: boolean;
+  isDefault: boolean;
+}
+
+export const listModels = () => request<{ models: ModelInfo[]; default: string | null }>("/api/v1/models");
+
 /**
  * One tool as the platform sees it — docs/26_DECISIONS.md ADR-136.
  *

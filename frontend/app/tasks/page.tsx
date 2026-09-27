@@ -101,7 +101,7 @@ export default function TasksPage() {
           <h1>Agent tasks</h1>
           <p className="page-subtitle">
             The state-machine-driven task engine (docs/11_AGENT_LOOP.md). Every task type below runs against real
-            tool calls and a real (mock-by-default) model — see docs/26_DECISIONS.md ADR-018.
+            tool calls and the configured model — see docs/26_DECISIONS.md ADR-018 and docs/PROVIDERS.md.
           </p>
         </div>
       </div>

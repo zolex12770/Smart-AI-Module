@@ -22,9 +22,12 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/chat",
 }));
 
+const LOCAL_MODEL = { provider: "local", model: "qwen2.5:7b", isMock: false, isDefault: true };
+const listModels = vi.fn(async () => ({ models: [LOCAL_MODEL], default: "local" as string | null }));
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
   listConversations: async () => ({ conversations: [] }),
+  listModels: () => listModels(),
 }));
 
 const streamChat = vi.fn();
@@ -205,5 +208,29 @@ describe("ChatView failure and stop", () => {
     expect(screen.getByText(/Autonomous agent task/i)).toBeInTheDocument();
     // The text that had already streamed is kept.
     expect(screen.getByText(/Let me look that up/)).toBeInTheDocument();
+  });
+});
+
+describe("ChatView says which model answers", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("names the configured provider and model, not a hard-coded 'mock by default'", async () => {
+    render(<ChatView />);
+    expect(await screen.findByText(/Answers come from/)).toHaveTextContent("Answers come from local (qwen2.5:7b).");
+    expect(screen.queryByText(/mock by default/i)).toBeNull();
+  });
+
+  it("labels a mock as a mock", async () => {
+    listModels.mockResolvedValueOnce({ models: [{ provider: "mock", model: "mock-1", isMock: true, isDefault: true }], default: "mock" });
+    render(<ChatView />);
+    expect(await screen.findByText(/Answers come from/)).toHaveTextContent(/a mock: its replies are canned text/);
+  });
+
+  it("says plainly when no model is configured", async () => {
+    listModels.mockResolvedValueOnce({ models: [], default: null });
+    render(<ChatView />);
+    expect(await screen.findByRole("status")).toHaveTextContent(/No language model is configured/);
   });
 });

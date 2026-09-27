@@ -27,6 +27,9 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
     // decide which controls to render at all.
     await requireProject(request, ctx.auth, "project:read");
     const descriptors = ctx.registry.listDescriptors();
+    // `getDefault()` throws on an empty registry, which is a normal state for a development
+    // process with no model configured — this answered 500 there instead of "none".
+    const defaultName = descriptors.length > 0 ? ctx.registry.getDefault().name : null;
     return {
       models: descriptors.map((d) => ({
         provider: d.provider.name,
@@ -36,9 +39,9 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
         qualityTier: d.qualityTier,
         costHint: d.costHint,
         latencyHint: d.latencyHint,
-        isDefault: d.provider.name === ctx.registry.getDefault().name,
+        isDefault: d.provider.name === defaultName,
       })),
-      default: ctx.registry.getDefault().name,
+      default: defaultName,
     };
   });
 
