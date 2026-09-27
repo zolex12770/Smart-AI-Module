@@ -21,6 +21,8 @@
  *   ACCEPT_API_URL          the API (default http://127.0.0.1:8787)
  *   ACCEPT_ADMIN_EMAIL      a system administrator, for the metrics check (optional; the
  *   ACCEPT_ADMIN_PASSWORD   backend's BOOTSTRAP_ADMIN_* values)
+ *   ACCEPT_EXTRA_METRICS_URLS  other processes' /metrics endpoints (METRICS_PORT), comma-separated,
+ *                              e.g. the worker's in the compose stack: http://127.0.0.1:9464/metrics
  *   ACCEPT_ONLY             comma-separated check ids to run, for debugging one area
  *   ACCEPT_AGENT_TIMEOUT_MS how long to wait for the coding agent (default 40 minutes)
  *   ACCEPT_VIDEO_TIMEOUT_MS how long to wait for the video (default 40 minutes)
@@ -114,13 +116,14 @@ await check("PROVIDERS", "The platform states what it runs", async () => {
   const models = await user.call("GET", "/api/v1/models");
   const media = await user.call("GET", "/api/v1/providers");
   providers = media.body?.providers ?? {};
-  const defaultModel = (models.body.models ?? models.body.providers ?? []).find?.((m) => m.isDefault) ?? null;
-  const names = JSON.stringify(models.body).match(/"(?:provider|name)":"[^"]+"/g)?.slice(0, 4).join(" ") ?? "";
-  const mockLlm = /"isMock":true/.test(JSON.stringify(models.body)) && !/"isMock":false/.test(JSON.stringify(models.body));
+  const chatModels = models.body?.models ?? [];
+  const defaultModel = chatModels.find((m) => m.isDefault) ?? null;
+  const names = chatModels.map((m) => `${m.provider}/${m.model}${m.isMock ? " (MOCK)" : ""}`).join(", ");
   return {
-    status: models.status === 200 && media.status === 200 && !mockLlm ? PASS : FAIL,
+    // A real default chat model is the one thing every later check depends on.
+    status: models.status === 200 && media.status === 200 && defaultModel && !defaultModel.isMock ? PASS : FAIL,
     detail:
-      `models: ${names || "(none)"}${defaultModel ? ` default ${defaultModel.name}` : ""}; ` +
+      `chat models: ${names || "(none)"}; default ${defaultModel ? `${defaultModel.provider}/${defaultModel.model}` : "none"}; ` +
       `image ${providers.image?.available ? providers.image.name + (providers.image.isMock ? " (MOCK)" : "") : "unavailable"}, ` +
       `video ${providers.video?.available ? providers.video.name + (providers.video.isMock ? " (MOCK)" : "") : "unavailable"}, ` +
       `speech ${providers.speech?.available ? providers.speech.name : "unavailable"}`,
@@ -592,7 +595,20 @@ await check("METRICS", "Prometheus metrics carry real values", async () => {
   const admin = new Client("admin");
   await admin.login(email, process.env.ACCEPT_ADMIN_PASSWORD);
   const res = await admin.raw("GET", "/api/v1/admin/metrics", undefined, { headers: { "x-project-id": "" } });
-  const text = await res.text();
+  /**
+   * Counters live in each process. With the API and the worker split (compose, Cloud Run) the
+   * worker's — generations, most jobs — are only on its own METRICS_PORT listener, so those
+   * endpoints are added here (ACCEPT_EXTRA_METRICS_URLS, comma-separated; optional bearer token
+   * ACCEPT_EXTRA_METRICS_TOKEN) and the counters summed across processes.
+   */
+  const extraUrls = (process.env.ACCEPT_EXTRA_METRICS_URLS ?? "").split(",").map((u) => u.trim()).filter(Boolean);
+  const extra = [];
+  for (const url of extraUrls) {
+    const token = process.env.ACCEPT_EXTRA_METRICS_TOKEN;
+    const r = await fetch(url, token ? { headers: { authorization: `Bearer ${token}` } } : {}).catch((e) => ({ status: 0, text: async () => String(e) }));
+    extra.push({ url, status: r.status, text: await r.text() });
+  }
+  const text = [await res.text(), ...extra.filter((e) => e.status === 200).map((e) => e.text)].join("\n");
   const sample = (name) =>
     text
       .split("\n")
@@ -609,9 +625,9 @@ await check("METRICS", "Prometheus metrics carry real values", async () => {
   };
   const zero = Object.entries(counters).filter(([, v]) => !(v > 0)).map(([k]) => k);
   return {
-    status: res.status === 200 && zero.length === 0 ? PASS : FAIL,
+    status: res.status === 200 && extra.every((e) => e.status === 200) && zero.length === 0 ? PASS : FAIL,
     detail:
-      `${res.status}; ` +
+      `API ${res.status}${extra.map((e) => `, ${e.url} ${e.status}`).join("")}; summed: ` +
       Object.entries(counters).map(([k, v]) => `${k} ${v}`).join(", ") +
       (zero.length ? `; still zero: ${zero.join(", ")}` : ""),
   };

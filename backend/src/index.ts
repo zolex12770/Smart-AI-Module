@@ -93,6 +93,7 @@ import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import { loadConfig, SECRET_CONFIG_KEYS, type AppConfig, resolveListenHost } from "./config.js";
 import { detectLocalRuntime, detectLocalSpeech, probeFfmpeg } from "./local-runtime.js";
+import { startMetricsServer } from "./metrics-server.js";
 import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 import type { AppContext } from "./context.js";
 import { createToolAuditSink } from "./audit-sink.js";
@@ -1202,6 +1203,18 @@ async function main() {
     reaper.unref();
   }
 
+  const metricsServer = config.METRICS_PORT
+    ? await startMetricsServer({ port: config.METRICS_PORT, host: resolveListenHost(config), token: config.METRICS_TOKEN })
+    : null;
+  if (metricsServer) {
+    logger.info({ port: config.METRICS_PORT, authenticated: Boolean(config.METRICS_TOKEN) }, "metrics listener started");
+    if (!config.METRICS_TOKEN && config.NODE_ENV === "production") {
+      logger.warn("METRICS_PORT is set without METRICS_TOKEN — keep that port on an internal network");
+    }
+  }
+  const closeMetrics = (): Promise<void> =>
+    new Promise((resolve) => (metricsServer ? metricsServer.close(() => resolve()) : resolve()));
+
   // Worker role (ADR-039): no HTTP listener, no agent engine, no MCP — a Cloud Run worker
   // pool has no ingress, so there is nothing to listen for. The process stays alive on
   // pg-boss's own polling loop until a shutdown signal arrives.
@@ -1212,6 +1225,7 @@ async function main() {
     // hid that by silently skipping the jobs and database steps; ADR-098's per-step isolation
     // made it visible as a failed step and exit code 1 on every clean worker stop.
     installGracefulShutdown(logger, [
+      { name: "metrics", close: closeMetrics },
       { name: "jobs", close: () => jobQueue.stop() },
       { name: "database", close: closeDb },
     ]);
@@ -1618,6 +1632,7 @@ async function main() {
     { name: "agent-scheduler", close: async () => engine.stopScheduler() },
     { name: "mcp", close: () => mcpManager.stopAll() },
     { name: "http", close: () => app.close() },
+    { name: "metrics", close: closeMetrics },
     { name: "jobs", close: () => jobQueue.stop() },
     { name: "database", close: closeDb },
   ]);

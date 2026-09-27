@@ -96,6 +96,13 @@ const envFields = z.object({
    */
   HOST: optionalString,
   PORT: z.coerce.number().int().positive().default(8787),
+  /**
+   * A metrics-only listener (`GET /metrics`, Prometheus text) on this port, for any role — see
+   * metrics-server.ts. Needed wherever the worker runs as its own process: its counters are in its
+   * own memory and it has no other listener. METRICS_TOKEN, when set, requires a bearer token.
+   */
+  METRICS_PORT: optionalPositiveInt,
+  METRICS_TOKEN: optionalString,
   // docs/26_DECISIONS.md ADR-039 — which responsibilities this process takes on (see role.ts).
   // Defaults to "all" so local dev (where PGlite permits only one process per data dir,
   // ADR-025) keeps working unchanged; Cloud Run sets "api" on the service and "worker" on
