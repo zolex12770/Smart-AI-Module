@@ -38,7 +38,9 @@ export class Client {
 
   /** The raw Response, cookies absorbed. Use this when you need headers or bytes. */
   async raw(method, path, body, extra = {}) {
-    const headers = { "Content-Type": "application/json", ...(extra.headers ?? {}) };
+    // Content-Type only with a body, as a browser does: Fastify rejects an empty body declared
+    // as JSON with 400, which made a bodiless POST (logout) fail here and nowhere in the product.
+    const headers = { ...(body !== undefined ? { "Content-Type": "application/json" } : {}), ...(extra.headers ?? {}) };
     if (this.cookie) headers.cookie = this.cookie;
     if (this.csrf) headers["x-csrf-token"] = this.csrf;
     if (this.projectId && !("x-project-id" in headers)) headers["x-project-id"] = this.projectId;
@@ -116,6 +118,16 @@ export class Client {
       }
     }
     return { status: res.status, events, raw, headers: res.headers, totalMs: Math.round(performance.now() - started) };
+  }
+
+  /** Signs in with a password; keeps the new session and CSRF token. */
+  async login(email = this.email, password = "a-sufficiently-long-password") {
+    this.session = undefined;
+    this.cookie = "";
+    this.csrf = "";
+    const res = await this.call("POST", "/api/v1/auth/login", { email, password });
+    if (res.status !== 200) throw new Error(`login ${res.status}: ${res.text.slice(0, 200)}`);
+    return res;
   }
 
   /** Signs up a brand-new tenant and selects its default project. */

@@ -39,3 +39,4 @@ frontend/playwright-report/
 # Scratch file written by scripts/verify-migrations.sh; removed on exit
 .verify-migrations-apply.mjs
 .migration-check/
+acceptance-results/
