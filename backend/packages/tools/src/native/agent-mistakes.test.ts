@@ -215,6 +215,29 @@ describe("a patch that changes nothing is not reported as applied", () => {
     expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
   });
 
+  it("names the files that DO exist when the model edits one that does not, in every edit tool", async () => {
+    // Verbatim from a real run: the source is sum.js, the model worked on "sum.cjs" for seven turns.
+    writeFileSync(join(workspaceOf(root), "sum.js"), SOURCE);
+    writeFileSync(join(workspaceOf(root), "sum.test.cjs"), "require('./sum.js');\n");
+    const tool = (id: string) => createCodingTools(root).find((t) => t.definition.id === id)!;
+
+    const read = await tool("code.read_lines").handler({ path: "sum.cjs", startLine: 1, endLine: 5 }, ctx());
+    const replace = await tool("code.replace_text").handler({ path: "sum.cjs", oldText: "a - b", newText: "a + b" }, ctx());
+    const patch = await patchTool().handler(
+      { diff: "--- a/sum.cjs\n+++ b/sum.cjs\n@@ -2 +2 @@\n-  return a - b;\n+  return a + b;\n" },
+      ctx()
+    );
+
+    for (const result of [read, replace, patch]) {
+      expect(result.ok).toBe(false);
+      expect(String(result.error)).toMatch(/"sum\.cjs" does not exist\. Files in "\.": sum\.js, sum\.test\.cjs/);
+      // Names relative to the workspace, never the deployment's absolute layout.
+      expect(String(result.error)).not.toContain(root);
+    }
+    // And the file that does exist is untouched by any of it.
+    expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
+  });
+
   it("applies a diff that really changes the line", async () => {
     // The guard must not refuse the fix the agent was actually supposed to make.
     writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);

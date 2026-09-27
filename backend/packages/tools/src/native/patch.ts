@@ -248,6 +248,8 @@ export function applyUnifiedDiff(
     existsSync: (p: string) => boolean;
     rmSync?: (p: string) => void;
     mkdirSync?: (p: string, options: { recursive: true }) => void;
+    /** Says what IS there when a diff names a file that is not (see missing-file.ts). */
+    describeMissing?: (absolute: string, relativePath: string) => string;
   } = {
     readFileSync,
     writeFileSync,
@@ -309,7 +311,8 @@ export function applyUnifiedDiff(
       try {
         existing = fs.readFileSync(absolute, "utf8") as string;
       } catch {
-        throw new PatchError(`Cannot patch "${relative}": the file does not exist. Use a /dev/null diff to create it.`);
+        const missing = fs.describeMissing?.(absolute, relative) ?? `"${relative}" does not exist.`;
+        throw new PatchError(`Cannot patch "${relative}": ${missing} Use a /dev/null diff only to create a NEW file.`);
       }
     }
     const applied = applyPatchToContent(existing, patch);

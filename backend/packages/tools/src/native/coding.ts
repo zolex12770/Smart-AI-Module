@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { PERMISSION_LEVEL_DEFAULTS, ValidationError, type ToolDefinition } from "@ai-platform/shared";
 import { applyUnifiedDiff, PatchError } from "./patch.js";
+import { describeMissingFile } from "./missing-file.js";
 import { assertWritable } from "./read-only.js";
 import { resolveSandboxedPath } from "./sandbox-path.js";
 import { isAbsolute } from "node:path";
@@ -110,6 +111,8 @@ export function createCodingTools(root: string): NativeToolEntry[] {
             writeFileSync,
             existsSync,
             rmSync: (p: string) => rmSync(p, { force: true }),
+            describeMissing: (absolute: string, relativePath: string) =>
+              describeMissingFile(projectWorkspace(root, context), absolute, relativePath),
           });
           return {
             ok: true,
@@ -148,6 +151,9 @@ export function createCodingTools(root: string): NativeToolEntry[] {
       handler: async (args, context) => {
         try {
           const absolute = resolveIn(context, String(args.path));
+          if (!existsSync(absolute)) {
+            return { ok: false, error: describeMissingFile(projectWorkspace(root, context), absolute, String(args.path)) };
+          }
           const lines = readFileSync(absolute, "utf8").split(/\r\n|\n|\r/);
           const start = Math.max(1, Number(args.startLine ?? 1));
           const end = Math.min(lines.length, Number(args.endLine ?? Math.min(lines.length, start + 399)));
@@ -211,7 +217,12 @@ export function createCodingTools(root: string): NativeToolEntry[] {
         try {
           const absolute = resolveIn(context, path);
           if (!existsSync(absolute)) {
-            return { ok: false, error: `"${path}" does not exist. To create a file, use code.apply_patch with a --- /dev/null diff.` };
+            return {
+              ok: false,
+              error:
+                `${describeMissingFile(projectWorkspace(root, context), absolute, path)} ` +
+                "To create a NEW file instead, use code.apply_patch with a --- /dev/null diff.",
+            };
           }
           assertWritable(root, context, absolute);
           const content = readFileSync(absolute, "utf8");
