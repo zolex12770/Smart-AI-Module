@@ -205,6 +205,16 @@ describe("a patch that changes nothing is not reported as applied", () => {
     expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
   });
 
+  it("refuses a diff with no file headers, and points at code.replace_text", async () => {
+    // Verbatim from a later real run: bare -/+ lines, no `---`/`+++`, no `@@`.
+    writeFileSync(join(workspaceOf(root), "sum.js"), SOURCE);
+    const diff = "-function sum(a, b) {\n+function sum(a, b) {\n+  return a + b;\n+";
+    const result = await patchTool().handler({ diff }, ctx());
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toMatch(/no file headers.*code\.replace_text/s);
+    expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
+  });
+
   it("applies a diff that really changes the line", async () => {
     // The guard must not refuse the fix the agent was actually supposed to make.
     writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);

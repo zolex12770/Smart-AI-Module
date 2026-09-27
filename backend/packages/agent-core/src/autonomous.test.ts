@@ -771,6 +771,8 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     // The second turn was shown the failure the test actually produced.
     const correction = provider.requestsSeen[1].messages.find((m) => m.role === "user" && /test still fails/.test(m.content));
     expect(correction?.content).toMatch(/test still fails.*exited 1.*-1 !== 5/s);
+    // "I fixed it." came with no edit at all, and the run's own log proves that — so it is said.
+    expect(correction?.content).toMatch(/No file-editing tool has been used in this run.*code\.replace_text/s);
     expect(provider.turnsSeen.length).toBe(2);
     // And no model was asked for an opinion instead: every request offered tools.
     expect(provider.toolsOfferedSeen.every((n) => n > 0)).toBe(true);

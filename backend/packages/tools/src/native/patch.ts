@@ -99,7 +99,14 @@ export function parseUnifiedDiff(diff: string): FilePatch[] {
   }
   closeHunk();
 
-  if (patches.length === 0) throw new PatchError("The diff contained no file headers (expected `--- ` / `+++ `).");
+  if (patches.length === 0) {
+    // A real qwen2.5:7b run sent bare `-`/`+` lines here for a one-line fix, then gave up on
+    // editing altogether; the refusal now names the tool that fits that change.
+    throw new PatchError(
+      "The diff contained no file headers (expected `--- a/<path>` and `+++ b/<path>` before each `@@` hunk). " +
+        "For a small change, code.replace_text is simpler: give the file's exact current text and its replacement."
+    );
+  }
   for (const patch of patches) for (const h of patch.hunks) checkHunkCounts(patch, h);
   for (const patch of patches) {
     if (patch.hunks.length === 0 && !patch.isNewFile && !patch.isDeletedFile) {

@@ -25,6 +25,7 @@ import {
   type ToolCallResult,
 } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
+import { noEditYetNotice } from "./edit-progress.js";
 import { planTask } from "./planner.js";
 import { runReasoningLoop } from "./reasoning-loop.js";
 import { resolveNodeInput } from "./template.js";
@@ -1076,7 +1077,8 @@ export class AgentEngine {
                     ok: false,
                     reason:
                       `${tampered}the test still fails — \`${spec.command} ${(spec.args ?? []).join(" ")}\` exited ${run.exitCode}. ` +
-                      `Its output:\n${detail}\nRead the failure, fix the source, and run the test again before answering`,
+                      `Its output:\n${detail}\n${noEditYetNotice(activity)}` +
+                      `Read the failure, fix the source, and run the test again before answering`,
                   };
                 }
               }
