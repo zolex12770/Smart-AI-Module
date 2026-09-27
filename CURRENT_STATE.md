@@ -9,7 +9,7 @@
 > See [FINAL_IMPLEMENTATION_REPORT.md](FINAL_IMPLEMENTATION_REPORT.md) for what changed and what
 > did not, [TEST_REPORT.md](TEST_REPORT.md) for the current suite (**429 cases across 50 files,
 > 416 passing, 13 environment-gated skips, 0 failures**, plus 7 browser end-to-end tests),
-> [ARCHITECTURE.md](ARCHITECTURE.md) and [SECURITY.md](SECURITY.md).
+> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/SECURITY.md](docs/SECURITY.md).
 >
 > **Statuses that changed since the audit:** Authentication MISSING -> IMPLEMENTED; Deployment
 > BROKEN -> boot verified 7/7; Security PARTIAL -> hardened (isolation, CSRF, headers, audit,

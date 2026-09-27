@@ -1,0 +1,35 @@
+# Optional overlay: real local image generation — and with it the image-motion video provider —
+# inside the compose stack, from a stable-diffusion.cpp binary and model on the host.
+#
+#   SD_CLI_DIR=/opt/tools/sd SD_MODEL_DIR=/opt/models IMAGE_SD_MODEL_FILE=sd_turbo.safetensors \
+#     docker compose -f docker-compose.yml -f docker-compose.sdcpp.yml up -d
+#
+# SD_CLI_DIR holds `sd-cli` (a stable-diffusion.cpp release build for Linux x86_64, or your own);
+# SD_MODEL_DIR holds the model file named by IMAGE_SD_MODEL_FILE. Both are mounted read-only into
+# the API (which decides whether image and video requests are accepted) and the worker (which
+# runs them). docs/MEDIA.md covers the models, including preparing SDXL where Hugging Face is
+# unreachable, and the step/CFG values each needs: SD-Turbo is 1 step at CFG 1 (the defaults);
+# SDXL base wants about 12 steps at CFG 6.
+#
+# Without this file the stack still starts, and image and video generation answer
+# CAPABILITY_UNAVAILABLE — never a placeholder.
+
+x-sd-environment: &sd-environment
+  IMAGE_SD_CLI_PATH: /opt/sd/sd-cli
+  IMAGE_SD_MODEL_PATH: /opt/sd-models/${IMAGE_SD_MODEL_FILE:?set IMAGE_SD_MODEL_FILE to the model file in SD_MODEL_DIR}
+  IMAGE_SD_STEPS: ${IMAGE_SD_STEPS:-1}
+  IMAGE_SD_CFG_SCALE: ${IMAGE_SD_CFG_SCALE:-1}
+  IMAGE_SD_THREADS: ${IMAGE_SD_THREADS:-4}
+  IMAGE_SD_TIMEOUT_MS: ${IMAGE_SD_TIMEOUT_MS:-1800000}
+
+x-sd-volumes: &sd-volumes
+  - ${SD_CLI_DIR:?set SD_CLI_DIR to the directory holding sd-cli}:/opt/sd:ro
+  - ${SD_MODEL_DIR:?set SD_MODEL_DIR to the directory holding the model}:/opt/sd-models:ro
+
+services:
+  api:
+    environment: *sd-environment
+    volumes: *sd-volumes
+  worker:
+    environment: *sd-environment
+    volumes: *sd-volumes

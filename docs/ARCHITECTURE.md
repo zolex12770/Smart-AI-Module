@@ -1,9 +1,8 @@
 # Architecture
 
-What the system is, as built. Design intent lives in `docs/`; current status lives in
-`docs/PROJECT_STATUS.md`. This file describes the code that exists at commit `bfdfdc8`; its counts,
-the boundary check, the request path and the migrations were re-checked against `fd5f5a5` on
-2026-09-13. It marks anything aspirational as such.
+What the system is, as built. Design intent lives in the numbered `docs/NN_*.md` files; current
+status lives in [PROJECT_STATUS.md](PROJECT_STATUS.md). Counts in this file were re-taken from the
+tree on 2026-09-27 (branch `claude/zen-brahmagupta-6l5o4u`). It marks anything aspirational as such.
 
 ## Shape
 
@@ -15,7 +14,7 @@ authentication, authorization, persistence, queues and AI orchestration.
 ```
   frontend/                                    backend/
   ─────────                                    ────────
-  Next.js, 17 screens                          Fastify, 54 routes
+  Next.js, 18 screens                          Fastify, 70 routes
   builds and runs alone                        builds and runs alone
         |                                            |
         |   HTTP + SSE, cookie or bearer API key     |
@@ -34,13 +33,15 @@ authentication, authorization, persistence, queues and AI orchestration.
                     +--------------------------------+--------------------------------+
                                                      |
         database (Drizzle) · jobs (pg-boss) · media (AssetStore) · rag · embeddings
-        memory · tools · mcp · scanning · quota · observability · 9 provider adapters
+        memory · tools · mcp · scanning · quota · observability · 11 provider adapters
                                                      |
                             PostgreSQL (PGlite locally, standalone in production)
                             + pgvector, and object storage (local disk or GCS)
 ```
 
-**26 workspaces:** `frontend`, `backend`, `shared`, 14 backend packages and 9 provider adapters.
+**28 workspaces:** `frontend`, `backend`, `shared`, 14 backend packages and 11 provider adapters
+(LLM: local, OpenAI, Anthropic, Google, mock; image: stable-diffusion.cpp, OpenAI-compatible,
+mock; video: image-motion, Replicate, mock).
 
 ### Why `shared/` is top-level and the rest are not
 
@@ -150,19 +151,66 @@ the reasoning worth having.
 > approval handling, same cancellation, same ceilings. The six deterministic task types remain
 > because they are cheap, predictable and well-tested; they are recipes, not a second engine.
 
+What the harness adds around a real local model, each found by running one (2026-09-27):
+
+- **Context budgeting.** The local runtime's real context window is read from Ollama's
+  `/api/ps` (then `OLLAMA_CONTEXT_LENGTH`, then 4096), and `fitToContextWindow` trims the oldest
+  observations to fit it, reserving `min(maxOutputTokens, max(512, window/4))` for the reply.
+  Ollama silently truncates an over-long prompt from the front — the system prompt and the task
+  went first — so exceeding the window is now a `ContextWindowExceededError`, never a truncation.
+- **Every final answer is verified**, and a `fix_failing_test` node's verification *runs the real
+  test* in the project's sandbox; a failure is fed back as an observation for up to 3 correction
+  rounds.
+- **The test the agent must make pass is read-only to it.** `readOnlyPaths` on the node make
+  `fs.write_file`, `fs.delete_file`, `code.apply_patch` and `code.replace_text` refuse that path
+  (`ReadOnlyPathError`), and the engine snapshots it before the run and restores it after, reporting
+  `restoredReadOnlyPaths` — so "make the test pass" cannot be satisfied by editing the test.
+- **Edits.** `code.replace_text` is an exact, unique search-and-replace; `code.apply_patch` uses
+  `git apply --recount` semantics, refuses doubled `++`/`--` markers under a miscounted header,
+  and refuses a `/dev/null` creation diff onto an existing file (a 7B model produced both).
+- **Deadlines are real.** A node's persisted timeout is enforced by a sweeper that aborts with
+  `NodeDeadlineExceededError` — a timeout is reported as `timed out`, never as `cancelled`.
+
+## Retrieval and grounding
+
+`POST /api/v1/rag/answer` retrieves pgvector neighbours (embedding model recorded per chunk),
+delimits them as untrusted evidence with numbered markers, and classifies the model's answer:
+
+| `outcome` | Meaning | `grounded` |
+|---|---|---|
+| `grounded` | a substantive answer citing at least one marker that was offered | `true` |
+| `refused` | the first sentence says the evidence does not contain the answer | `false` (the fixed no-evidence text is returned) |
+| `empty` | nothing was retrieved | `false` |
+| `violation` | cites a marker that was not offered, or answers without citing (`uncited_answer`) | `false` (fallback text) |
+| `retrieve_only` | the caller asked for passages only | `false` |
+
+A refusal that happens to echo `[1]` is a refusal, not a grounded answer — the case that used
+to report `grounded: true`.
+
+## Media pipeline
+
+Image, speech and video run as pg-boss jobs; the request answers 202 and the job owns the
+provider call, its deadline, its cancellation and its usage record. Providers declare
+`maxConcurrency` (stable-diffusion.cpp: 1, because two SDXL runs beside a 7B chat model exhausted
+16 GB and the OOM killer took both) and the scene worker sizes itself from it. The video
+storyboard is written by a `video.plan` job in the API role (which holds the chat model), then
+scene jobs and a render job run in the worker role — see [MEDIA.md](MEDIA.md).
+
 ## Data
 
-22 tables, 45 `CREATE INDEX` statements, and a squashed baseline migration plus two incrementals:
-`0001` adds `rate_limit_counters` (ADR-071) and `0002` adds `conversations.summary_fingerprint`
-(ADR-110). The platform has never been deployed, so a baseline was safer than an untestable ALTER
-chain; everything after it is a normal migration.
+23 tables, 47 `CREATE INDEX` statements, and a squashed baseline migration plus four incrementals:
+`0001` adds `rate_limit_counters` (ADR-071), `0002` adds `conversations.summary_fingerprint`
+(ADR-110), `0003` adds `audio_generations`, and `0004` adds the SRT/WebVTT subtitle asset columns
+to `video_projects`. Migrations run at boot, on PGlite or on a standalone Postgres
+(`DATABASE_URL`); the compose stack runs them against `pgvector/pgvector:pg16`.
 
 - **Identity:** `users`, `organizations`, `organization_members`, `projects`, `project_members`,
   `sessions`, `api_keys`, `audit_log`.
-- **Content** (scoped to a project: nine carry `project_id`, and `messages`, `task_nodes`,
+- **Content** (scoped to a project: ten carry `project_id`, and `messages`, `task_nodes`,
   `task_transitions` and `video_scenes` reach it through their parent row): `conversations`,
   `messages`, `tasks`, `task_nodes`, `task_transitions`, `documents`, `document_chunks`,
-  `memory_items`, `assets`, `image_generations`, `video_projects`, `video_scenes`, `usage_records`.
+  `memory_items`, `assets`, `image_generations`, `audio_generations`, `video_projects`,
+  `video_scenes`, `usage_records`.
 - **Operational:** `rate_limit_counters` — no `project_id`; one table shared by every API instance
   (ADR-071).
 
@@ -184,25 +232,26 @@ One image, three roles (`ROLE=all|api|worker`): the Cloud Run service runs `api`
 runs `worker`, and local development runs `all`. A worker never serves chat and therefore boots
 without any LLM provider — the fix for the crash-loop that made the whole deployment impossible.
 The runtime contract — roles, security settings, `TRUST_PROXY_HOPS`, and how each application runs
-on its own — is in `DEPLOYMENT.md`.
+on its own — is in [DEPLOYMENT.md](DEPLOYMENT.md); the compose stack in `docker-compose.yml` runs
+`api` and `worker` as separate containers against one Postgres.
 
 ## Deliberate limits
 
-- **No hosted provider has served a request here.** The image (ADR-065), video (ADR-085),
-  OpenAI, Anthropic and Google adapters are complete and fixture-tested; this environment has no
-  credentials for any of them. The SELF-HOSTED path — a local OpenAI-compatible runtime for chat
-  and embeddings, and an offline speech synthesiser — is fully exercised, which is what makes
-  "no mandatory hosted AI" a real property rather than a claim.
-- **The Docker sandbox has never executed a container.** No Docker CLI, no service, no WSL and no
-  administrator rights on this machine — checked, not assumed. Process isolation is real
-  (environment scrubbed, process tree killed, output capped) but shares the host's network and
-  filesystem, which is why production refuses it without an explicit opt-in.
-- **Speech on Linux needs an HTTP provider.** The offline synthesiser is Windows SAPI; a Linux
-  deployment configures `SPEECH_PROVIDER=openai` against any compatible server, or renders
-  without narration and says so (`skipped_no_narration`).
-- **Video cancellation is provider-level only.** `processVideoScene` passes no `AbortSignal` and
-  there is no video-cancel route, so the provider's cancel endpoint is reached via the deadline
-  and error paths rather than by a user action.
+- **No hosted provider has served a request here.** The OpenAI, Anthropic and Google LLM
+  adapters, the OpenAI-compatible image adapter and the Replicate video adapter are complete and
+  fixture-tested; this environment has no credentials for any of them. Every capability was
+  instead exercised end to end on self-hosted software: Ollama (`qwen2.5:7b`,
+  `nomic-embed-text`), stable-diffusion.cpp (SDXL base 1.0), Piper and ffmpeg.
+- **image-motion is not a video model.** It animates one generated still per scene with ffmpeg
+  and says so in its name, capabilities and clip metadata. A real video model is the Replicate
+  adapter, which needs a token.
+- **The process sandbox shares the host.** `DockerSandbox` is verified against a real container
+  (`npm run test:docker -w @ai-platform/security`, 4/4, locally and in CI), but the API container
+  in `docker-compose.yml` has no Docker socket, so the compose stack runs the coding agent under
+  `ProcessSandbox` with `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true` — acknowledged, logged at boot,
+  and inside the API container's own filesystem.
 - **The rate limiter fails open.** If Postgres is unreachable the request is allowed and the
   error is logged — deliberately, and opposite to the malware scanner's fail-closed rule
   (ADR-042/ADR-071). Rate limiting is a mitigation, not an authorization boundary.
+- **Never deployed to a cloud.** Terraform validates; `plan`/`apply` need GCP credentials this
+  environment does not have.

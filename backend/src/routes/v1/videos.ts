@@ -117,8 +117,10 @@ export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void
    */
   /**
    * Cooperative cancellation for a whole project — ADR-122. Scenes still queued settle as
-   * `cancelled` instead of generating; a scene already inside a provider call finishes, which is
-   * why this records a request rather than claiming a terminal state.
+   * `cancelled` instead of generating; a scene already inside a provider call sees the request
+   * through its cancellation watch within a poll interval (ADR-157), and a project still in
+   * `planning` is settled by its plan job. That is why this records a request rather than
+   * claiming a terminal state.
    */
   app.post<{ Params: { id: string } }>("/api/v1/videos/:id/cancel", async (request) => {
     const authCtx = await requireProject(request, ctx.auth, "media:generate");

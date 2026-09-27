@@ -1,74 +1,101 @@
-# AI Agent Platform
+# Smart AI Platform
 
-A modular, model-agnostic AI agent platform: chat, autonomous multi-step tasks, a coding agent, tool calling and MCP integration, memory, RAG, and (initially mocked) image/video generation — built as a staged program, not a single release.
+A self-hostable AI platform: streamed chat with memory, retrieval-augmented answers with
+citations, an autonomous agent and a coding agent that edits and tests real code, tool calling
+and MCP, and image, speech and long-form video generation. It is multi-tenant, with auth, quotas,
+rate limits, an audit log and metrics.
 
-**Status: chat, a full agent task engine, tool/MCP calling, a narrow coding agent, real LLM provider adapters, retrieval-augmented document Q&A, a real async job system, async image generation (mocked), a long-form video generation pipeline (mocked), and a real, browser-verified web frontend for all of it are all working, on real PostgreSQL.** Streamed chat over SSE with a multi-conversation UI; a state-machine-driven agent task engine with persistence, crash-recovery, and human-approval gating, rendered live in the browser via SSE; sandboxed native tools plus a real connection to an external MCP server; a coding agent that runs a real failing test, fixes it, and re-verifies, with its own UI showing the real commands run and files changed; real Anthropic/OpenAI/Google adapters alongside the mock, with automatic fallback; document ingestion (a real background job, not a blocking request) — plain text/Markdown, real PDF, and real DOCX all parse for real — + pgvector similarity search backing retrieval-augmented answers; pg-boss-backed jobs with genuine crash recovery; a provider-agnostic image generation pipeline (submit → async job → real, inspectable output) running on a mock provider until real image credentials are supplied; a long-form video pipeline (prompt → deterministic scene planner → per-scene async jobs → real ffmpeg assembly when available) with proven per-scene resumability; a security-hardening pass (rate limiting, structural prompt-injection delimiting, argument-validated sandboxed tool execution) that found and fixed a real, live-exploited remote-code-execution vulnerability; real observability (structured logging + OpenTelemetry tracing, verified to correlate one request id across the API, a job worker, and a provider call); real cloud-deployment groundwork (Dockerfiles, Terraform IaC, a real standalone-Postgres connection path alongside the local PGlite default) — written and locally validated as far as this environment allows, not provisioned; and real, live-verified cost/quota enforcement (real per-token pricing for every real LLM provider's default model, daily/monthly limits on tokens/images/video-seconds, a real `429` on overage). See [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for exactly what's done, in progress, and next.
+It is model-agnostic. The same code runs on a local model (Ollama or any OpenAI-compatible server)
+or on Anthropic, OpenAI or Google. Every capability has been run end to end on **self-hosted
+software only**: Ollama (`qwen2.5:7b`, `nomic-embed-text`), stable-diffusion.cpp (SDXL), Piper and
+ffmpeg. Nothing answers with fake output. When a capability is not configured, it says so.
 
-## Start here
+**Status:** [docs/FINAL_PRODUCTION_READINESS_REPORT.md](docs/FINAL_PRODUCTION_READINESS_REPORT.md)
+has the verified status matrix and its evidence. It has not been deployed to a cloud:
+`terraform plan`/`apply` need GCP credentials, so that row is `BLOCKED_EXTERNAL`.
 
-- [docs/00_PROJECT_VISION.md](docs/00_PROJECT_VISION.md) — what this is and the guiding principles
-- [docs/01_REQUIREMENTS.md](docs/01_REQUIREMENTS.md) — formal, prioritized requirements
-- [docs/25_IMPLEMENTATION_ROADMAP.md](docs/25_IMPLEMENTATION_ROADMAP.md) — the phase-by-phase plan
-- [docs/26_DECISIONS.md](docs/26_DECISIONS.md) — every architectural decision, with reasons and alternatives
-- [docs/29_FEATURE_MATRIX.md](docs/29_FEATURE_MATRIX.md) — honest, current status of every capability
-- [PROJECT_STATUS.md](PROJECT_STATUS.md) — what to read before starting any work session
-
-## Stack (decided, see [docs/26_DECISIONS.md](docs/26_DECISIONS.md))
-
-TypeScript/Node.js monorepo (npm workspaces) · Fastify API · Next.js web frontend · real PostgreSQL + Drizzle ORM + pgvector, via PGlite locally (an embedded WASM Postgres — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-025 for why, no Docker/hosted DB required) or a real standalone Postgres (e.g. Cloud SQL) when `DATABASE_URL` is set (ADR-037) · self-hosted session auth · LLM providers: a self-hosted OpenAI-compatible runtime, Anthropic, OpenAI and Google Gemini (the Developer API; Vertex AI is not built), with a mock fallback that requires no credentials.
-
-## Running locally
-
-Verified working end-to-end (2026-09-02) — real headless-browser (Playwright) and API sessions covering every screen: chat, agent/coding task detail with live SSE and human-in-the-loop approval, image and video generation, document retrieval, and memory settings, all persisted to real PostgreSQL:
+## Layout
 
 ```
-npm ci          # at the repo root, once — installs every workspace
-npm run dev     # builds the workspace packages (predev), then starts the API (port 8787) and the web app (port 3000)
+frontend/   Next.js 16 web app (18 screens)        — builds and runs on its own
+backend/    Fastify 5 API + job workers (70 routes) — builds and runs on its own
+  packages/   agent-core, model-router, memory, rag, embeddings, media, tools, mcp, security,
+              quota, jobs, database, scanning, observability
+  packages/providers/   llm-{local,openai,anthropic,google,mock}, image-{sdcpp,openai,mock},
+                        video-{motion,replicate,mock}
+shared/     types only; the frontend imports nothing else from the backend (checked in CI)
+infrastructure/terraform/   Cloud Run + Cloud SQL + Cloud Storage
+docker-compose.yml          the whole stack on one machine
 ```
 
-Each application also runs alone (ADR-112): `cd backend && npm run dev` (its `predev` builds the workspace packages it imports), or `cd frontend && npm run dev` / `npm run build` (its `prebuild` builds `shared`). On a fresh clone of `fd5f5a5` the backend alone answered `GET /api/health` and the frontend alone built. This is an npm-workspaces monorepo, so `npm install` inside `backend/` or `frontend/` installs for the whole root — run `npm ci` at the root instead. The frontend calls the API at `NEXT_PUBLIC_API_URL` (`http://localhost:8787` when unset).
+## Run it locally
 
-Then open http://localhost:3000 — you'll land on `/chat`; the nav bar links to Chat, Tasks, Images, Videos, Files, Ask, Memory, Usage, Platform, and Settings. **No Docker, no separately-installed database server, and no API keys are required** — the app runs on a real embedded PostgreSQL instance (PGlite, auto-created and auto-migrated on boot at `backend/data/pgdata`) and a mock LLM provider that clearly labels its own responses as mock.
+Requirements: Node.js 22 and npm. For AI features you also need a model runtime; the simplest is
+[Ollama](https://ollama.com):
 
-Other useful commands: `npm run typecheck`, `npm run build` (production build of every app), `npm test` (**705 passed across 86 files, 1 skipped on Windows, 0 failed**, on `fd5f5a5` — the skip is a file-symlink case that runs on CI's Linux runner, where any skip fails the build; overwhelmingly integration tests against real infrastructure rather than mocks: a real embedded PostgreSQL with real migrations and pgvector, real pg-boss queues, real HTTP through Fastify's `inject()`, real spawned processes, real PDF/DOCX/ZIP parsing, a real `clamd` with a real EICAR sample, a real `fake-gcs-server`, real OpenTelemetry span-tree assertions, a real ffmpeg producing a narrated and subtitled MP4, a real Prometheus exposition, a real local HTTP server driving the web-fetch SSRF guard, and a real account deletion that removes a real file from disk), `npm test --workspace=@ai-platform/web` and `npx playwright test` in `frontend` (**7 end-to-end tests in a real browser** against the real API and a real database, including cross-tenant isolation), `npm run lint` (**a real ESLint gate**, in CI, with three type-aware rules), `bash scripts/verify-boot.sh` (**7/7** boot checks against the real built entrypoint), `bash scripts/verify-boundary.sh` (the frontend/backend boundary, read from the TypeScript syntax tree: a self-test that must catch 39 planted violations and report nothing in 10 clean files, then 7 rules over the real tree — **8/8**), `npm run docs:api` (regenerates [docs/API.md](docs/API.md) from the route registrations; `backend/src/routes/api-contract.test.ts` sends a real request for every row to check the documented access and rate limit), `npm run db:generate -w @ai-platform/database` (after a schema change, to create a new migration file).
+```bash
+ollama pull qwen2.5:7b && ollama pull nomic-embed-text
+```
 
-`.github/workflows/ci.yml` runs the same typecheck/build/test/audit commands, plus a `gitleaks` secret scan, on every push/PR — every step was verified locally from a genuinely fresh build state, but this repo has no GitHub remote in the environment that authored it, so the workflow itself has never actually run in GitHub Actions (see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-035).
+The backend finds Ollama on `127.0.0.1:11434` by itself. Set `OLLAMA_CONTEXT_LENGTH=16384` for
+Ollama; its default of 4096 tokens is too small for the agent.
 
-Long-form video assembly (the final MP4 step) needs a real `ffmpeg` on `PATH` (override with `FFMPEG_PATH`); without one, every scene still generates successfully and each clip is individually downloadable, but the project's `renderStatus` honestly reports `skipped_no_ffmpeg` instead of fabricating a video file — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-030.
+```bash
+cd backend && npm install && npm run dev      # API on http://localhost:8787
+cd frontend && npm install && npm run dev     # web app on http://localhost:3000
+```
 
-If the API ever fails to boot with a PGlite `RuntimeError: Aborted()`, the local dev database was corrupted by a prior forceful process kill (see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-029) — delete `backend/data/pgdata` and restart; it's disposable local data and will re-migrate from scratch.
+This is an npm-workspaces repository, so `npm install` in either directory installs the whole
+workspace. The backend's `predev` builds the packages it imports. The database is an embedded
+PostgreSQL (PGlite, with pgvector) created and migrated at `backend/data/pgdata` on first boot;
+set `DATABASE_URL` to use a standalone Postgres instead. To create the first administrator,
+set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` on an empty database. Signup is also
+open.
 
-## Configuring real providers
+Without a model runtime, the backend still boots. Chat, RAG answers and the agent then return
+a clear "no model configured" error, not a stub.
 
-Real providers activate automatically when their environment variable is set — no code changes needed. Put it in a `.env` file (copy `.env.example` to `.env` at the repo root, or create `backend/.env`; both are gitignored and loaded natively at boot, ADR-043) or export it in your shell — a real environment variable always wins over a file value. Each is built against the raw documented API (not the official SDK — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-023) and has been confirmed to reach the real live endpoint correctly (a deliberately invalid key gets back a real, correctly-shaped error from each provider), but the success path has not been verified end-to-end since no real key exists in this environment — that's the one thing a real key from you would let us finally confirm.
+Image, speech and video generation turn on when their software is configured
+([docs/MEDIA.md](docs/MEDIA.md)). The details are in
+[docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md).
 
-| Provider | Env var |
+### With Docker
+
+```bash
+docker compose up -d --build                          # postgres+pgvector, ollama, api, worker, web
+docker compose --profile setup run --rm ollama-pull   # once: pulls the two models into ollama
+```
+
+Then open http://localhost:3000. See [docker/README.md](docker/README.md) and
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+## Verify it
+
+```bash
+npm run typecheck && npm run lint && npm test          # 1137 passed, 0 failed
+cd frontend && npx playwright test                      # browser end-to-end
+node scripts/acceptance/full-system.mjs                 # the whole user journey, real providers
+```
+
+[docs/TESTING.md](docs/TESTING.md) describes every layer, and what the acceptance script checks
+in each result.
+
+## Documentation
+
+| | |
 |---|---|
-| Anthropic | `ANTHROPIC_API_KEY` |
-| OpenAI | `OPENAI_API_KEY` (optionally `OPENAI_ORG_ID`, `OPENAI_PROJECT_ID`) |
-| Google (Gemini Developer API) | `GOOGLE_API_KEY` (alias `GEMINI_API_KEY` also accepted) |
-| Google (Vertex AI) | Not yet implemented — only the Gemini Developer API path is built |
+| [docs/FINAL_PRODUCTION_READINESS_REPORT.md](docs/FINAL_PRODUCTION_READINESS_REPORT.md) | what was verified, how, and what is blocked |
+| [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | the status matrix |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the system as built |
+| [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) | running and developing locally |
+| [docs/PROVIDERS.md](docs/PROVIDERS.md) | model providers and how to configure each |
+| [docs/MEDIA.md](docs/MEDIA.md) | image, speech and video generation |
+| [docs/TESTING.md](docs/TESTING.md) | test layers and the acceptance script |
+| [docs/SECURITY.md](docs/SECURITY.md) | security controls, and what is not protected |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Docker, compose, Cloud Run, the runtime contract |
+| [docs/API.md](docs/API.md) | every route, generated from the code |
+| [docs/26_DECISIONS.md](docs/26_DECISIONS.md) | architectural decisions, with reasons |
 
-With no key set, chat runs on the mock provider (clearly labels its own responses as such). With a real key set, the router uses that provider and automatically falls back to the mock if the real call fails before producing any output.
-
-Image and video generation each have a real provider adapter — any OpenAI-compatible `/v1/images/generations` server (ADR-065) and Replicate's predictions API (ADR-085) — and each falls back to a clearly-labelled mock in development and to a real capability error in production when nothing is configured. No credentials for either were available in the environment that built them, so both are fixture-tested rather than end-to-end verified. Cloud deployment is documentation/IaC only until explicitly authorized — see ADR-011.
-
-## Cloud deployment
-
-`backend/Dockerfile`, `frontend/Dockerfile`, and `infrastructure/terraform/` exist and are documented in [infrastructure/DEPLOYMENT_RUNBOOK.md](infrastructure/DEPLOYMENT_RUNBOOK.md), with the runtime contract (roles, security settings including `TRUST_PROXY_HOPS`) in [DEPLOYMENT.md](DEPLOYMENT.md) — real, reviewed artifacts, not provisioned or built (no Docker/GCP project in the environment that authored them; see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-037 for exactly what was and wasn't verified, including a real `terraform validate`/`plan` and a real Postgres connection-attempt test). The job worker is a separately deployable role of the same image: `ROLE=api` on the Cloud Run service, `ROLE=worker` on a Cloud Run worker pool, `ROLE=all` (the default) for local dev where PGlite allows only one process (ADR-039 — each role verified live, but the two have never yet run concurrently against a shared database here). Generated assets go to a real Cloud Storage store when `ASSETS_BUCKET` is set (ADR-040 — one `AssetStore` interface, local disk by default; verified byte-for-byte through the real client against a `fake-gcs-server` emulator, which CI downloads, never yet against real GCS). RAG documents arrive by real multipart upload into that same store (ADR-041), so the only local-disk use left is the coding agent's per-run scratch directory — a legitimate scratch space, tracked in docs/27 but no longer a deploy blocker.
-
-## Cost & quota
-
-Real, dated per-token pricing exists for each real provider's current default model (`backend/packages/model-router/src/cost-estimator.ts`, see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-038) — `null`, never a fabricated number, for anything unpriced (the mock provider, image/video generation until a real provider is chosen). Optional, single-operator quota limits (unset by default) are enforced *before* any LLM call, image generation, or video project is created: `DAILY_TOKEN_LIMIT`, `MONTHLY_TOKEN_LIMIT`, `DAILY_IMAGE_LIMIT`, `MONTHLY_VIDEO_SECONDS_LIMIT`. Exceeding a configured limit returns a real `429 QUOTA_EXCEEDED` with the exact running total, never a silent overage. `GET /api/v1/usage` reports current token/image/video totals against whatever limits are configured.
-
-## Security
-
-The API rate-limits every route (300 req/min default; images 10/min, videos 5/min, agent task creation 30/min — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-032). The coding agent's terminal tool validates every command argument, not just the command name — a real argument-injection RCE was found and fixed here during Phase 11's security hardening pass; see ADR-032 for the full writeup. Authentication, authorization and multi-tenancy are real (ADR-049): scrypt passwords, hash-only storage of session tokens and API keys, CSRF double-submit, RBAC and an audit log. Authorization is a SQL predicate rather than a check — every content table carries `project_id` or is reached through a parent row that does, repositories expose `get(projectId, id)` and there is no `get(id)` to call by mistake — so a resource in another tenant returns **404**, which a browser-driven end-to-end test asserts; the one cross-tenant 403 is an API key naming a project other than the one it is bound to (see [docs/API.md](docs/API.md)). Membership is the only way into a project — a system administrator has no implicit access to any tenant's project (ADR-108). Rate-limit counters are shared across API instances via Postgres (ADR-071), so N instances enforce one limit rather than N; per-IP limits and audit rows use the connection's address, or the `X-Forwarded-For` entry appended by the `TRUST_PROXY_HOPS` proxies the deployment declares, so a caller cannot choose its address unless that number is set higher than the real hop count (ADR-112). `web.fetch`, the agent's URL-fetching tool, has an SSRF guard (ADR-104): the same refusal for private and unresolvable names, one deadline across DNS, redirects and body, and linear-time HTML stripping (ADR-108). File uploads (`POST /api/v1/files/upload`, ADR-041) apply docs/13 §12 for real: an allow-list of exactly the four ingestible types, a declared-type check, a real content sniff (PDF signature, a structural DOCX check, valid UTF-8 for text), a 25 MiB cap returning a real `413`, generated storage keys, attachment-only read-back, a per-route rate limit, and — when `CLAMD_HOST` is set — a real clamd malware scan (ADR-042: uploads are held in `scanning`, never ingested or served, until the worker's scan clears them; infected uploads are rejected and their bytes deleted; `UPLOAD_SCAN_REQUIRED=true` makes uploads fail closed, which the deployment Terraform sets). Without a scanner configured, uploads are accepted with a durable `skipped_no_scanner` mark and a loud boot warning.
-
-## Observability
-
-Every log line is structured JSON (a shared, redacting Pino logger — see [docs/26_DECISIONS.md](docs/26_DECISIONS.md) ADR-033) with a `request_id` that's propagated from the originating HTTP request into any job it enqueues, so you can grep one id across the API log, a job worker's log, and the provider-call log it produced. Real OpenTelemetry spans (`gen_ai.chat` for chat, `job.process` for jobs) print to the console — there's no Collector/Grafana running here (no Docker), so `ConsoleSpanExporter` is the honest local-dev substitute; swapping in a real OTLP exporter later is a one-line change in `backend/packages/observability`, not an application-code change. ADR-033 deferred metrics and agent-run spans; both were built later — `agent.run`, `agent.step` and `tool.call` spans (ADR-073), and Prometheus-text metrics at the system-administrator-only `GET /api/v1/admin/metrics` (ADR-082).
-
-## Contributing to this repo (for the agent/engineer picking this up later)
-
-Read `PROJECT_STATUS.md` first, then the roadmap and decision log, then inspect actual repo state before assuming anything in the docs is still current — the feature matrix is the one file expected to be updated every phase. [docs/FINAL_AUDIT.md](docs/FINAL_AUDIT.md) records an independent, point-in-time re-verification of that feature matrix and the target-state spec against the real repository — read it for what's been directly confirmed vs. inherited from each phase's own account.
+The numbered `docs/NN_*.md` files are the original design documents. `PROJECT_STATUS.md`,
+`CURRENT_STATE.md`, `FINAL_IMPLEMENTATION_REPORT.md` and `TEST_REPORT.md` at the root are
+historical records, kept as written. Their figures are not current.

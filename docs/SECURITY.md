@@ -4,7 +4,7 @@ What is actually implemented, what it protects against, and what it does not. Ev
 corresponds to code and, where stated, to a test that runs in `npm test`. Nothing here has been
 verified in a deployment; there has been none.
 
-Design intent lives in [docs/13_SECURITY_ARCHITECTURE.md](docs/13_SECURITY_ARCHITECTURE.md); this
+Design intent lives in [13_SECURITY_ARCHITECTURE.md](13_SECURITY_ARCHITECTURE.md); this
 file describes the **implementation**, and says plainly where the two diverge.
 
 ---
@@ -188,6 +188,14 @@ real local server:
   1.4 s, which at the 512 KB cap is about 90 s of synchronous work on the API's event loop, for
   every tenant (#31). 512 KB hostile inputs are now asserted to finish in under 2 s.
 
+- **No fake output in production.** Mock LLM, image and video providers are registered only when
+  `ALLOW_MOCK_PROVIDERS=true`, which configuration refuses under `NODE_ENV=production`; without a
+  real provider a capability answers `CAPABILITY_UNAVAILABLE`. Tested in
+  `backend/src/no-fake-in-production.test.ts`.
+- **The coding agent cannot edit the test it is asked to make pass.** The task's test file is a
+  `readOnlyPaths` entry: every file-writing tool refuses it (`ReadOnlyPathError`), and the engine
+  restores it from a snapshot before each test run in case a terminal command changed it.
+
 ## 6. Input handling
 
 - Zod validation on every request body.
@@ -221,8 +229,9 @@ real local server:
   allow-list of names to strip has to be updated for every new secret and the one nobody
   remembers is the one that leaks. See the terminal-tool note in §6: this sentence was in this
   document before it was true of the path that actually ran.
-- The CI workflow has a gitleaks step (it has never executed — there is no git remote), and every
-  commit in this repository was preceded by a staged-diff secret scan.
+- The CI workflow runs gitleaks over the full history on every run (green on GitHub Actions since
+  run 36311897333). Three findings are listed by fingerprint in `.gitleaksignore`, each a
+  non-secret (a cache key and test fixtures), with the reason beside it.
 
 ## 8. Audit
 
@@ -279,13 +288,16 @@ address a failed login's audit row records at 0, 1 and 2 hops.
 - **Process isolation is not container isolation.** The development sandbox shares the host's
   network and filesystem. Production refuses it by default for exactly this reason, but an operator
   who sets `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true` has accepted a real risk.
-- **Docker isolation has never run in a real container.** No container runtime is installed here.
-  What `npm test` asserts is the argument list `dockerRunArgs` builds — every isolation flag, the
-  single workspace mount, the scrubbed environment, the containment refusal — and that asking for
-  Docker where it is unusable refuses rather than downgrades. The real-container suite
-  (`sandbox.docker.test.ts`, run only by `npm run test:docker --workspace=@ai-platform/security`) is
-  written and has never run; it fails, rather than skips, without Docker. Whether those flags
-  actually contain a process is unverified.
+- **Docker isolation is verified in a real container, but the compose stack does not use it.**
+  `npm test` asserts the argument list `dockerRunArgs` builds; the real-container suite
+  (`sandbox.docker.test.ts`, `npm run test:docker --workspace=@ai-platform/security`) observes each
+  property from inside a real container — no network, read-only root, dropped capabilities, the
+  single writable workspace — and passes 4/4 locally (Docker 29) and in CI. It fails, rather than
+  skips, without Docker. The API container in `docker-compose.yml` is given no Docker socket
+  (mounting one would hand the model's commands the host), so that stack runs the coding agent
+  under the process sandbox with `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true`, inside the API
+  container's own filesystem. A deployment that wants container isolation for agent commands
+  needs a runtime designed for it (a rootless or remote Docker endpoint, or gVisor).
 - **Per-IP limits are only as good as `TRUST_PROXY_HOPS` matching the topology.** Set too low behind
   a proxy, every client shares the proxy's one address and one bucket; set higher than the number
   of proxies really in front, a client-written `X-Forwarded-For` entry is trusted again, which is the

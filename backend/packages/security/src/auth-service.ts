@@ -694,7 +694,7 @@ export class AuthService {
     const projectRole = (row.projectRole as ProjectRole | null) ?? null;
     // Membership is the ONLY route into a project (ADR-108). `isSystemAdmin` used to short-circuit
     // this into owner+admin on every project in every organization — read every tenant's data,
-    // spend their quota, mint API keys bound to their projects — while SECURITY.md, ADR-096 and
+    // spend their quota, mint API keys bound to their projects — while docs/SECURITY.md, ADR-096 and
     // the permission table described the flag as gating the `/admin` surface only. The branch was
     // harmless while no account could hold the flag; ADR-096 made the flag reachable, which made
     // the branch a silent cross-tenant super-user. Operating the deployment does not require

@@ -7,7 +7,7 @@
 > here — several of them state, correctly for their date, that no authentication existed. That
 > has not been true since ADR-049. For current state read
 > [FINAL_IMPLEMENTATION_REPORT.md](FINAL_IMPLEMENTATION_REPORT.md),
-> [TEST_REPORT.md](TEST_REPORT.md) and [ARCHITECTURE.md](ARCHITECTURE.md) instead.
+> [TEST_REPORT.md](TEST_REPORT.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) instead.
 
 Read this file first at the start of any session, along with `README.md`, `docs/25_IMPLEMENTATION_ROADMAP.md`, and `docs/26_DECISIONS.md`, before inspecting the repository state.
 
