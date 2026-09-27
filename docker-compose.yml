@@ -1,0 +1,154 @@
+# The whole platform on one machine: Postgres (pgvector), a local model runtime (Ollama), the API,
+# the background worker and the web app — every capability served by software you run yourself.
+#
+#   docker compose up -d --build                         # build and start everything
+#   docker compose --profile setup run --rm ollama-pull  # once: pull the chat and embedding models
+#   open http://localhost:3000
+#
+# See docs/DEPLOYMENT.md ("Local stack with Docker Compose") for what each service does, the
+# settings worth changing, and how this differs from the Cloud Run deployment in infrastructure/.
+#
+# This is a LOCAL stack. It runs the production images with NODE_ENV=production, but three
+# settings are relaxed for a single machine and are stated here rather than hidden:
+#   - COOKIE_SECURE=false: the browser talks to http://localhost, where a Secure cookie is not sent
+#     by every browser. Behind HTTPS, remove it.
+#   - SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true: the agent's commands run with process isolation
+#     inside the API container, which is itself the boundary here. The Docker sandbox needs the
+#     host's Docker socket in the API container, which is root on the host; that trade is the
+#     operator's to make, not this file's (docs/SECURITY.md).
+#   - The Postgres password defaults to a local-only value. Set POSTGRES_PASSWORD for anything else.
+
+name: smart-ai
+
+x-api-environment: &api-environment
+  NODE_ENV: production
+  PORT: "8787"
+  DATABASE_URL: postgres://ai:${POSTGRES_PASSWORD:-ai-local-only}@postgres:5432/ai
+  # The model runtime, named explicitly: production never auto-detects what answers its users.
+  LLM_BASE_URL: http://ollama:11434/v1
+  LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b}
+  # Must match OLLAMA_CONTEXT_LENGTH below: the agent keeps every prompt inside this window.
+  LLM_CONTEXT_WINDOW: ${OLLAMA_CONTEXT_LENGTH:-16384}
+  EMBEDDING_BASE_URL: http://ollama:11434/v1
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+  CORS_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+  COOKIE_SECURE: "false"
+  SANDBOX_RUNTIME: process
+  SANDBOX_ALLOW_PROCESS_IN_PRODUCTION: "true"
+  # Shared by the API and the worker: the worker writes rendered media, the API serves it.
+  ASSETS_ROOT: /data/assets
+  SANDBOX_ROOT: /data/sandbox
+  BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+  BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+  # Optional real image generation through any OpenAI-compatible images server.
+  IMAGE_BASE_URL: ${IMAGE_BASE_URL:-}
+  IMAGE_MODEL: ${IMAGE_MODEL:-}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ai
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ai-local-only}
+      POSTGRES_DB: ai
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai -d ai"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      # Ollama serves 4096 tokens unless told otherwise, and truncates a longer prompt silently.
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-16384}
+      OLLAMA_KEEP_ALIVE: 30m
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "127.0.0.1:11434:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # One-time model download: docker compose --profile setup run --rm ollama-pull
+  ollama-pull:
+    image: ollama/ollama:latest
+    profiles: ["setup"]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - ollama pull ${LLM_MODEL:-qwen2.5:7b} && ollama pull ${EMBEDDING_MODEL:-nomic-embed-text}
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        # Where the image fetches its Piper voice. The default is the Hugging Face voice
+        # repository; docker/README.md names a GitHub-hosted alternative.
+        PIPER_VOICE_ARCHIVE_URL: ${PIPER_VOICE_ARCHIVE_URL:-}
+    image: smart-ai-api:local
+    environment:
+      <<: *api-environment
+      ROLE: api
+    volumes:
+      - appdata:/data
+    ports:
+      - "8787:8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  worker:
+    image: smart-ai-api:local
+    environment:
+      <<: *api-environment
+      ROLE: worker
+    volumes:
+      - appdata:/data
+    depends_on:
+      # After the API, so the two do not apply the same migrations at the same moment.
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        # Inlined into the browser bundle at build time: the address the BROWSER uses.
+        NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8787}
+    image: smart-ai-web:local
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ollama:
+    # Override to reuse a volume that already holds models, e.g. OLLAMA_VOLUME=ollama.
+    name: ${OLLAMA_VOLUME:-smart-ai-ollama}
+  appdata:

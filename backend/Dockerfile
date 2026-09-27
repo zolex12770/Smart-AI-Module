@@ -23,7 +23,12 @@ WORKDIR /repo
 # trade-off given this Dockerfile has never been run even once to measure whether that
 # caching would matter in practice.
 COPY . .
-RUN npm ci
+# Optional build secret `build_ca`: the CA of a TLS-intercepting proxy, for building behind one
+# (docker build --secret id=build_ca,src=/path/to/ca.pem). Trusted only for the RUN steps that
+# download; a secret mount is never written into a layer. Absent, these steps are unchanged.
+RUN --mount=type=secret,id=build_ca,required=false \
+    if [ -s /run/secrets/build_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build_ca; fi \
+ && npm ci
 RUN npm run build:packages
 RUN npm run build --workspace=@ai-platform/api
 # Strips devDependencies (typescript, vitest, tsx, drizzle-kit, ...) from every workspace's
@@ -58,14 +63,33 @@ RUN apt-get update \
 # the voice will not load without it, and the failure reads like a broken binary.
 ARG PIPER_VERSION=2023.11.14-2
 ARG PIPER_VOICE_NAME=en_US-lessac-medium
-RUN curl -sSfL -o /tmp/piper.tar.gz \
+# Optional: a .tar.gz holding one voice (.onnx plus its .onnx.json), used INSTEAD of the Hugging
+# Face download -- for a network that cannot reach huggingface.co. docker/README.md names one.
+ARG PIPER_VOICE_ARCHIVE_URL=
+# Either way the voice lands at one fixed path, so PIPER_VOICE below never depends on the source.
+RUN --mount=type=secret,id=build_ca,required=false \
+    if [ -s /run/secrets/build_ca ]; then \
+      cat /etc/ssl/certs/ca-certificates.crt /run/secrets/build_ca > /tmp/build-ca.pem \
+      && export CURL_CA_BUNDLE=/tmp/build-ca.pem; \
+    fi \
+ && curl -sSfL -o /tmp/piper.tar.gz \
       "https://github.com/rhasspy/piper/releases/download/${PIPER_VERSION}/piper_linux_x86_64.tar.gz" \
  && mkdir -p /opt && tar -xzf /tmp/piper.tar.gz -C /opt && rm /tmp/piper.tar.gz \
  && mkdir -p /opt/piper-voices \
- && curl -sSfL -o "/opt/piper-voices/${PIPER_VOICE_NAME}.onnx" \
-      "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${PIPER_VOICE_NAME}.onnx" \
- && curl -sSfL -o "/opt/piper-voices/${PIPER_VOICE_NAME}.onnx.json" \
-      "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${PIPER_VOICE_NAME}.onnx.json" \
+ && if [ -n "${PIPER_VOICE_ARCHIVE_URL}" ]; then \
+      curl -sSfL -o /tmp/voice.tar.gz "${PIPER_VOICE_ARCHIVE_URL}" \
+      && mkdir -p /tmp/voice && tar -xzf /tmp/voice.tar.gz -C /tmp/voice \
+      && cp "$(find /tmp/voice -name '*.onnx' | head -1)" /opt/piper-voices/voice.onnx \
+      && cp "$(find /tmp/voice -name '*.onnx.json' | head -1)" /opt/piper-voices/voice.onnx.json \
+      && rm -rf /tmp/voice /tmp/voice.tar.gz; \
+    else \
+      curl -sSfL -o /opt/piper-voices/voice.onnx \
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${PIPER_VOICE_NAME}.onnx" \
+      && curl -sSfL -o /opt/piper-voices/voice.onnx.json \
+        "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${PIPER_VOICE_NAME}.onnx.json"; \
+    fi \
+ && test -s /opt/piper-voices/voice.onnx && test -s /opt/piper-voices/voice.onnx.json \
+ && rm -f /tmp/build-ca.pem \
  && apt-get purge -y curl && apt-get autoremove -y
 
 # Named here rather than left to the operator: in THIS image the binary and the voice are
@@ -75,11 +99,20 @@ RUN curl -sSfL -o /tmp/piper.tar.gz \
 ENV FFMPEG_PATH=/usr/bin/ffmpeg \
     SPEECH_PROVIDER=piper \
     PIPER_PATH=/opt/piper/piper \
-    PIPER_VOICE=/opt/piper-voices/en_US-lessac-medium.onnx
+    PIPER_VOICE=/opt/piper-voices/voice.onnx
 
 # Cloud Run injects PORT (typically 8080); backend/src/config.ts already reads
 # process.env.PORT via its zod schema, so no code change was needed for this.
 COPY --from=builder --chown=node:node /repo /repo
+# A writable home for runtime state (assets, agent workspaces, the embedded database) that a
+# volume can be mounted over; a named volume inherits this ownership, so the non-root user can
+# write to it. The defaults point here because the config defaults (./data/...) resolve under
+# /repo, which is root-owned: the first CI run of this image died with
+# "EACCES: permission denied, mkdir '/repo/data/sandbox'" on its very first boot.
+RUN mkdir -p /data && chown node:node /data
+ENV SANDBOX_ROOT=/data/sandbox \
+    ASSETS_ROOT=/data/assets \
+    DATABASE_DIR=/data/pgdata
 USER node
 EXPOSE 8080
 CMD ["node", "backend/dist/index.js"]

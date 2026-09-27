@@ -8,7 +8,10 @@
 FROM node:24-alpine AS builder
 WORKDIR /repo
 COPY . .
-RUN npm ci
+# Optional build secret `build_ca` — see backend/Dockerfile.
+RUN --mount=type=secret,id=build_ca,required=false \
+    if [ -s /run/secrets/build_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/build_ca; fi \
+ && npm ci
 RUN npm run build:packages
 # NEXT_PUBLIC_* vars are inlined into the client bundle at BUILD time, not read at
 # container start (frontend/app/lib/api.ts) -- must be supplied as a build arg pointing at
