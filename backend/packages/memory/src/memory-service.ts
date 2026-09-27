@@ -400,9 +400,41 @@ export const MEMORY_EXTRACTION_PROMPT = [
   "when read alone months later, e.g. \"The user's project codename is NIGHTHAWK.\" — never a bare",
   "value such as \"NIGHTHAWK\".",
   "",
+  "Copy every name, code, number and date EXACTLY as the user wrote it, character for character:",
+  "a fact whose identifier differs from the user's by even one digit is discarded.",
+  "",
   'Reply with JSON only: {"facts":[{"content":"...","scope":"user|project"}]}.',
   'If nothing is worth remembering, reply exactly {"facts":[]}.',
 ].join("\n");
+
+/**
+ * Drops extracted facts that carry an identifier the user never wrote — found by the
+ * autonomous-completion pass.
+ *
+ * Told "my project codename is NIGHTHAWK-252997", qwen2.5:7b stored "The user's project codename
+ * is NIGHTHAWK-252597.": one digit changed in the copy. Recall then answered, from memory and with
+ * full confidence, a codename the user never gave. A wrong identifier is worse than none — it is
+ * exactly the kind of fact someone acts on — and it is also the one kind of error that can be
+ * checked mechanically: every token that contains a digit (a code, a number, a date, a version)
+ * must appear, verbatim apart from letter case, in the message the fact came from.
+ */
+export function dropUngroundedFacts<T extends { content: string }>(
+  facts: T[],
+  source: string
+): { kept: T[]; dropped: Array<{ content: string; ungrounded: string[] }> } {
+  const haystack = source.toLowerCase();
+  const kept: T[] = [];
+  const dropped: Array<{ content: string; ungrounded: string[] }> = [];
+  for (const fact of facts) {
+    const tokens = fact.content.match(/[\p{L}\p{N}][\p{L}\p{N}._:/-]*/gu) ?? [];
+    const ungrounded = tokens
+      .map((token) => token.replace(/[._:/-]+$/, ""))
+      .filter((token) => /\d/.test(token) && !haystack.includes(token.toLowerCase()));
+    if (ungrounded.length > 0) dropped.push({ content: fact.content, ungrounded });
+    else kept.push(fact);
+  }
+  return { kept, dropped };
+}
 
 /** Parses the extraction model's reply defensively — a malformed answer means "nothing". */
 export function parseExtractedFacts(raw: string): Array<{ content: string; scope?: MemoryScope }> {

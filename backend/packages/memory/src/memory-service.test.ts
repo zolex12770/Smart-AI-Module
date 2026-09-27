@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { organizations, projects, users } from "@ai-platform/database";
 import { v4 as uuid } from "uuid";
-import { MEMORY_EXTRACTION_PROMPT, MemoryService, parseExtractedFacts } from "./memory-service.js";
+import { dropUngroundedFacts, MEMORY_EXTRACTION_PROMPT, MemoryService, parseExtractedFacts } from "./memory-service.js";
 
 /**
  * ADR-063. The claim this file exists to prove is the one the ADR-047 audit said could not be
@@ -374,5 +374,34 @@ describe("MemoryService", () => {
       const repo = new PgMemoryItemRepository(db);
       expect(await repo.softDelete(projectId, shared.id, otherUserId)).toBe(true);
     });
+  });
+});
+
+describe("dropUngroundedFacts: an identifier must be one the user actually wrote", () => {
+  const said = "Please remember this for later: my project codename is NIGHTHAWK-252997.";
+
+  it("drops the real run's mis-copied codename and says which token was wrong", () => {
+    const { kept, dropped } = dropUngroundedFacts([{ content: "The user's project codename is NIGHTHAWK-252597." }], said);
+    expect(kept).toEqual([]);
+    expect(dropped).toEqual([{ content: "The user's project codename is NIGHTHAWK-252597.", ungrounded: ["NIGHTHAWK-252597"] }]);
+  });
+
+  it("keeps the correctly copied one, whatever the letter case and trailing punctuation", () => {
+    const facts = [{ content: "The user's project codename is NIGHTHAWK-252997." }, { content: "Codename: nighthawk-252997" }];
+    expect(dropUngroundedFacts(facts, said).kept).toEqual(facts);
+  });
+
+  it("does not judge facts that carry no digits — only identifiers can be checked this way", () => {
+    const facts = [{ content: "The user prefers TypeScript for new projects." }];
+    expect(dropUngroundedFacts(facts, "I always reach for TS").kept).toEqual(facts);
+  });
+
+  it("drops an invented date, version or amount as readily as a codename", () => {
+    const { kept, dropped } = dropUngroundedFacts(
+      [{ content: "The user ships on 2026-12-01." }, { content: "The user runs Node 22." }, { content: "The budget is 4000 dollars." }],
+      "We ship on 2026-11-04 and run Node 22."
+    );
+    expect(kept.map((f) => f.content)).toEqual(["The user runs Node 22."]);
+    expect(dropped.map((d) => d.ungrounded)).toEqual([["2026-12-01"], ["4000"]]);
   });
 });

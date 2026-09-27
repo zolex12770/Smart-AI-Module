@@ -87,6 +87,30 @@ describe("a finished chat turn can form a memory", () => {
     expect(items[0]!.source).toBe("extracted");
   });
 
+  it("stores the correctly copied fact and refuses the one whose codename was mis-copied", async () => {
+    // Verbatim from a real run: the user said NIGHTHAWK-252997; the model wrote ...252597.
+    ctx.memoryExtractionEnabled = true;
+    routerReturning([
+      "Noted, I'll remember that.",
+      JSON.stringify({
+        facts: [
+          { content: "The user's project codename is NIGHTHAWK-252597.", scope: "user" },
+          { content: "The user's release is planned for 2026-11-04.", scope: "user" },
+        ],
+      }),
+    ]);
+
+    const res = await sendChat("Please remember this for later: my project codename is NIGHTHAWK-252997, and we ship on 2026-11-04.");
+    expect(res.statusCode).toBe(200);
+
+    const items = await waitForMemories(1);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const stored = (await ctx.memoryItems.listRecent({ projectId: auth.projectId, userId: auth.userId, limit: 20 })).map((i) => i.content);
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    expect(stored).toEqual(["The user's release is planned for 2026-11-04."]);
+    expect(stored.join(" ")).not.toContain("252597");
+  });
+
   it("forms nothing when extraction is switched off", async () => {
     // The switch exists because this is a second model call per turn; it must really switch off.
     ctx.memoryExtractionEnabled = false;

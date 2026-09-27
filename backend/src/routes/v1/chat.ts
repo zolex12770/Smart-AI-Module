@@ -4,6 +4,7 @@ import {
   CONVERSATION_SUMMARY_PROMPT,
   MEMORY_EXTRACTION_PROMPT,
   applyConversationWindow,
+  dropUngroundedFacts,
   parseExtractedFacts,
 } from "@ai-platform/memory";
 import { wrapUntrustedContent } from "@ai-platform/agent-core";
@@ -664,6 +665,8 @@ async function extractMemories(
         { role: "system", content: MEMORY_EXTRACTION_PROMPT },
         { role: "user", content: prompt },
       ],
+      // The reply is parsed as JSON; where the provider can guarantee the syntax, it should.
+      responseFormat: "json_object",
     })) {
       if (event.type === "token") text += event.delta;
       if (event.type === "done") {
@@ -674,7 +677,15 @@ async function extractMemories(
       }
     }
 
-    const facts = parseExtractedFacts(text);
+    // Only what the USER wrote is a source (the prompt excludes the assistant's words), so an
+    // identifier must appear there to be remembered.
+    const { kept: facts, dropped } = dropUngroundedFacts(parseExtractedFacts(text), input.userMessage.content);
+    if (dropped.length > 0) {
+      input.logger.warn(
+        { request_id: input.requestId, conversation_id: input.conversationId, dropped },
+        "memory extraction: dropped a fact whose identifiers do not appear in the user's message"
+      );
+    }
     if (facts.length > 0) {
       await ctx.memory.recordExtracted({
         projectId: input.projectId,
