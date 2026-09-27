@@ -85,6 +85,11 @@ export interface ToolInvocationContext {
   userId: string;
   /** Per-run workspace; the coding agent's tools resolve paths against this. */
   workspaceRoot?: string;
+  /**
+   * Workspace-relative paths this run's tools must not modify — the test a fix_failing_test run
+   * has to make pass. The task says "fix the source, not the test"; this makes the harness say it.
+   */
+  readOnlyPaths?: string[];
   signal?: AbortSignal;
 }
 

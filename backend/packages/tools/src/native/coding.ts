@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { PERMISSION_LEVEL_DEFAULTS, ValidationError, type ToolDefinition } from "@ai-platform/shared";
 import { applyUnifiedDiff, PatchError } from "./patch.js";
+import { assertWritable } from "./read-only.js";
 import { resolveSandboxedPath } from "./sandbox-path.js";
 import { isAbsolute } from "node:path";
 import { projectWorkspace } from "./workspace.js";
@@ -99,7 +100,12 @@ export function createCodingTools(root: string): NativeToolEntry[] {
         const diff = String(args.diff ?? "");
         if (!diff.trim()) return { ok: false, error: "The diff was empty." };
         try {
-          const applied = applyUnifiedDiff(diff, (relativePath) => resolveIn(context, relativePath), {
+          const applied = applyUnifiedDiff(diff, (relativePath) => {
+            const absolute = resolveIn(context, relativePath);
+            // Checked while the diff is staged, so a refused file means nothing is written.
+            assertWritable(root, context, absolute);
+            return absolute;
+          }, {
             readFileSync,
             writeFileSync,
             existsSync,
@@ -207,6 +213,7 @@ export function createCodingTools(root: string): NativeToolEntry[] {
           if (!existsSync(absolute)) {
             return { ok: false, error: `"${path}" does not exist. To create a file, use code.apply_patch with a --- /dev/null diff.` };
           }
+          assertWritable(root, context, absolute);
           const content = readFileSync(absolute, "utf8");
           // Match against the file's own line endings, whatever the model sent.
           const eol = content.includes("\r\n") ? "\r\n" : "\n";

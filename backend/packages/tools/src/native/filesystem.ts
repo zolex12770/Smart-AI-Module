@@ -1,6 +1,7 @@
 import { readFile, writeFile, unlink, readdir, stat } from "node:fs/promises";
 import type { ToolDefinition, ToolHandler } from "@ai-platform/shared";
 import { PERMISSION_LEVEL_DEFAULTS } from "@ai-platform/shared";
+import { assertWritable } from "./read-only.js";
 import { resolveSandboxedPath } from "./sandbox-path.js";
 import { projectWorkspace } from "./workspace.js";
 
@@ -118,6 +119,7 @@ export function createFilesystemTools(root: string): NativeToolEntry[] {
       const path = String(args.path ?? "");
       const content = String(args.content ?? "");
       const safePath = resolveSandboxedPath(projectWorkspace(root, context), path);
+      assertWritable(root, context, safePath);
       await writeFile(safePath, content, "utf8");
       return { ok: true, output: { path, writtenAt: now() } };
     },
@@ -149,6 +151,7 @@ export function createFilesystemTools(root: string): NativeToolEntry[] {
     handler: async (args, context) => {
       const path = String(args.path ?? "");
       const safePath = resolveSandboxedPath(projectWorkspace(root, context), path);
+      assertWritable(root, context, safePath);
       await unlink(safePath);
       return { ok: true, output: { path, deletedAt: now() } };
     },

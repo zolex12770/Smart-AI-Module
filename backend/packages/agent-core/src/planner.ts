@@ -366,7 +366,9 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
       dependsOn: [],
       // `testDir`/`testFile` are echoed alongside the goal so an operator reading the persisted
       // row can see what the task was pointed at without parsing prose out of the prompt.
-      input: { goal, allowedTools, testDir, testFile },
+      // `readOnlyPaths`: the test is the definition of done, so the run may read it and may not
+      // change it — enforced by the tools and by the engine's snapshot, not only by the goal text.
+      input: { goal, allowedTools, testDir, testFile, readOnlyPaths: [testDir === "." ? testFile : `${testDir}/${testFile}`] },
       // The same ceiling an autonomous run gets: a fix-verify loop legitimately spans many
       // turns, and the loop's own iteration and token limits are the real bound.
       timeoutMs: 10 * 60_000,

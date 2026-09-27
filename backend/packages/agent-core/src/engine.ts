@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type {
   TaskNodePatch,
   TaskNodeRecord,
@@ -8,7 +9,7 @@ import type {
   TaskTransitionRepository,
 } from "@ai-platform/database";
 import { estimatePromptTokens, type ModelRouter } from "@ai-platform/model-router";
-import type { ToolRegistry } from "@ai-platform/tools";
+import { projectWorkspace, resolveSandboxedPath, type ToolRegistry } from "@ai-platform/tools";
 import {
   chatMessageSchema,
   toolCallSchema,
@@ -50,6 +51,17 @@ export class NodeDeadlineExceededError extends Error {
     super(message);
     this.name = "NodeDeadlineExceededError";
   }
+}
+
+/**
+ * Workspace-relative paths a node's run may not change — the test a `fix_failing_test` run has to
+ * make pass. The planner writes them; the engine hands them to every tool call (which refuse to
+ * write them) and snapshots them, so a verification always runs the ORIGINAL test however the
+ * run touched it.
+ */
+function readOnlyPathsOf(node: TaskNodeRecord): string[] | undefined {
+  const value = (node.input as Record<string, unknown> | null)?.readOnlyPaths;
+  return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === "string") ? (value as string[]) : undefined;
 }
 
 /** Was this abort the node's deadline rather than someone pressing Stop? */
@@ -943,6 +955,14 @@ export class AgentEngine {
       const modelRouter = this.deps.modelRouter;
       const meter = this.deps.meter;
 
+      // The files this run may not change (a fix_failing_test run's test), as they were when it
+      // started — so a test run can always be made against the ORIGINAL test. See `readOnlyPathsOf`.
+      const readOnlyPaths = readOnlyPathsOf(node);
+      const guarded = this.snapshotReadOnly(task.projectId, readOnlyPaths);
+      const restoredReadOnly = new Set<string>();
+      const restoreGuarded = () => {
+        for (const path of this.restoreReadOnly(guarded)) restoredReadOnly.add(path);
+      };
 
       const result = await this.withNodeDeadline(
         node,
@@ -980,6 +1000,7 @@ export class AgentEngine {
                   projectId: task.projectId,
                   userId,
                   workspaceRoot: this.deps.workspaceRoot,
+                  ...(readOnlyPaths ? { readOnlyPaths } : {}),
                   signal: controller.signal,
                 });
                 return {
@@ -1000,6 +1021,7 @@ export class AgentEngine {
                 projectId: task.projectId,
                 userId,
                 workspaceRoot: this.deps.workspaceRoot,
+                ...(readOnlyPaths ? { readOnlyPaths } : {}),
                 signal: controller.signal,
               });
               // The model reads this string, so a failure has to be legible to it: an error it
@@ -1038,13 +1060,22 @@ export class AgentEngine {
               if (node.verificationMethod === "test_suite" && this.deps.runTestCommand) {
                 const spec = node.verificationSpec as unknown as TestSuiteSpec | undefined;
                 if (spec?.command) {
-                  const run = await this.deps.runTestCommand(spec);
+                  // Against the ORIGINAL test: anything the run did to it (through the terminal,
+                  // which the edit tools' read-only check cannot see) is undone first.
+                  const before = restoredReadOnly.size;
+                  restoreGuarded();
+                  const tampered =
+                    restoredReadOnly.size > before
+                      ? `You modified ${[...restoredReadOnly].join(", ")}, which this task may not change; it has been restored. `
+                      : "";
+                  // Scoped like the node-level check below: the runner refuses an unscoped spec.
+                  const run = await this.deps.runTestCommand({ ...spec, projectId: task.projectId });
                   if (run.exitCode === 0) return { ok: true };
                   const detail = `${run.stdout}\n${run.stderr}`.trim().slice(-1500);
                   return {
                     ok: false,
                     reason:
-                      `the test still fails — \`${spec.command} ${(spec.args ?? []).join(" ")}\` exited ${run.exitCode}. ` +
+                      `${tampered}the test still fails — \`${spec.command} ${(spec.args ?? []).join(" ")}\` exited ${run.exitCode}. ` +
                       `Its output:\n${detail}\nRead the failure, fix the source, and run the test again before answering`,
                   };
                 }
@@ -1204,7 +1235,10 @@ export class AgentEngine {
         return;
       }
 
+      // The node-level check runs the test too; it must see the original.
+      restoreGuarded();
       await this.verifyAndAdvance(task.id, task.projectId, node, byId, {
+        ...(restoredReadOnly.size > 0 ? { restoredReadOnlyPaths: [...restoredReadOnly] } : {}),
         content: result.answer,
         toolCallCount: result.toolCallCount,
         iterations: result.iterations,
@@ -1476,6 +1510,39 @@ export class AgentEngine {
     } catch {
       return { ok: true, reason: "verification could not be evaluated (verdict was not JSON)" };
     }
+  }
+
+  /** Contents of a node's read-only files at the start of its run; null means "did not exist". */
+  private snapshotReadOnly(
+    projectId: string,
+    paths: string[] | undefined
+  ): Array<{ path: string; absolute: string; content: Buffer | null }> {
+    if (!paths || paths.length === 0 || !this.deps.workspaceRoot) return [];
+    const workspace = projectWorkspace(this.deps.workspaceRoot, { projectId });
+    const out: Array<{ path: string; absolute: string; content: Buffer | null }> = [];
+    for (const path of paths) {
+      try {
+        const absolute = resolveSandboxedPath(workspace, path);
+        out.push({ path, absolute, content: existsSync(absolute) ? readFileSync(absolute) : null });
+      } catch {
+        /* a path outside the workspace protects nothing and is not ours to touch */
+      }
+    }
+    return out;
+  }
+
+  /** Puts back any read-only file the run changed; returns the paths it had to restore. */
+  private restoreReadOnly(snapshot: Array<{ path: string; absolute: string; content: Buffer | null }>): string[] {
+    const restored: string[] = [];
+    for (const item of snapshot) {
+      const now = existsSync(item.absolute) ? readFileSync(item.absolute) : null;
+      const unchanged = item.content === null ? now === null : now !== null && now.equals(item.content);
+      if (unchanged) continue;
+      if (item.content === null) rmSync(item.absolute, { force: true });
+      else writeFileSync(item.absolute, item.content);
+      restored.push(item.path);
+    }
+    return restored;
   }
 
   private async withNodeDeadline<T>(node: TaskNodeRecord, controller: AbortController, work: Promise<T>): Promise<T> {

@@ -740,8 +740,12 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
       { exitCode: 0, stdout: "ok", stderr: "" },
     ];
     const runs: string[] = [];
-    const runTestCommand = async (spec: { command: string; args?: string[] }) => {
+    const scopes: Array<string | undefined> = [];
+    const runTestCommand = async (spec: { command: string; args?: string[]; projectId?: string }) => {
       runs.push(`${spec.command} ${(spec.args ?? []).join(" ")}`);
+      // The composition root refuses an unscoped spec; a fake that did not check this let the
+      // first version of the in-loop check pass here and fail against the real runner.
+      scopes.push(spec.projectId);
       return results[Math.min(runs.length - 1, results.length - 1)];
     };
     const { engine, provider } = build(
@@ -763,12 +767,67 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
 
     expect(finished.state).toBe("COMPLETED");
     expect(runs[0]).toBe("node sum.test.cjs");
+    expect(scopes.every((scope) => scope === PROJECT)).toBe(true);
     // The second turn was shown the failure the test actually produced.
     const correction = provider.requestsSeen[1].messages.find((m) => m.role === "user" && /test still fails/.test(m.content));
     expect(correction?.content).toMatch(/test still fails.*exited 1.*-1 !== 5/s);
     expect(provider.turnsSeen.length).toBe(2);
     // And no model was asked for an opinion instead: every request offered tools.
     expect(provider.toolsOfferedSeen.every((n) => n > 0)).toBe(true);
+  });
+
+  it("judges a fix_failing_test run against the ORIGINAL test, however the run changed it", async () => {
+    // The edit tools refuse to write the test; a terminal command is not one of them. So the
+    // engine snapshots the test and restores it before every test run.
+    const TEST = "const assert = require('node:assert');\nassert.strictEqual(require('./sum.js').sum(2, 3), 5);\n";
+    writeFileSync(join(workspaceDir, "sum.test.cjs"), TEST);
+    writeFileSync(join(workspaceDir, "sum.js"), "exports.sum = (a, b) => a - b;\n");
+    const [anyTool] = createCodingTools(sandboxRoot);
+    const terminalStub: NativeToolEntry = {
+      definition: {
+        ...anyTool.definition,
+        id: "terminal.run_command",
+        name: "Run a command",
+        inputSchema: { type: "object", properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } } }, required: ["command"] },
+      },
+      // What `node -e "fs.writeFileSync('sum.test.cjs', '')"` would do: gut the test.
+      handler: async () => {
+        writeFileSync(join(workspaceDir, "sum.test.cjs"), "// no assertions\n");
+        return { ok: true, output: { exitCode: 0 } };
+      },
+    };
+    // The real verdict, computed from the real files: a gutted test "passes".
+    const runTestCommand = async () => {
+      const testNow = readFileSync(join(workspaceDir, "sum.test.cjs"), "utf8");
+      const fixed = readFileSync(join(workspaceDir, "sum.js"), "utf8").includes("a + b");
+      const passes = testNow !== TEST || fixed;
+      return { exitCode: passes ? 0 : 1, stdout: "", stderr: passes ? "" : "AssertionError: -1 !== 5" };
+    };
+    const { engine, provider } = build(
+      [
+        { calls: [{ id: "t1", name: "terminal.run_command", arguments: { command: "node", args: ["-e", "gut the test"] } }] },
+        { text: "Done: the test passes now." },
+        { calls: [{ id: "r1", name: "code.replace_text", arguments: { path: "sum.js", oldText: "a - b", newText: "a + b" } }] },
+        { text: "Fixed the source: sum adds." },
+      ],
+      { maxIterations: 8 },
+      [terminalStub],
+      undefined,
+      undefined,
+      undefined,
+      { runTestCommand }
+    );
+
+    const task = await engine.createAndStart("fix_failing_test", { testFile: "sum.test.cjs" }, { projectId: PROJECT, userId: USER });
+    const finished = await waitFor(task.id, ["COMPLETED", "FAILED", "CANCELLED"]);
+
+    expect(finished.state).toBe("COMPLETED");
+    expect(readFileSync(join(workspaceDir, "sum.test.cjs"), "utf8")).toBe(TEST);
+    expect(readFileSync(join(workspaceDir, "sum.js"), "utf8")).toContain("a + b");
+    const told = provider.requestsSeen[2].messages.find((m) => m.role === "user" && /You modified/.test(m.content));
+    expect(told?.content).toMatch(/You modified sum\.test\.cjs.*restored.*test still fails/s);
+    const [node] = await nodes.listByRoot(PROJECT, task.id);
+    expect((node.output as { restoredReadOnlyPaths?: string[] }).restoredReadOnlyPaths).toEqual(["sum.test.cjs"]);
   });
 
   it("persists the operator's deadline override on the node, so the sweeper agrees with the timer", async () => {
