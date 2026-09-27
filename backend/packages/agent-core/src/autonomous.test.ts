@@ -720,6 +720,45 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     expect(node.failureClass).toBe("retryable-execution");
   }, 40_000);
 
+  it("persists the operator's deadline override on the node, so the sweeper agrees with the timer", async () => {
+    // Before: the override lived only in the in-process timer, the stored timeout_ms stayed at
+    // the planner's ten minutes, and the sweeper ended the node there regardless.
+    const { engine } = build([{ text: "done" }], { nodeTimeoutMs: 1_800_000 });
+    const task = await engine.createAndStart("autonomous", { goal: "Answer." }, { projectId: PROJECT, userId: USER });
+    await waitFor(task.id, ["COMPLETED", "FAILED", "CANCELLED"]);
+    const [node] = await nodes.listByRoot(PROJECT, task.id);
+    expect(node.timeoutMs).toBe(1_800_000);
+  });
+
+  it("records a node the SWEEPER timed out as FAILED with the reason, not as cancelled", async () => {
+    // The path a real run took: the stored deadline passes (here by moving the engine's clock)
+    // while the in-process timer is still far away, and `sweep()` is what notices.
+    let started: (() => void) | undefined;
+    const hasStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const provider = new ScriptedAgentProvider([{ text: "never reached" }]);
+    provider.streamChat = async function* () {
+      started?.();
+      yield { type: "token", delta: "thinking" } as never;
+      await new Promise(() => {});
+    };
+    let clock = Date.now();
+    const { engine } = build([], { nodeTimeoutMs: 60_000 }, [], provider);
+    (engine as unknown as { now: () => number }).now = () => clock;
+
+    const task = await engine.createAndStart("autonomous", { goal: "Stall." }, { projectId: PROJECT, userId: USER });
+    await hasStarted;
+    clock += 61_000 + (Date.now() - clock);
+    await engine.sweep();
+
+    const finished = await waitFor(task.id, ["FAILED", "CANCELLED", "COMPLETED"], 30_000);
+    expect(finished.state).toBe("FAILED");
+    const [node] = await nodes.listByRoot(PROJECT, task.id);
+    expect(node.status).toBe("failed");
+    expect(String(node.errorMessage)).toMatch(/exceeded its 60000ms timeout/);
+  }, 40_000);
+
   it("still calls a real cancellation a cancellation", async () => {
     // The control. A change that turned every abort into a failure would satisfy both tests
     // above and break the thing ADR-146 was written to fix.

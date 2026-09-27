@@ -336,7 +336,14 @@ export class AgentEngine {
       return;
     }
 
-    for (const nodeInput of nodeInputs) {
+    // The operator's deadline override is PERSISTED with the node, not only applied by the
+    // in-process timer: the sweeper (`failTimedOutNodes`) judges deadlines from the stored
+    // `timeout_ms`, and every instance sharing the database must agree on it. Applied only in
+    // the timer, the override could shorten a run but never lengthen one — the sweeper still
+    // ended every reasoning node at the planner's ten minutes (seen in a real run at 602 s).
+    const nodeTimeoutOverride = this.deps.agentLimits?.nodeTimeoutMs;
+    for (const plannedInput of nodeInputs) {
+      const nodeInput = nodeTimeoutOverride ? { ...plannedInput, timeoutMs: nodeTimeoutOverride } : plannedInput;
       const node = await this.deps.nodeRepo.create(taskId, nodeInput);
       this.emit(taskId, { type: "node", taskId, node });
     }
@@ -1678,7 +1685,12 @@ export class AgentEngine {
       // here is an attempt whose process died mid-call, which no in-memory timer could fire
       // for. Aborting first is still right for the case where this instance owns the call
       // but its clock and the database's disagreed about the deadline.
-      this.inFlight.get(node.id)?.abort(new Error(`Node "${node.id}" exceeded its ${node.timeoutMs}ms timeout.`));
+      // Typed, like `withNodeDeadline`'s: a bare Error here read as a user's Stop, so a node the
+      // SWEEPER timed out was recorded `cancelled`, the task CANCELLED with no reason — the
+      // ADR-162 defect, surviving on the one path that fix did not cover.
+      this.inFlight
+        .get(node.id)
+        ?.abort(new NodeDeadlineExceededError(`Node "${node.id}" exceeded its ${node.timeoutMs}ms timeout.`));
       await this.runExclusive(node.rootTaskId, async () => {
         const current = await this.deps.nodeRepo.getUnscoped(node.id);
         if (!current || !isRunningNode(current.status)) return;
