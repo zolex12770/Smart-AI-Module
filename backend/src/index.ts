@@ -227,7 +227,8 @@ async function main() {
    * nothing. `contextWindow` is the default model's, so a reasoning node keeps its prompt inside
    * what the model can actually read.
    */
-  const defaultContextWindow = registry.getDefault().capabilities().contextWindow;
+  // `getDefault()` throws on an empty registry, which a worker-role process legitimately has.
+  const defaultContextWindow = registry.list().length > 0 ? registry.getDefault().capabilities().contextWindow : null;
   const agentLimits = {
     maxIterations: config.AGENT_MAX_ITERATIONS,
     maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN,
@@ -250,6 +251,14 @@ async function main() {
    * `runs.http` is that place. Only a process that will serve chat and run the agent loop
    * requires a provider to serve it with.
    */
+  if (runs.http && chatProviderCount === 0 && config.NODE_ENV !== "production") {
+    // Development boots anyway, so every other screen works while the model is being set up;
+    // chat and the agent answer a real "no model configured" error rather than a stub.
+    logger.warn(
+      "NO LANGUAGE MODEL IS CONFIGURED — chat, RAG answers and the agent will report themselves unavailable. " +
+        "Start Ollama (ollama serve; ollama pull qwen2.5:7b) or set LLM_BASE_URL and LLM_MODEL."
+    );
+  }
   if (config.NODE_ENV === "production" && runs.http && chatProviderCount === 0) {
     throw new Error(
       "This process serves chat but no LLM provider is configured, and the mock provider may not run in " +

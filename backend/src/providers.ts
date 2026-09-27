@@ -74,7 +74,9 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
     });
   }
 
-  return config.NODE_ENV !== "production" ? new MockImageProvider() : null;
+  // Only when mocks were asked for explicitly (tests, the E2E server). Otherwise image
+  // generation is unavailable and says so — never a placeholder presented as a result.
+  return config.ALLOW_MOCK_PROVIDERS ? new MockImageProvider() : null;
 }
 
 /**
@@ -123,7 +125,7 @@ export function selectVideoProvider(
     });
   }
 
-  return config.NODE_ENV !== "production" ? new MockVideoProvider() : null;
+  return config.ALLOW_MOCK_PROVIDERS ? new MockVideoProvider() : null;
 }
 
 export function registerLlmProviders(
@@ -190,13 +192,14 @@ export function registerLlmProviders(
   }
 
   // 5. The mock. ADR-013 says it must never serve production traffic; ADR-045 turned that
-  // from a constructor throw (which killed every production boot, even with a valid key) into
-  // "never constructed in production". Outside production it stays the zero-configuration
-  // default so the platform runs with no credentials at all — but only as the default when
-  // nothing real is registered, so a configured runtime is never shadowed by it.
-  if (config.NODE_ENV !== "production") {
+  // from a constructor throw into "never constructed in production". It is now also never
+  // constructed unless ALLOW_MOCK_PROVIDERS=true (refused in production by config.ts): a
+  // development server with no model used to answer chat from this stub, which looked like a
+  // working product and was not one. Even when allowed it is the default only when nothing
+  // real is registered, so a configured runtime is never shadowed by it.
+  if (config.ALLOW_MOCK_PROVIDERS) {
     registry.register(new MockLLMProvider(), { asDefault: registry.list().length === 0 });
   } else {
-    logger.info("mock LLM provider NOT registered — NODE_ENV=production (ADR-013)");
+    logger.info("mock LLM provider NOT registered — set ALLOW_MOCK_PROVIDERS=true only for tests (ADR-013)");
   }
 }

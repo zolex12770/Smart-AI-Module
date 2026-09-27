@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ModelRegistry } from "@ai-platform/model-router";
 import type { Logger } from "@ai-platform/observability";
-import { loadConfig, type AppConfig } from "./config.js";
+import { envSchema, loadConfig, type AppConfig } from "./config.js";
 import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 
 /**
@@ -52,7 +52,11 @@ const productionConfig = (over: Partial<AppConfig> = {}): AppConfig =>
   ({ ...base(), NODE_ENV: "production", ...over }) as AppConfig;
 
 const developmentConfig = (over: Partial<AppConfig> = {}): AppConfig =>
-  ({ ...base(), NODE_ENV: "development", ...over }) as AppConfig;
+  ({ ...base(), NODE_ENV: "development", ALLOW_MOCK_PROVIDERS: false, ...over }) as AppConfig;
+
+/** A test harness or the E2E server: mocks asked for explicitly. */
+const mocksAllowedConfig = (over: Partial<AppConfig> = {}): AppConfig =>
+  developmentConfig({ ALLOW_MOCK_PROVIDERS: true, ...over } as Partial<AppConfig>);
 
 const silentLogger = {
   info: () => undefined,
@@ -82,10 +86,26 @@ describe("LLM providers", () => {
     expect(registry.list().filter((p) => p.isMock)).toEqual([]);
   });
 
-  it("DOES register the mock outside production — the zero-configuration local loop", () => {
+  it("registers NO mock in development either, unless ALLOW_MOCK_PROVIDERS is set", () => {
+    // A development server with nothing configured used to answer chat from the stub, which
+    // looked like a working product. Now chat reports that no model is configured.
     const registry = new ModelRegistry();
     registerLlmProviders(developmentConfig(), registry, silentLogger);
+    expect(registry.list()).toEqual([]);
+  });
+
+  it("registers the mock when ALLOW_MOCK_PROVIDERS=true — tests and the E2E server", () => {
+    const registry = new ModelRegistry();
+    registerLlmProviders(mocksAllowedConfig(), registry, silentLogger);
     expect(registry.list().some((p) => p.isMock)).toBe(true);
+  });
+
+  it("refuses ALLOW_MOCK_PROVIDERS=true in production at config load", () => {
+    const result = envSchema.safeParse({ ...process.env, NODE_ENV: "production", ALLOW_MOCK_PROVIDERS: "true" });
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result.error?.flatten().fieldErrors)).toMatch(/ALLOW_MOCK_PROVIDERS=true is refused/);
+    // And it is accepted where it belongs.
+    expect(envSchema.safeParse({ ...process.env, NODE_ENV: "test", ALLOW_MOCK_PROVIDERS: "true" }).success).toBe(true);
   });
 });
 
@@ -103,13 +123,18 @@ describe("image and video providers", () => {
     }
   });
 
-  it("ARE a mock outside production, so the local loop needs no credentials", () => {
-    expect(selectImageProvider(developmentConfig())?.isMock).toBe(true);
-    expect(selectVideoProvider(developmentConfig())?.isMock).toBe(true);
+  it("are NULL in development when nothing is configured — unavailable, never a placeholder", () => {
+    expect(selectImageProvider(developmentConfig())).toBeNull();
+    expect(selectVideoProvider(developmentConfig())).toBeNull();
+  });
+
+  it("are a mock only when ALLOW_MOCK_PROVIDERS=true", () => {
+    expect(selectImageProvider(mocksAllowedConfig())?.isMock).toBe(true);
+    expect(selectVideoProvider(mocksAllowedConfig())?.isMock).toBe(true);
   });
 
   it("prefer the real provider over the mock when one is configured, even outside production", () => {
-    const withImage = developmentConfig({
+    const withImage = mocksAllowedConfig({
       IMAGE_BASE_URL: "http://127.0.0.1:9/v1",
       IMAGE_MODEL: "img-test",
     } as Partial<AppConfig>);
@@ -132,15 +157,16 @@ describe("image and video providers", () => {
     expect(provider?.name).toBe("stable-diffusion.cpp");
   });
 
-  it("prefers a local diffusion model over the mock outside production", () => {
-    const withLocal = developmentConfig({
+  it("prefers a local diffusion model over the mock even when mocks are allowed", () => {
+    const withLocal = mocksAllowedConfig({
       IMAGE_SD_CLI_PATH: process.execPath,
       IMAGE_SD_MODEL_PATH: process.execPath,
     } as Partial<AppConfig>);
     expect(selectImageProvider(withLocal)?.isMock).toBe(false);
   });
 
-  it("still falls back to the mock outside production when no local model is configured", () => {
-    expect(selectImageProvider(developmentConfig())?.isMock).toBe(true);
+  it("falls back to the mock only when mocks are allowed and no local model is configured", () => {
+    expect(selectImageProvider(mocksAllowedConfig())?.isMock).toBe(true);
+    expect(selectImageProvider(developmentConfig())).toBeNull();
   });
 });

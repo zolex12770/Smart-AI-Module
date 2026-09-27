@@ -161,6 +161,18 @@ const envFields = z.object({
    */
   WEB_FETCH_ALLOWLIST: optionalString,
   LLM_SUPPORTS_TOOLS: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  /**
+   * Whether the deterministic MOCK providers — a canned chat model, a labelled placeholder
+   * image, an animated GIF standing in for video — may be registered at all.
+   *
+   * Off by default, in every environment. It used to be implied by "not production": a
+   * development server with nothing configured answered chat from a stub and "generated"
+   * placeholder images, so a first run looked like a working product and was not one. With
+   * this off, an unconfigured capability reports itself unavailable instead. Test harnesses
+   * and the E2E server, which need deterministic providers to exercise the UI, set it
+   * explicitly. Refused in production below.
+   */
+  ALLOW_MOCK_PROVIDERS: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
   // Embeddings from the same runtime — real semantic retrieval with no hosted provider.
   EMBEDDING_BASE_URL: optionalString,
   EMBEDDING_MODEL: optionalString,
@@ -366,7 +378,7 @@ const envFields = z.object({
   VIDEO_SCRIPT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(300_000).optional(),
 });
 
-const envSchema = envFields
+export const envSchema = envFields
   /**
    * A half-configured video provider is refused on boot — ADR-085.
    *
@@ -378,6 +390,14 @@ const envSchema = envFields
    * production — where the mock is forbidden (ADR-013) — the capability would simply vanish.
    */
   .superRefine((config, ctx) => {
+    // ADR-013: a mock never serves production traffic, whatever else is configured.
+    if (config.NODE_ENV === "production" && config.ALLOW_MOCK_PROVIDERS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ALLOW_MOCK_PROVIDERS"],
+        message: "ALLOW_MOCK_PROVIDERS=true is refused under NODE_ENV=production: mock providers never serve real users (ADR-013).",
+      });
+    }
     if (!config.VIDEO_PROVIDER) return;
     for (const key of ["VIDEO_API_TOKEN", "VIDEO_MODEL_VERSION"] as const) {
       if (!config[key]) {
