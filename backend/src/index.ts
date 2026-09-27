@@ -218,6 +218,23 @@ async function main() {
   // A model runtime already running on this machine, when nothing was configured (ADR-118).
   const detectedRuntime = await detectLocalRuntime(config, logger);
   registerLlmProviders(config, registry, logger, detectedRuntime);
+
+  /**
+   * One set of agent ceilings, for the engine AND the context.
+   *
+   * These were two literals. The engine's lacked `nodeTimeoutMs`, so `AGENT_NODE_TIMEOUT_MS`
+   * (ADR-162) reached only `ctx.agentLimits`, which nothing enforces — the documented knob did
+   * nothing. `contextWindow` is the default model's, so a reasoning node keeps its prompt inside
+   * what the model can actually read.
+   */
+  const defaultContextWindow = registry.getDefault().capabilities().contextWindow;
+  const agentLimits = {
+    maxIterations: config.AGENT_MAX_ITERATIONS,
+    maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN,
+    // ADR-162 — undefined keeps each node type's planned deadline.
+    ...(config.AGENT_NODE_TIMEOUT_MS !== undefined ? { nodeTimeoutMs: config.AGENT_NODE_TIMEOUT_MS } : {}),
+    ...(defaultContextWindow ? { contextWindow: defaultContextWindow } : {}),
+  };
   const chatProviderCount = registry.list().length;
 
   /**
@@ -1266,10 +1283,7 @@ async function main() {
   const engine = new AgentEngine({
     // ADR-064 — ceilings for an autonomous `reasoning` node. Set by the operator, not by the
     // model: they are the harness's half of the bargain that lets the model drive execution.
-    agentLimits: {
-      maxIterations: config.AGENT_MAX_ITERATIONS,
-      maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN,
-    },
+    agentLimits,
     // docs/26_DECISIONS.md ADR-046 — the same quota gate and usage ledger the chat route
     // uses, so a real key's spend through agent tasks is bounded and visible too.
     meter: {
@@ -1499,12 +1513,7 @@ async function main() {
     sandbox,
     // Ceilings the model cannot raise. They live on the context rather than inside the loop
     // so an operator can see and change the bound without editing agent code.
-    agentLimits: {
-      maxIterations: config.AGENT_MAX_ITERATIONS,
-      maxTokensPerRun: config.AGENT_MAX_TOKENS_PER_RUN,
-      // ADR-162 — undefined keeps each node type's planned deadline.
-      ...(config.AGENT_NODE_TIMEOUT_MS !== undefined ? { nodeTimeoutMs: config.AGENT_NODE_TIMEOUT_MS } : {}),
-    },
+    agentLimits,
     semanticEmbeddingsAvailable,
     registry,
     mcp: mcpManager,

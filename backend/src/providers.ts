@@ -134,7 +134,7 @@ export function registerLlmProviders(
    * A model runtime found running on this machine (ADR-118). Used only when nothing was
    * configured explicitly, and never in production — `detectLocalRuntime` enforces both.
    */
-  detected?: { baseUrl: string; chatModel: string } | null
+  detected?: { baseUrl: string; chatModel: string; contextWindow?: number } | null
 ): void {
   // 1. Self-hosted runtime — Ollama, vLLM, llama.cpp's server, LM Studio, or any
   //    OpenAI-compatible gateway. No third-party account involved.
@@ -156,7 +156,8 @@ export function registerLlmProviders(
       new LocalOpenAICompatibleProvider({
         baseUrl: detected.baseUrl,
         model: detected.chatModel,
-        contextWindow: config.LLM_CONTEXT_WINDOW,
+        // The operator's figure wins; otherwise what the runtime itself reports serving.
+        contextWindow: config.LLM_CONTEXT_WINDOW ?? detected.contextWindow,
         // Ollama serves tool-calling for the models this prefers; a model that cannot will say so
         // through the adapter's own error rather than being silently downgraded here.
         supportsTools: true,

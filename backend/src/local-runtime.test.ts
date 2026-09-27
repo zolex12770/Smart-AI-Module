@@ -31,12 +31,50 @@ describe("detectLocalRuntime", () => {
       chatModel: "qwen2.5:7b",
       embeddingModel: "nomic-embed-text:latest",
       runtime: "ollama",
+      // Nothing loaded and no OLLAMA_CONTEXT_LENGTH: Ollama's own default, the pessimistic choice.
+      contextWindow: 4096,
+      contextWindowSource: "ollama_default",
     });
     // It says so at boot — silent adoption is how a surprise becomes a mystery.
     expect(log.info).toHaveBeenCalledWith(
       expect.objectContaining({ chat_model: "qwen2.5:7b" }),
       expect.stringContaining("local model runtime detected")
     );
+  });
+
+  describe("the context window the runtime actually serves", () => {
+    const runtime = (ps: unknown) =>
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/api/ps")
+          ? new Response(JSON.stringify(ps), { status: 200 })
+          : new Response(JSON.stringify({ models: [{ name: "qwen2.5:7b" }] }), { status: 200 })
+      ) as unknown as typeof fetch;
+
+    it("reads a loaded model's context_length from /api/ps — not the model's trained maximum", async () => {
+      const detected = await detectLocalRuntime({ NODE_ENV: "development" }, logger(), {
+        fetchImpl: runtime({ models: [{ name: "qwen2.5:7b", context_length: 16384 }] }),
+      });
+      expect(detected).toMatchObject({ contextWindow: 16384, contextWindowSource: "runtime" });
+    });
+
+    it("falls back to OLLAMA_CONTEXT_LENGTH when the model is not loaded yet", async () => {
+      vi.stubEnv("OLLAMA_CONTEXT_LENGTH", "8192");
+      try {
+        const detected = await detectLocalRuntime({ NODE_ENV: "development" }, logger(), {
+          fetchImpl: runtime({ models: [] }),
+        });
+        expect(detected).toMatchObject({ contextWindow: 8192, contextWindowSource: "OLLAMA_CONTEXT_LENGTH" });
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    it("assumes Ollama's 4096 default, never the model's maximum, when nothing says otherwise", async () => {
+      const detected = await detectLocalRuntime({ NODE_ENV: "development" }, logger(), {
+        fetchImpl: runtime({ models: [{ name: "some-other-model", context_length: 32768 }] }),
+      });
+      expect(detected).toMatchObject({ contextWindow: 4096, contextWindowSource: "ollama_default" });
+    });
   });
 
   it("never probes when a runtime was configured explicitly", async () => {

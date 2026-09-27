@@ -32,6 +32,48 @@ export interface DetectedRuntime {
   embeddingModel?: string;
   /** What answered — for the boot log and `/api/v1/providers`. */
   runtime: "ollama";
+  /**
+   * The chat model's context window AS THE RUNTIME SERVES IT, in tokens — not the model's
+   * trained maximum. qwen2.5:7b is trained to 32768, and Ollama serves it at 4096 unless told
+   * otherwise; a prompt past 4096 is truncated silently. See `resolveOllamaContextWindow`.
+   */
+  contextWindow: number;
+  contextWindowSource: "runtime" | "OLLAMA_CONTEXT_LENGTH" | "ollama_default";
+}
+
+/** What Ollama serves when neither the server nor the request sets a context length. */
+export const OLLAMA_DEFAULT_CONTEXT_LENGTH = 4096;
+
+/**
+ * The window the runtime will actually use for `model`.
+ *
+ * `/api/ps` reports `context_length` for a LOADED model, which is the truth. A model not yet
+ * loaded has no answer there; then `OLLAMA_CONTEXT_LENGTH` — the server's own variable, which a
+ * compose file sets for both containers — and failing that, Ollama's documented default. The
+ * last is the pessimistic choice: guessing low costs an earlier elision of old tool output,
+ * guessing high is the silent truncation this exists to prevent.
+ */
+export async function resolveOllamaContextWindow(
+  host: string,
+  model: string,
+  doFetch: typeof fetch,
+  signal?: AbortSignal
+): Promise<{ contextWindow: number; source: DetectedRuntime["contextWindowSource"] }> {
+  try {
+    const response = await doFetch(`${host}/api/ps`, { signal });
+    if (response.ok) {
+      const body = (await response.json()) as { models?: { name?: string; model?: string; context_length?: number }[] };
+      const loaded = (body.models ?? []).find((m) => m.name === model || m.model === model);
+      if (loaded && typeof loaded.context_length === "number" && loaded.context_length > 0) {
+        return { contextWindow: loaded.context_length, source: "runtime" };
+      }
+    }
+  } catch {
+    /* fall through to the configured or default length */
+  }
+  const configured = Number(process.env.OLLAMA_CONTEXT_LENGTH);
+  if (Number.isInteger(configured) && configured > 0) return { contextWindow: configured, source: "OLLAMA_CONTEXT_LENGTH" };
+  return { contextWindow: OLLAMA_DEFAULT_CONTEXT_LENGTH, source: "ollama_default" };
 }
 
 /** Models Ollama reports; `name` is what the OpenAI-compatible endpoint expects as `model`. */
@@ -87,11 +129,14 @@ export async function detectLocalRuntime(
       );
       return null;
     }
+    const window = await resolveOllamaContextWindow(host, chatModel, doFetch, controller.signal);
     const detected: DetectedRuntime = {
       baseUrl: `${host}/v1`,
       chatModel,
       embeddingModel: names.find((n) => EMBEDDING_NAME.test(n)),
       runtime: "ollama",
+      contextWindow: window.contextWindow,
+      contextWindowSource: window.source,
     };
     logger.info(
       {
@@ -99,6 +144,8 @@ export async function detectLocalRuntime(
         base_url: detected.baseUrl,
         chat_model: detected.chatModel,
         embedding_model: detected.embeddingModel ?? null,
+        context_window: detected.contextWindow,
+        context_window_source: detected.contextWindowSource,
       },
       "local model runtime detected — using it instead of the mock (override with LLM_BASE_URL/LLM_MODEL, EMBEDDING_BASE_URL/EMBEDDING_MODEL)"
     );

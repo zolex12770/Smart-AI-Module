@@ -182,6 +182,11 @@ export interface AgentEngineDeps {
      * has as much reason to LOWER it.
      */
     nodeTimeoutMs?: number;
+    /**
+     * The default model's context window in tokens, when known. A reasoning node keeps every
+     * prompt inside it rather than letting the runtime truncate silently (`fitToContextWindow`).
+     */
+    contextWindow?: number;
   };
   /**
    * Runs a `test_suite` node's command in the sandbox and reports its exit code (ADR-075).
@@ -941,7 +946,14 @@ export class AgentEngine {
             async *streamChat(request) {
               await checkTurnQuota(request.messages);
               yield* modelRouter.streamChat(
-                { messages: request.messages, tools: request.tools, toolChoice: request.toolChoice },
+                {
+                  messages: request.messages,
+                  tools: request.tools,
+                  toolChoice: request.toolChoice,
+                  // Dropped here until the context-window fix: without it a local runtime may
+                  // generate until its window is full, leaving the next prompt no room at all.
+                  ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+                },
                 { signal: controller.signal }
               );
             },
@@ -1100,6 +1112,7 @@ export class AgentEngine {
             signal: controller.signal,
             maxIterations: this.deps.agentLimits?.maxIterations,
             maxTotalTokens: this.deps.agentLimits?.maxTokensPerRun,
+            contextWindow: this.deps.agentLimits?.contextWindow,
           }
         )
       );
