@@ -8,7 +8,9 @@ rate limits, an audit log and metrics.
 It is model-agnostic. The same code runs on a local model (Ollama or any OpenAI-compatible server)
 or on Anthropic, OpenAI or Google. Every capability has been run end to end on **self-hosted
 software only**: Ollama (`qwen2.5:7b`, `nomic-embed-text`), stable-diffusion.cpp (SDXL), Piper and
-ffmpeg. Nothing answers with fake output. When a capability is not configured, it says so.
+ffmpeg. Nothing answers with fake output: mock providers exist only for tests, only when
+`ALLOW_MOCK_PROVIDERS=true`, and production refuses them. When a capability is not configured,
+it says so.
 
 **Status:** [docs/FINAL_PRODUCTION_READINESS_REPORT.md](docs/FINAL_PRODUCTION_READINESS_REPORT.md)
 has the verified status matrix and its evidence. It has not been deployed to a cloud:
@@ -72,7 +74,7 @@ Then open http://localhost:3000. See [docker/README.md](docker/README.md) and
 ## Verify it
 
 ```bash
-npm run typecheck && npm run lint && npm test          # 1137 passed, 0 failed
+npm run typecheck && npm run lint && npm test          # 1175 passed, 0 failed
 cd frontend && npx playwright test                      # browser end-to-end
 node scripts/acceptance/full-system.mjs                 # the whole user journey, real providers
 ```

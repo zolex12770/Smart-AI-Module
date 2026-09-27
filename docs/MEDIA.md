@@ -71,6 +71,9 @@ POST /api/v1/videos ──▶ project in `planning` (202 immediately)
   under a 25-second ceiling, which a local 7B model on four CPU cores did not meet. Every video
   then fell back to the deterministic storyboard ("Scene 1 of 2: <prompt>") with no narration,
   no audio track and no subtitles. The job's deadline is `VIDEO_SCRIPT_TIMEOUT_MS` (default 180 s).
+  The call asks for JSON mode, and one unusable (not truncated) reply gets one corrective retry;
+  both calls are metered. Measured after that change: 5 of 5 storyboards written by qwen2.5:7b,
+  26–30 s each.
 - **A fallback is recorded, never hidden.** If the storyboard stage cannot run, the project's
   `script.scriptSource` is `deterministic` and `script.fallbackReason` says why; the video page
   shows both.

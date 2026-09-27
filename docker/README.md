@@ -54,10 +54,15 @@ open http://localhost:3000
 | `postgres` | — | pgvector/pgvector:pg16. Migrations are applied by the API at boot |
 | `ollama` | 127.0.0.1:11434 | The model runtime, with a 16K context (`OLLAMA_CONTEXT_LENGTH`) |
 | `api` | 8787 | HTTP API (`ROLE=api`) |
-| `worker` | — | Document ingestion and media rendering (`ROLE=worker`), started after the API is healthy so the two never migrate at once |
+| `worker` | 127.0.0.1:9464 (metrics) | Document ingestion and media rendering (`ROLE=worker`), started after the API is healthy so the two never migrate at once. `GET /metrics` serves its Prometheus counters (`METRICS_PORT`) |
 | `web` | 3000 | The browser application |
 
 `docker compose ps` shows health; `docker compose logs -f api worker` shows what each is doing.
+
+For real image generation (and with it image-motion video), add the stable-diffusion.cpp overlay:
+`docker compose -f docker-compose.yml -f docker-compose.sdcpp.yml up -d` with `SD_CLI_DIR`,
+`SD_MODEL_DIR` and `IMAGE_SD_MODEL_FILE` set — see the overlay's header and docs/MEDIA.md. This
+exact stack, with SDXL, passed the full-system acceptance on 2026-09-27 (docs/evidence/).
 
 **What the compose file relaxes for one machine** is stated at its top: `COOKIE_SECURE=false`
 (plain-HTTP localhost), process isolation for the agent's sandbox inside the API container, and a

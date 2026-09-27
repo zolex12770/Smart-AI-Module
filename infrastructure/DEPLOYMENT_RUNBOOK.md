@@ -3,11 +3,11 @@
 Target architecture: [docs/18_CLOUD_ARCHITECTURE.md](../docs/18_CLOUD_ARCHITECTURE.md). Decision
 record: [docs/26_DECISIONS.md](../docs/26_DECISIONS.md) ADR-011, ADR-037.
 
-**This runbook has never actually been executed.** Every command below was reviewed and, where
-possible, verified in isolation (`docker build`'s inputs reviewed line by line — no Docker install
-exists in the environment that authored this file; the Terraform in `terraform/` was `init`ed and
-`validate`d for real, and a real `terraform plan` was run against a fake project id, reaching a
-real "no GCP credentials" error rather than a config error — see ADR-037). Running it for real
+**This runbook has never been executed against Google Cloud.** What has been verified: both
+images build (`docker build`, in CI and locally), the API image boots in each role, the whole
+stack runs under `docker-compose.yml` against a real Postgres, and the Terraform in `terraform/`
+passes `fmt`, `init` and `validate` (CI) — `plan` stops at "no GCP credentials", as it must without
+a project (ADR-037). See [docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md) for the verification status. Running it for real
 requires a GCP project with billing enabled and explicit authorization for the specific spend, per
 ADR-011 — do not run any step past "Prerequisites" without that authorization.
 
@@ -96,7 +96,8 @@ against a real standalone Postgres for the first time.
 
 ## 5. Verify
 
-- `curl https://<api-service-url>/api/v1/files` → `{"documents":[]}` on a fresh instance.
+- `curl https://<api-service-url>/api/health` → `{"status":"ok"}`, and
+  `curl https://<api-service-url>/api/v1/files` → `401` (every non-public route needs a session).
 - Open `https://<web-service-url>` → the chat screen should load and be able to reach the API
   (check the browser network tab for CORS errors — `CORS_ORIGIN` is wired to the web service's
   own URL automatically by `terraform/main.tf`).
@@ -115,8 +116,10 @@ against a real standalone Postgres for the first time.
 - **Generated assets in Cloud Storage (ADR-040) — the first time real GCS is in the loop.**
   Both units' boot logs should show `"assetStore":"gcs"` with the media bucket's name. After
   the image above reaches `succeeded`, `GET /api/v1/assets/<resultAssetId>` must return
-  `200 image/svg+xml`, and `gsutil ls gs://<media-bucket>/image/` must list
-  `<resultAssetId>.svg`. A `403` in the worker pool's logs on upload means the worker service
+  `200 image/png`, and `gsutil ls gs://<media-bucket>/image/` must list `<resultAssetId>.png`.
+  (Image generation needs a real image provider configured — `IMAGE_BASE_URL`/`IMAGE_MODEL`, or
+  stable-diffusion.cpp in the image; production never falls back to a placeholder, and without
+  one `POST /api/v1/images` answers `501 CAPABILITY_UNAVAILABLE`.) A `403` in the worker pool's logs on upload means the worker service
   account lacks `roles/storage.objectAdmin` on the bucket; a `403`/`404` on the API's read-back
   means the API service account does (they are separate identities, ADR-039). Nothing should
   appear under the instance's local `ASSETS_ROOT`.

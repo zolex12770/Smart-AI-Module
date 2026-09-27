@@ -231,6 +231,8 @@ unless explicitly acknowledged, and only for a process that runs the agent engin
 One image, three roles (`ROLE=all|api|worker`): the Cloud Run service runs `api`, a worker pool
 runs `worker`, and local development runs `all`. A worker never serves chat and therefore boots
 without any LLM provider — the fix for the crash-loop that made the whole deployment impossible.
+Metrics live in each process: the API serves its own at `/api/v1/admin/metrics`, and any role
+(the worker especially, which has no other listener) can serve `GET /metrics` on `METRICS_PORT`.
 The runtime contract — roles, security settings, `TRUST_PROXY_HOPS`, and how each application runs
 on its own — is in [DEPLOYMENT.md](DEPLOYMENT.md); the compose stack in `docker-compose.yml` runs
 `api` and `worker` as separate containers against one Postgres.

@@ -1,0 +1,29 @@
+{
+    "programs": [
+
+    ],
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "h264",
+            "codec_type": "video",
+            "width": 640,
+            "height": 360
+        },
+        {
+            "index": 1,
+            "codec_name": "aac",
+            "codec_type": "audio",
+            "sample_rate": "44100"
+        },
+        {
+            "index": 2,
+            "codec_name": "mov_text",
+            "codec_type": "subtitle"
+        }
+    ],
+    "format": {
+        "duration": "8.000000",
+        "size": "387577"
+    }
+}

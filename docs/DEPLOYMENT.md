@@ -7,19 +7,23 @@ Storage. The Terraform in `infrastructure/terraform/` and the runbook in
 its rate limit are in `docs/API.md`, generated from the route registrations (`npm run docs:api`)
 and checked against real requests by `backend/src/routes/api-contract.test.ts`.
 
-Nothing here has been deployed.
+Nothing here has been deployed to a cloud.
 
 ## Verification status — read this first
 
-| | Status |
-|---|---|
-| Production boot, all five configurations | **Verified locally** — `scripts/verify-boot.sh`, 7/7 against the real built entrypoint, on `fd5f5a5` |
-| Each application alone, from a fresh clone | **Verified locally** on `fd5f5a5` — `cd backend && npm run dev` answered `GET /api/health`; `cd frontend && npm run build` exited 0 |
-| `docker build` | **Never executed here** (no Docker installed). The CI workflow has a step for it, and CI has never run. |
-| `terraform apply` | **Never executed** (no GCP project). `init`/`validate`/`plan` were run for real; `fmt -check` and `validate` pass on `fd5f5a5`, after `TRUST_PROXY_HOPS` was added. |
-| `TRUST_PROXY_HOPS=1` behind Cloud Run | **Unverified** — there is no live service to check the hop count against. |
-| CI pipeline | **Never executed** (the repository has no remote). |
-| Real Cloud SQL / Cloud Storage / clamd sidecar | **Never exercised** against real services. |
+| | Status | Evidence |
+|---|---|---|
+| Production boot, every role and configuration | **PASS** | `scripts/verify-boot.sh` against the built entrypoint; CI boots the API image with `ROLE=worker` and no LLM key |
+| Each application alone, from a fresh clone | **PASS** | 2026-09-27, fresh clone of the pushed branch: `cd backend && npm install && npm run dev` answered `GET /api/health` (Ollama auto-detected); `cd frontend && npm install && npm run dev` served `/chat` with 200 |
+| `docker build` (both images) | **PASS** | CI `infrastructure` job builds `backend/Dockerfile` and `frontend/Dockerfile` (Debian `node:24-bookworm-slim`); locally built behind a TLS-intercepting proxy with the `build_ca` secret |
+| Docker Compose stack | **PASS** | 2026-09-27: postgres/pgvector, ollama, api, worker and web up and healthy; full-system acceptance against it 23/24, then the one failure (worker metrics unreachable) fixed and re-run PASS; a real browser chatted through the web container ([evidence](evidence/)) |
+| API image against a real Postgres | **PASS** | CI boots it (worker role) against `pgvector/pgvector:pg16` and checks the migrations created the schema. This path was broken until 2026-09-27 (pg-boss rejected an undefined backend) |
+| Real-container agent sandbox | **PASS** | `npm run test:docker -w @ai-platform/security`, 4/4, locally and in CI |
+| `terraform fmt` / `init` / `validate` | **PASS** | CI and locally (providers from a filesystem mirror where the registry is unreachable) |
+| `terraform plan` / `apply` | **BLOCKED_EXTERNAL** | needs a GCP project and credentials |
+| Cloud Run, Cloud SQL, Cloud Storage, clamd sidecar | **BLOCKED_EXTERNAL** | never exercised against the real services; GCS verified against `fake-gcs-server`, clamd against a real clamd with EICAR |
+| `TRUST_PROXY_HOPS=1` behind Cloud Run | **BLOCKED_EXTERNAL** | needs a live service to check the hop count against |
+| CI pipeline | **PASS** | GitHub Actions, all five jobs green (run 36316998578) |
 
 ## Roles
 
@@ -27,12 +31,14 @@ One image, three roles. This is what makes the deployment work, and what previou
 
 | `ROLE` | Serves HTTP | Runs job workers | Needs an LLM provider |
 |---|---|---|---|
-| `all` (local dev) | yes | yes | no — the mock serves development only |
-| `api` (Cloud Run service) | yes | no | **yes** |
-| `worker` (Cloud Run worker pool) | no | yes | **no** |
+| `all` (local dev) | yes | yes | no — without one it boots, and chat, RAG answers and the agent report that no model is configured |
+| `api` (Cloud Run service) | yes | only `video.plan` — the storyboard is a model call, and the API is where the model is | **yes** |
+| `worker` (Cloud Run worker pool) | no | yes: ingestion, scanning, image, speech, video scenes and render | **no** |
 
-A process refuses to start for lack of a chat provider **only if it serves chat**. The worker pool
-deliberately receives no LLM key and previously crash-looped on every boot because of it.
+A process refuses to start for lack of a chat provider **only if it serves chat**, and only in
+production. The worker pool deliberately receives no LLM key and previously crash-looped on every
+boot because of it. Mock providers exist only when `ALLOW_MOCK_PROVIDERS=true`, which production
+refuses.
 
 ## Running each application
 
@@ -55,8 +61,35 @@ listens on `PORT` (8787 by default) and accepts the web app's origin from `CORS_
 (`http://localhost:8787` when unset), which is fixed at build time.
 
 Each image builds from the repository root: `docker build -f backend/Dockerfile .` and
-`docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=<api-url> .` — neither has
-been run here.
+`docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=<api-url> .`. Building
+behind a TLS-intercepting proxy, or where huggingface.co is blocked, is covered in
+[docker/README.md](../docker/README.md).
+
+## Local stack with Docker Compose
+
+`docker-compose.yml` runs the production images on one machine: `postgres` (pgvector/pg16),
+`ollama` (16K context), `api` (`ROLE=api`), `worker` (`ROLE=worker`, started once the API is
+healthy so the two never migrate at once) and `web`. [docker/README.md](../docker/README.md)
+lists the services and ports and covers building behind a proxy.
+
+```bash
+docker compose up -d --build
+docker compose --profile setup run --rm ollama-pull      # once: qwen2.5:7b + nomic-embed-text
+# optional, real image and image-motion video generation from a local stable-diffusion.cpp:
+SD_CLI_DIR=/opt/sd SD_MODEL_DIR=/opt/models IMAGE_SD_MODEL_FILE=sd_turbo.safetensors \
+  docker compose -f docker-compose.yml -f docker-compose.sdcpp.yml up -d
+```
+
+The worker serves its own Prometheus metrics on `127.0.0.1:9464/metrics` (`METRICS_PORT`): its
+counters, which cover generations and most jobs, live in its process, which has no other
+listener. The API's are at `/api/v1/admin/metrics` (system administrator).
+
+What the file relaxes for a single machine, stated in its header: `COOKIE_SECURE=false` (plain
+http on localhost), the process sandbox for agent commands inside the API container (no Docker
+socket is mounted — see [SECURITY.md](SECURITY.md)), and a local-only Postgres password unless
+`POSTGRES_PASSWORD` is set. Set `BOOTSTRAP_ADMIN_EMAIL`/`BOOTSTRAP_ADMIN_PASSWORD` for a first
+administrator. Without the sd.cpp overlay (or `IMAGE_BASE_URL`/`IMAGE_MODEL`), image and video
+generation answer `CAPABILITY_UNAVAILABLE`.
 
 ## The AI runtime: pick one
 
@@ -64,7 +97,8 @@ been run here.
 
 ```
 LLM_BASE_URL=http://ollama:11434/v1
-LLM_MODEL=qwen2.5:14b
+LLM_MODEL=qwen2.5:7b          # what every real-model run here used; larger is better if it fits
+LLM_CONTEXT_WINDOW=16384      # must match the runtime's; Ollama: OLLAMA_CONTEXT_LENGTH=16384
 EMBEDDING_BASE_URL=http://ollama:11434/v1
 EMBEDDING_MODEL=nomic-embed-text
 EMBEDDING_DIMENSIONS=768
@@ -89,6 +123,7 @@ than one that will not start.
 | `CLAMD_HOST` | `127.0.0.1` | The `clamav/clamav` sidecar on the worker pool. |
 | `COOKIE_SECURE` | implied by `NODE_ENV=production` | Session cookies over TLS only. |
 | `CORS_ORIGIN` | the web service's URL | Wired automatically by Terraform. |
+| `METRICS_PORT` / `METRICS_TOKEN` | set on the worker pool if it is scraped; always with a token outside a private network | A metrics-only listener (`GET /metrics`). Labels carry no tenant data, but counts are still operational information. |
 | `TRUST_PROXY_HOPS` | `1` directly behind Cloud Run's front end (Terraform sets it); `2` behind an external HTTPS load balancer; `0`, the default, with nothing in front | `request.ip` — every per-IP rate limit and audit row — trusts only the `X-Forwarded-For` entries that many proxies appended (ADR-112). A number higher than the real hop count lets a caller choose its own address. The Cloud Run value is unverified against a live service. |
 
 ## First run
@@ -134,4 +169,6 @@ behind your own ingress policy if that is not what you want.
 - **Image and video generation are unavailable unless configured, and this Terraform configures
   neither.** Without the `IMAGE_*` settings (ADR-065), or `VIDEO_PROVIDER` with `VIDEO_API_TOKEN`
   and `VIDEO_MODEL_VERSION` (ADR-085), those routes return `CAPABILITY_UNAVAILABLE` (501) rather
-  than fake output. Both adapters are fixture-tested; neither has served a real request.
+  than fake output. Those two hosted adapters are fixture-tested and have served no real
+  request; the local stable-diffusion.cpp provider has (see [MEDIA.md](MEDIA.md)), and a Cloud
+  Run deployment would need it baked into the image or a GPU image service behind `IMAGE_BASE_URL`.

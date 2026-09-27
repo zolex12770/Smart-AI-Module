@@ -1,5 +1,11 @@
 # Feature Matrix
 
+> **Superseded, 2026-09-27.** This matrix was last reconciled on 2026-09-13 and is kept as the
+> per-phase record. Its statuses, counts and "UNVERIFIED here" notes predate the 2026-09-27
+> completion pass, which ran every capability against real providers and in Docker. The current
+> matrix is [PROJECT_STATUS.md](PROJECT_STATUS.md), with evidence in
+> [FINAL_PRODUCTION_READINESS_REPORT.md](FINAL_PRODUCTION_READINESS_REPORT.md).
+
 Authoritative, honest status per capability from the original project brief. Status values: **NOT STARTED**, **IN PROGRESS**, **MVP DONE** (works, minimally), **DONE** (meets its full requirement + tests), **MOCKED** (real interface + working mock, real integration pending credentials/authorization). This file is updated every phase — see [[25_IMPLEMENTATION_ROADMAP]] — and is more current than this document's prose elsewhere if they ever disagree.
 
 **Last reconciled against the source: 2026-09-13**, at `fd5f5a5`, after the third audit's fixes. Rows 11, 25, 28, 35, 38 and 39 take in ADR-108 to ADR-112, and rows 12, 29 and 33 each gained a sentence from them. Every other row's present-tense notes were then read against the code, and six were false: row 16 said "no multi-user auth yet", row 17 counted three real adapters plus a mock "all registered", row 18 counted 5 router tests, row 20 said job cancellation was not wired up, row 26 said there was no usage screen, and row 36 said RBAC and SSRF "remain explicitly deferred". Row 39 also still described the ADR-107 deletion rule that ADR-109 replaced, and row 25's "~90 tests", a figure no run had produced, is gone. No Status value changed. This reconciliation was done by reading routes and grepping the source, not by running anything, and the 2026-09-12 note below shows how far a claim to have re-checked every row can be trusted.

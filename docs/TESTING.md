@@ -11,14 +11,14 @@ and the browser suite's deterministic chat, and refused in production.
 |---|---|---|
 | Typecheck | `npm run typecheck` | 0 errors, every workspace |
 | Lint | `npm run lint` | 0 errors, 5 `no-console` warnings (CLI scripts) |
-| Unit + integration + API | `npm test` | **1137 passed, 2 skipped, 0 failed**, 132 test files |
+| Unit + integration + API | `npm test` | **1175 passed, 2 skipped, 0 failed**, 136 test files |
 | Frontend unit | part of `npm test` (`@ai-platform/web`, Vitest + Testing Library) | included above |
-| Browser end-to-end | `cd frontend && npx playwright test` | 14 tests in 5 specs, real API + real database |
+| Browser end-to-end | `cd frontend && npx playwright test` | **14 passed**, 5 specs, real API + real database |
 | Real-container sandbox | `npm run test:docker -w @ai-platform/security` | 4/4 against Docker 29 |
-| Boot | `bash scripts/verify-boot.sh` | the built entrypoint in every role and configuration |
-| Boundary | `bash scripts/verify-boundary.sh` | self-test + 7 rules |
+| Boot | `bash scripts/verify-boot.sh` | **8/8**: the built entrypoint in every role and configuration, including the refusals production must make |
+| Boundary | `bash scripts/verify-boundary.sh` | **8/8**: self-test + 7 rules |
 | API contract | part of `npm test` (`api-contract.test.ts`), plus `npm run docs:api` drift check in CI | one real request per documented route |
-| Full-system acceptance | `node scripts/acceptance/full-system.mjs` | see below; needs a running API |
+| Full-system acceptance | `node scripts/acceptance/full-system.mjs` | compose stack: 23/24, the failure fixed and re-run PASS; see below |
 
 ### What "integration" means here
 
@@ -57,7 +57,7 @@ providers and checks the **content** of each result, not its status code:
 |---|---|
 | AUTH-SIGNUP, AUTH-SESSION | an account is created; logout revokes the session server-side (the replayed cookie gets 401); login again works |
 | PROJECT-CREATE | a second project is created and listed; later checks run in it |
-| PROVIDERS | the configured providers are real (`isMock: false`) |
+| PROVIDERS | a real (non-mock) default chat model is configured; which image, video and speech providers are |
 | CHAT-STREAM | more than one token event, spread over time, from the real model, with token usage |
 | CHAT-HISTORY | a word planted in one turn is answered two turns later, continuing from the stored history |
 | MEMORY-FORMATION / RECALL / DELETE | a fact told in chat is extracted by the model, recalled in a **new** conversation, and deleted |

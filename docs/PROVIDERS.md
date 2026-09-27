@@ -51,6 +51,19 @@ tool's JSON Schema before anything runs; a hallucinated tool name goes through t
 is audited (ADR-159). Verified with qwen2.5:7b issuing real `tool_calls` through Ollama's
 OpenAI-compatible endpoint.
 
+A local model sometimes writes a call as **text** (a malformed `<tool_call>` block the runtime
+passes through as content). When a turn has no structured call, a well-formed
+`{"name": ..., "arguments": {...}}` naming a tool offered in that turn is recovered and runs through
+the same validation, approval and audit path. Anything else stays an answer (`text-tool-call.ts`).
+
+### JSON output
+
+`ChatRequest.responseFormat: "json_object"` asks for syntactically valid JSON where the provider can
+guarantee it: `response_format` on Ollama, vLLM and llama.cpp (grammar-constrained), `text.format`
+on the OpenAI Responses API, `responseMimeType` on Gemini. Anthropic has no equivalent, so it is
+ignored there. The video storyboard and memory extraction use it, and still validate the shape of
+what comes back.
+
 ## Embeddings
 
 | Provider | Selection | Verified here |

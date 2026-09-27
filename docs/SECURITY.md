@@ -340,6 +340,11 @@ address a failed login's audit row records at 0, 1 and 2 hops.
   handles anything sensitive should set it to the hosts it genuinely needs, which turns the
   channel off for every other destination. Egress is also not metered or quota-counted per
   project, so it is not visible in the usage ledger the way a model call is.
+- **The worker's metrics listener (`METRICS_PORT`) is unauthenticated unless `METRICS_TOKEN` is
+  set.** It serves only `GET /metrics`; the labels carry no tenant data (route, provider, model,
+  queue, outcome), but counts are operational information. Compose publishes it on loopback only;
+  anywhere else, set a token or keep the port on a private network. Production logs a warning
+  when it has none.
 - **Prompt injection is mitigated, not solved.** Untrusted content is structurally delimited and
   carries a trust-boundary system message; provenance tracking is not implemented, so a tool call
   that *results from* untrusted content is not automatically escalated for approval.
