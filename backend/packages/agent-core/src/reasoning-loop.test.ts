@@ -103,7 +103,7 @@ describe("runReasoningLoop", () => {
     );
 
     expect(executeTool).toHaveBeenCalledTimes(1);
-    expect(executeTool.mock.calls[0][0].call).toMatchObject({ name: "calculator", arguments: { expression: "17*23" } });
+    expect(executeTool.mock.calls[0]?.[0].call).toMatchObject({ name: "calculator", arguments: { expression: "17*23" } });
     expect(result.answer).toContain("391");
     expect(result.toolCallCount).toBe(1);
 
@@ -346,7 +346,7 @@ describe("runReasoningLoop recovers a tool call the model wrote as text", () => 
       { kind: "text", content: RECORDED },
       { kind: "text", content: "17 times 23 is 391." },
     ]);
-    const executeTool = vi.fn(async (): Promise<ToolExecutionOutcome> => ({ ok: true, content: "391" }));
+    const executeTool = vi.fn(async (_input: { call: ToolCall }): Promise<ToolExecutionOutcome> => ({ ok: true, content: "391" }));
 
     const result = await runReasoningLoop({ streamChat: provider.streamChat, tools: [CALCULATOR], executeTool }, [
       { role: "user", content: "What is 17*23?" },
