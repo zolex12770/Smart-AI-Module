@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { basename, resolve, sep } from "node:path";
+import { resolve, sep, win32 } from "node:path";
 
 /**
  * Command execution isolation (docs/13_SECURITY_ARCHITECTURE.md §6, ADR-055).
@@ -267,7 +267,8 @@ export function processSandboxArgs(
   workdir: string,
   nodeVersion = process.versions.node
 ): string[] {
-  const executable = basename(command).toLowerCase();
+  // win32.basename splits on both separators, so a Windows path is recognised on a Linux host too.
+  const executable = win32.basename(command).toLowerCase();
   if (executable !== "node" && executable !== "node.exe") return args;
   const flag = permissionFlagFor(nodeVersion);
   if (!flag) return args;
