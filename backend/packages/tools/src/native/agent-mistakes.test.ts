@@ -250,6 +250,29 @@ describe("a patch that changes nothing is not reported as applied", () => {
     expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
   });
 
+  it("code.replace_text says when oldText differs only in indentation, and shows the file's text (DL-25)", async () => {
+    // Verbatim from the final compose run: four spaces where the file has two, five times in a
+    // row. The patch tool said "different indentation"; this tool only said "not found", and the
+    // run ended at its turn limit on a one-character fix.
+    writeFileSync(join(workspaceOf(root), "sum.js"), SOURCE);
+    const tool = createCodingTools(root).find((t) => t.definition.id === "code.replace_text")!;
+    const result = await tool.handler({ path: "sum.js", oldText: "    return a - b;", newText: "    return a + b;" }, ctx());
+    expect(result.ok).toBe(false);
+    expect(String(result.error)).toMatch(/different indentation/);
+    expect(String(result.error)).toContain('"  return a - b;"');
+    expect(String(result.error)).toMatch(/line 2/);
+    // Diagnosis only: nothing is applied on a guess.
+    expect(readFileSync(join(workspaceOf(root), "sum.js"), "utf8")).toBe(SOURCE);
+  });
+
+  it("code.replace_text keeps the plain answer when the text is not there at all", async () => {
+    writeFileSync(join(workspaceOf(root), "sum.js"), SOURCE);
+    const tool = createCodingTools(root).find((t) => t.definition.id === "code.replace_text")!;
+    const result = await tool.handler({ path: "sum.js", oldText: "return a * b;", newText: "return a + b;" }, ctx());
+    expect(String(result.error)).toMatch(/was not found/);
+    expect(String(result.error)).not.toMatch(/indentation\b.*line \d/);
+  });
+
   it("applies a diff that really changes the line", async () => {
     // The guard must not refuse the fix the agent was actually supposed to make.
     writeFileSync(join(workspaceOf(root), "sum.cjs"), SOURCE);

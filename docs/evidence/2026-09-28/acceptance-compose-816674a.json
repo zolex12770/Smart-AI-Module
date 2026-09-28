@@ -1,0 +1,394 @@
+{
+  "api": "http://127.0.0.1:8787",
+  "startedAt": "2026-09-28T13:57:00.194Z",
+  "seconds": 1728.8,
+  "counts": {
+    "PASS": 23,
+    "FAIL": 1,
+    "BLOCKED_EXTERNAL": 0
+  },
+  "results": [
+    {
+      "id": "AUTH-SIGNUP",
+      "title": "Create an account",
+      "status": "PASS",
+      "seconds": 1.2,
+      "detail": "signed up journey-1790603820298-30215@example.com; default project 6f886172…, role admin",
+      "evidence": null
+    },
+    {
+      "id": "AUTH-SESSION",
+      "title": "Logout revokes the session; login restores it",
+      "status": "PASS",
+      "seconds": 0.6,
+      "detail": "logout 200; the old cookie replayed -> 401 (401 = revoked server-side); login again -> /auth/me 200",
+      "evidence": null
+    },
+    {
+      "id": "PROJECT-CREATE",
+      "title": "Create a project and work in it",
+      "status": "PASS",
+      "seconds": 0.1,
+      "detail": "created project 3d897b20…; the account now lists 2 project(s); all later checks run in it",
+      "evidence": null
+    },
+    {
+      "id": "PROVIDERS",
+      "title": "The platform states what it runs",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "chat models: local/qwen2.5:7b; default local/qwen2.5:7b; image stable-diffusion.cpp, video image-motion, speech piper",
+      "evidence": {
+        "models": {
+          "models": [
+            {
+              "provider": "local",
+              "model": "qwen2.5:7b",
+              "isMock": false,
+              "capabilities": {
+                "streaming": true,
+                "toolCalling": true,
+                "structuredOutput": true,
+                "vision": false,
+                "contextWindow": 16384
+              },
+              "qualityTier": 3,
+              "costHint": 1,
+              "latencyHint": 1,
+              "isDefault": true
+            }
+          ],
+          "default": "local"
+        },
+        "media": {
+          "providers": {
+            "chat": [
+              {
+                "name": "local",
+                "model": "qwen2.5:7b",
+                "isMock": false,
+                "selfHosted": true,
+                "toolCalling": true
+              }
+            ],
+            "embeddings": {
+              "name": "local:nomic-embed-text",
+              "semantic": true,
+              "note": "Retrieval matches meaning."
+            },
+            "image": {
+              "available": true,
+              "name": "stable-diffusion.cpp",
+              "isMock": false
+            },
+            "video": {
+              "available": true,
+              "name": "image-motion",
+              "isMock": false,
+              "technique": "a generated still (stable-diffusion.cpp) animated by ffmpeg — motion, not a video model"
+            },
+            "speech": {
+              "available": true,
+              "name": "piper",
+              "isMock": false
+            },
+            "malwareScanner": {
+              "available": false,
+              "name": null
+            },
+            "sandbox": {
+              "isolation": "process"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "CHAT-STREAM",
+      "title": "A real model answers, streamed progressively",
+      "status": "PASS",
+      "seconds": 14.7,
+      "detail": "local/qwen2.5:7b: 45 token events, first at 2450 ms, last at 14413 ms (spread 11963 ms); 39 in / 46 out; \"A unit test is a type of automated test that verifies the correctness of an indi\"",
+      "evidence": {
+        "answer": "A unit test is a type of automated test that verifies the correctness of an individual unit or the smallest testable part of a software program, such as a function or a method, in isolation from other parts of the program.",
+        "provider": "local",
+        "model": "qwen2.5:7b",
+        "firstTokenMs": 2450,
+        "lastTokenMs": 14413,
+        "tokenEvents": 45
+      }
+    },
+    {
+      "id": "CHAT-HISTORY",
+      "title": "The conversation is stored and continues",
+      "status": "PASS",
+      "seconds": 11.4,
+      "detail": "6 messages persisted in conversation 5143d733…; continued from the stored history, asked for the word planted two turns earlier (vermilion-416), it answered \"vermilion-416\"",
+      "evidence": null
+    },
+    {
+      "id": "MEMORY-FORMATION",
+      "title": "A fact told in one conversation is remembered without being filed by hand",
+      "status": "PASS",
+      "seconds": 25.1,
+      "detail": "the model extracted \"The user's project codename is NIGHTHAWK-356550.\" (scope user) from the turn",
+      "evidence": null
+    },
+    {
+      "id": "MEMORY-RECALL",
+      "title": "A NEW conversation answers from memory",
+      "status": "PASS",
+      "seconds": 5.4,
+      "detail": "new conversation (no conversationId) answered \"NIGHTHAWK-356550\" — expected NIGHTHAWK-356550",
+      "evidence": null
+    },
+    {
+      "id": "MEMORY-DELETE",
+      "title": "A deleted memory is no longer recalled",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "deleted 1 memory item(s) holding the codename; 0 remain",
+      "evidence": null
+    },
+    {
+      "id": "RAG-INGEST",
+      "title": "Upload a document; it is parsed, chunked and embedded",
+      "status": "PASS",
+      "seconds": 4.1,
+      "detail": "document 420749ea… reached \"ready\" (scan: skipped_no_scanner)",
+      "evidence": null
+    },
+    {
+      "id": "RAG-ANSWER",
+      "title": "A grounded answer, with a real citation",
+      "status": "PASS",
+      "seconds": 14.7,
+      "detail": "grounded=true outcome=grounded; \"An engineer receives 27 days of paid leave per calendar year. [1]\"; 1 source(s), the handbook's excerpt cited: true",
+      "evidence": {
+        "question": "How many days of paid leave does an engineer receive?",
+        "answer": "An engineer receives 27 days of paid leave per calendar year. [1]",
+        "sources": [
+          {
+            "marker": "[1]",
+            "documentId": "420749ea-7fae-4c46-aad2-609e41a9b3fd",
+            "filename": "handbook.txt",
+            "chunkIndex": 0,
+            "distance": 0.14,
+            "excerpt": "Employee Handbook\n\nAn engineer receives 27 days of paid leave per calendar year.\nLeave requests go to the people team at least two weeks in advance.\n\nThe on-call rotation is weekly and begins each Wednesday at 10:00 UTC."
+          }
+        ],
+        "grounded": true,
+        "outcome": "grounded",
+        "retrievedCount": 1,
+        "model": "qwen2.5:7b",
+        "provider": "local"
+      }
+    },
+    {
+      "id": "RAG-REFUSAL",
+      "title": "No evidence, no answer — and a refusal is never called grounded",
+      "status": "PASS",
+      "seconds": 4,
+      "detail": "grounded=false outcome=refused; \"The provided documents do not contain the answer to this question.\"",
+      "evidence": {
+        "question": "What is the company's policy on adopting a pet at the office?",
+        "answer": "The provided documents do not contain the answer to this question.",
+        "sources": [
+          {
+            "marker": "[1]",
+            "documentId": "420749ea-7fae-4c46-aad2-609e41a9b3fd",
+            "filename": "handbook.txt",
+            "chunkIndex": 0,
+            "distance": 0.549,
+            "excerpt": "Employee Handbook\n\nAn engineer receives 27 days of paid leave per calendar year.\nLeave requests go to the people team at least two weeks in advance.\n\nThe on-call rotation is weekly and begins each Wednesday at 10:00 UTC."
+          }
+        ],
+        "grounded": false,
+        "outcome": "refused",
+        "retrievedCount": 1,
+        "model": "qwen2.5:7b",
+        "provider": "local"
+      }
+    },
+    {
+      "id": "IMAGE",
+      "title": "Generate a 512×512 image of a red apple on a wooden table",
+      "status": "PASS",
+      "seconds": 547,
+      "detail": "stable-diffusion.cpp in 547 s: image/png, 369699 bytes, 512×512; luminance stddev 75.9, 420 distinct colours, red-dominant pixels 3%",
+      "evidence": {
+        "png": {
+          "ok": true,
+          "width": 512,
+          "height": 512,
+          "bitDepth": 8,
+          "colorType": 2,
+          "interlace": 0,
+          "pixelsMeasured": true,
+          "luminanceMean": 103,
+          "luminanceStddev": 75.9,
+          "distinctColours": 420,
+          "reddishShare": 0.029
+        },
+        "bytes": 369699
+      }
+    },
+    {
+      "id": "AUDIO",
+      "title": "Synthesise speech and play it back",
+      "status": "PASS",
+      "seconds": 6.1,
+      "detail": "piper in 6.1 s: audio/wav, 130860 bytes, 16000 Hz, 4.09 s, RMS 0.154 (0 = silence)",
+      "evidence": {
+        "wav": {
+          "ok": true,
+          "audioFormat": 1,
+          "channels": 1,
+          "sampleRate": 16000,
+          "bitsPerSample": 16,
+          "durationSeconds": 4.09,
+          "rms": 0.154
+        }
+      }
+    },
+    {
+      "id": "VIDEO",
+      "title": "Prompt → script → storyboard → narration → subtitles → visuals → MP4",
+      "status": "PASS",
+      "seconds": 595.3,
+      "detail": "succeeded in 595.3 s: 2 scene(s), 2 narrated, storyboard model; MP4 436270 bytes, 8.0 s, streams [video:h264, audio:aac, subtitle:mov_text]; WebVTT valid",
+      "evidence": {
+        "probe": {
+          "programs": [],
+          "streams": [
+            {
+              "codec_name": "h264",
+              "codec_type": "video",
+              "width": 640,
+              "height": 360,
+              "duration": "8.000000"
+            },
+            {
+              "codec_name": "aac",
+              "codec_type": "audio",
+              "duration": "8.000000"
+            },
+            {
+              "codec_name": "mov_text",
+              "codec_type": "subtitle",
+              "duration": "7.048000"
+            }
+          ],
+          "format": {
+            "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+            "duration": "8.000000"
+          }
+        },
+        "scenes": [
+          {
+            "index": 0,
+            "status": "succeeded",
+            "narration": "Bees collect nectar from flowers."
+          },
+          {
+            "index": 1,
+            "status": "succeeded",
+            "narration": "Nectar is shared and mixed with enzymes in the hive."
+          }
+        ]
+      }
+    },
+    {
+      "id": "CODING-AGENT",
+      "title": "The agent fixes the SOURCE so the test passes, and the fix is verified independently",
+      "status": "FAIL",
+      "seconds": 481.7,
+      "detail": "task FAILED in 481.6 s (The agent stopped after 12 turns (max_iterations) without reaching an answer.); source changed: false; test file untouched: true; independent run: exit 1: node:assert:150",
+      "evidence": {
+        "task": {
+          "id": "0904ae1f-3eea-42c6-9fdc-f56ccfd878f7",
+          "projectId": "3d897b20-929b-4b95-9b0d-84b36aa14aad",
+          "createdByUserId": "1c2de2d0-f56b-42bf-8fb5-b2033c7beea1",
+          "taskType": "fix_failing_test",
+          "state": "FAILED",
+          "input": {
+            "testFile": "sum.test.cjs"
+          },
+          "output": null,
+          "errorMessage": "The agent stopped after 12 turns (max_iterations) without reaching an answer.",
+          "leaseOwner": "engine-9cd87bc2-67f0-4b9c-875b-e090433c1c35",
+          "leaseExpiresAt": 1790605589914,
+          "version": 4,
+          "cancelRequestedAt": null,
+          "createdAt": 1790605049894,
+          "updatedAt": 1790605531379
+        },
+        "source": "function sum(a, b) {\n  return a - b;\n}\n\nmodule.exports = { sum };\n"
+      }
+    },
+    {
+      "id": "MCP",
+      "title": "A tool served by a real MCP server runs inside an agent task, in this project only",
+      "status": "PASS",
+      "seconds": 12.6,
+      "detail": "task COMPLETED: reference-filesystem (stdio) read \"The keeper's code word is lantern-519.\"; the model answered \"lantern-519\" (expected lantern-519); a path outside the workspace: refused",
+      "evidence": null
+    },
+    {
+      "id": "USAGE",
+      "title": "Tokens spent are metered",
+      "status": "PASS",
+      "seconds": 0.1,
+      "detail": "this project spent 42208 tokens today across the calls above (scope organization)",
+      "evidence": null
+    },
+    {
+      "id": "QUOTA",
+      "title": "A request over a configured limit is refused before any work, and says why",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "limit 60 s/month, 8 s used; asked for 56 s -> 429 QUOTA_EXCEEDED: \"Monthly video-seconds limit of 60 would be exceeded (8s used so far this month).\"; video projects before/after: 1/1",
+      "evidence": null
+    },
+    {
+      "id": "AUDIT",
+      "title": "The project's audit trail records what happened in it",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "17 entries, all in this project: true; actions: tool.call.mcp, tool.call, project.create",
+      "evidence": null
+    },
+    {
+      "id": "TENANT-ISOLATION",
+      "title": "Another tenant cannot read this one's data",
+      "status": "PASS",
+      "seconds": 1.2,
+      "detail": "victim's conversation, document and workspace file -> 404, 404, 404; the intruder's own workspace has no sum.js -> 404",
+      "evidence": null
+    },
+    {
+      "id": "METRICS",
+      "title": "Prometheus metrics carry real values",
+      "status": "PASS",
+      "seconds": 0.6,
+      "detail": "API 200, http://127.0.0.1:9464/metrics 200; summed: http_requests_total 694, provider_request_count 26, token_usage_total 42208, generation_total 4, job_processed_total 7, tool_call_count 16",
+      "evidence": null
+    },
+    {
+      "id": "PERSISTENCE",
+      "title": "Log out, log back in: everything is still there",
+      "status": "PASS",
+      "seconds": 0.5,
+      "detail": "after a fresh login: 3 conversation(s) in the project; the handbook -> 200",
+      "evidence": null
+    },
+    {
+      "id": "RATE-LIMIT",
+      "title": "A route's limit is enforced and says when to retry",
+      "status": "PASS",
+      "seconds": 2.5,
+      "detail": "429 RATE_LIMITED; retry-after 58 s; limit 30",
+      "evidence": null
+    }
+  ]
+}

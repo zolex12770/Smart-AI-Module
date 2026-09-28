@@ -704,3 +704,26 @@ this needs a consumer that pauses for 300 s.
 - The partial and full charges cannot both apply to one turn.
 - Migration 0006 matches the schema.
 - A browser with H.264 does not skip the MP4 source.
+
+## DL-25: `code.replace_text` says when only the indentation is wrong
+
+**Context.** The full `npm run verify` on `816674a` gave 18 PASS and 1 FAIL
+(`evidence/2026-09-28/verify-run3-816674a.json`). CODING-AGENT, which had passed in 4 of 4
+earlier runs, stopped at its 12-turn limit on the one-character `sum.js` fix. The audit log shows
+the model found the right fix (`a - b` → `a + b`) and then:
+- quoted `return a - b;` with 3 or 4 spaces where the file has 2;
+- had one diff refused by `code.apply_patch` with "the same text with different indentation";
+- was told five times in a row by `code.replace_text` only that `oldText was not found`, which
+  gave it nothing to correct.
+
+Every tool call ran correctly, and DL-24's empty token plays no part. The gap is the unequal
+diagnosis between the two tools.
+
+**Decision.** When `oldText` is not found but matches exactly one place in the file once leading
+whitespace is ignored, the error says so and quotes the file's own lines, with the line number.
+It is a diagnosis only. Nothing is applied on a guess, because indentation can be meaningful
+(Python, YAML).
+
+**Test.** `agent-mistakes.test.ts` replays the call from the audit log. The file stays unchanged,
+the error names the indentation and quotes `"  return a - b;"` at line 2. The plain answer is kept
+when the text is not there at all. The first test fails against the previous code.

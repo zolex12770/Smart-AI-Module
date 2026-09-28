@@ -232,6 +232,16 @@ export function createCodingTools(root: string): NativeToolEntry[] {
           const replacement = newText.replace(/\r\n|\r|\n/g, eol);
           const first = content.indexOf(find);
           if (first === -1) {
+            const near = findIgnoringIndentation(content, find, eol);
+            if (near) {
+              return {
+                ok: false,
+                error:
+                  `oldText was not found in "${path}" exactly, but the file has the same text with different ` +
+                  `indentation at line ${near.line}: ${JSON.stringify(near.text)}. Use that text, exactly as ` +
+                  `shown, as oldText, and indent newText the same way.`,
+              };
+            }
             return {
               ok: false,
               error:
@@ -256,4 +266,24 @@ export function createCodingTools(root: string): NativeToolEntry[] {
       },
     },
   ];
+}
+
+/**
+ * The file's own text for `find` when the two differ only in leading whitespace, and the match
+ * is unique — DL-25. A diagnosis for the error message, never a match the edit is applied to:
+ * qwen2.5:7b sent four spaces where the file has two, five times in a row, and "not found" gave
+ * it nothing to correct. `code.apply_patch` already said "different indentation".
+ */
+function findIgnoringIndentation(content: string, find: string, eol: string): { line: number; text: string } | null {
+  const wanted = find.split(eol).map((l) => l.trim());
+  while (wanted.length > 0 && wanted[wanted.length - 1] === "") wanted.pop();
+  if (wanted.length === 0 || wanted.every((l) => l === "")) return null;
+  const lines = content.split(eol);
+  const matches: number[] = [];
+  for (let i = 0; i + wanted.length <= lines.length; i++) {
+    if (wanted.every((w, k) => lines[i + k].trim() === w)) matches.push(i);
+  }
+  if (matches.length !== 1) return null;
+  const at = matches[0];
+  return { line: at + 1, text: lines.slice(at, at + wanted.length).join("\n") };
 }
