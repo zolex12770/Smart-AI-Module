@@ -113,6 +113,33 @@ describe("LocalOpenAICompatibleProvider", () => {
     expect(done.message.toolCalls).toHaveLength(1);
   });
 
+  it("signals life on the first chunk of a turn that answers only with a tool call (DL-24)", async () => {
+    // Tool-call fragments are buffered until the stream ends, so a turn writing a long diff
+    // yielded NOTHING until then: the router never committed, and a turn cut off mid-diff by a
+    // deadline or a cancel was not charged at all. One empty token marks that the runtime answered.
+    const fetchImpl = respondWith(
+      sse(
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "code.apply_patch", arguments: '{"diff":' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"x"}' } }] } }] },
+        { choices: [{ delta: {}, finish_reason: "tool_calls" }], usage: { prompt_tokens: 9, completion_tokens: 4 } }
+      )
+    );
+    const provider = new LocalOpenAICompatibleProvider({ ...base, fetchImpl });
+    const events = await collect(provider, { messages: [{ role: "user", content: "fix it" }], tools: [{ name: "code.apply_patch", description: "d", inputSchema: { type: "object" } }] });
+    expect(events[0]).toEqual({ type: "token", delta: "" });
+    expect(events.filter((e) => e.type === "token")).toHaveLength(1);
+    expect(events.some((e) => e.type === "tool_call")).toBe(true);
+  });
+
+  it("adds no empty token to a turn that starts with text", async () => {
+    const fetchImpl = respondWith(
+      sse({ choices: [{ delta: { content: "Hi" } }] }, { choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } })
+    );
+    const provider = new LocalOpenAICompatibleProvider({ ...base, fetchImpl });
+    const events = await collect(provider, { messages: [{ role: "user", content: "hi" }] });
+    expect(events.filter((e) => e.type === "token")).toEqual([{ type: "token", delta: "Hi" }]);
+  });
+
   it("maps assistant tool calls and tool results back onto the wire format", async () => {
     const fetchImpl = respondWith(sse({ choices: [{ delta: { content: "2" }, finish_reason: "stop" }] }));
     const provider = new LocalOpenAICompatibleProvider({ ...base, fetchImpl });

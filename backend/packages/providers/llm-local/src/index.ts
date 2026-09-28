@@ -182,6 +182,7 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
       let outputTokens = 0;
       let finishReason: FinishReason = "unknown";
       let sawAnyChunk = false;
+      let signalledLife = false;
       // Streamed tool calls arrive fragmented and out of order; `index` is the only stable key.
       const partialCalls = new Map<number, { id: string; name: string; args: string }>();
 
@@ -214,6 +215,14 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
         if (delta?.content) {
           content += delta.content;
           yield { type: "token", delta: delta.content };
+        }
+        // Sign of life for a turn that answers with a tool call — DL-24. Its fragments are
+        // buffered until the stream ends, so nothing was yielded before then: the router never
+        // committed, and a turn cut off mid-call (a deadline, a cancel) was charged nothing.
+        // One empty token, only when no text came first, marks that this runtime is answering.
+        if (!signalledLife && !content && delta?.tool_calls?.length) {
+          signalledLife = true;
+          yield { type: "token", delta: "" };
         }
         for (const tc of delta?.tool_calls ?? []) {
           const existing = partialCalls.get(tc.index) ?? { id: "", name: "", args: "" };

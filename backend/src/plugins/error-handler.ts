@@ -70,7 +70,7 @@ export function isDatabaseUnreachable(err: unknown): boolean {
     const code = (current as { code?: unknown }).code;
     if (typeof code === "string" && (CONNECTION_CODES.has(code) || code.startsWith("08"))) return true;
     const message = (current as { message?: unknown }).message;
-    if (typeof message === "string" && /Connection terminated|connect ECONNREFUSED|getaddrinfo (ENOTFOUND|EAI_AGAIN)/.test(message)) return true;
+    if (typeof message === "string" && /Connection terminated|connect ECONNREFUSED|getaddrinfo (ENOTFOUND|EAI_AGAIN)|timeout exceeded when trying to connect/.test(message)) return true;
     current = (current as { cause?: unknown }).cause;
   }
   return false;

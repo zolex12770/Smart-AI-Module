@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDb,
   runMigrations,
@@ -199,6 +199,56 @@ describe.skipIf(!hasFfmpeg)("processVideoRender with a REAL ffmpeg (ADR-069)", (
     expect(decode.status).toBe(0);
     expect(decode.stderr).toMatch(/Input #0, matroska,webm/);
     expect(decode.stderr).toMatch(/Video: vp9/);
+  });
+
+  /**
+   * DL-24, from the audit of DL-19: the MP4 and both caption files were stored BEFORE the WebM
+   * step, so a cancel observed at that step left three assets referenced by nothing. Now nothing
+   * is stored until every ffmpeg step has run.
+   */
+  it("stores nothing when the render is cancelled just before its last ffmpeg step", async () => {
+    // A wrapper that logs each ffmpeg call, so the test can cancel at an exact step.
+    const dir = mkdtempSync(join(tmpdir(), "ffmpeg-wrap-"));
+    const log = join(dir, "calls.log");
+    const wrapper = join(dir, "ffmpeg");
+    writeFileSync(wrapper, `#!/bin/sh\necho x >> "${log}"\nexec "${FFMPEG}" "$@"\n`);
+    chmodSync(wrapper, 0o755);
+    const calls = () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).length : 0);
+    try {
+      // A normal run, to learn how many ffmpeg calls a render makes.
+      const measured = await seedProjectWithClips(2);
+      writeFileSync(log, "");
+      await processVideoRender({ projectRepo, sceneRepo, assetRepo, assetStore: store, ffmpegPath: wrapper }, { projectId: PROJECT, videoProjectId: measured });
+      const total = calls();
+      expect(total).toBeGreaterThan(2);
+
+      const videoProjectId = await seedProjectWithClips(2);
+      writeFileSync(log, "");
+      // The cancel request appears once every call but the last (the WebM encode) has run.
+      const cancelling = new Proxy(projectRepo, {
+        get(target, prop, receiver) {
+          if (prop === "get") {
+            return async (projectId: string, id: string) => {
+              const row = await target.get(projectId, id);
+              return row && calls() >= total - 1 ? { ...row, cancelRequestedAt: new Date() } : row;
+            };
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+      const stored = vi.spyOn(store, "store");
+      const outcome = await processVideoRender(
+        { projectRepo: cancelling, sceneRepo, assetRepo, assetStore: store, ffmpegPath: wrapper },
+        { projectId: PROJECT, videoProjectId }
+      );
+      expect(outcome.renderStatus).toBe("failed");
+      expect((await projectRepo.get(PROJECT, videoProjectId))?.status).toBe("cancelled");
+      expect(stored).not.toHaveBeenCalled();
+      expect(calls()).toBe(total - 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("produces a container ffmpeg itself can read back — not merely a non-empty file", async () => {

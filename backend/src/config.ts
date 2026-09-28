@@ -479,7 +479,14 @@ export function loadConfig(): AppConfig {
     // Paths only — never the values, some of which are secrets.
     console.log(`Loaded environment from: ${envFiles.join(", ")}`);
   }
-  const parsed = envSchema.safeParse(process.env);
+  // Blank means unset, for every setting — DL-24. A compose file's `${X-default}` or `${X:-}`
+  // passes an empty value through, and `z.coerce.number()` reads "" as 0: an empty
+  // AGENT_NODE_TIMEOUT_MS failed `min(1000)` and stopped the boot. Strings were already treated
+  // this way one field at a time; doing it once here covers every field, including new ones.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([, value]) => !(typeof value === "string" && value.trim() === ""))
+  );
+  const parsed = envSchema.safeParse(env);
   if (!parsed.success) {
     console.error("Invalid environment configuration:", parsed.error.flatten().fieldErrors);
     process.exit(1);

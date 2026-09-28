@@ -87,6 +87,10 @@ describe("loadConfig treats an empty environment value as unset", () => {
     "MONTHLY_VIDEO_SECONDS_LIMIT",
     "DAILY_TOKEN_LIMIT",
     "LLM_CONTEXT_WINDOW",
+    "AGENT_NODE_TIMEOUT_MS",
+    "PORT",
+    "IMAGE_SD_STEPS",
+    "TRUST_PROXY_HOPS",
   ];
   const saved: Record<string, string | undefined> = {};
 
@@ -128,6 +132,22 @@ describe("loadConfig treats an empty environment value as unset", () => {
     const config = loadConfig();
     expect(config.DATABASE_URL).toBeUndefined();
     expect(config.CLAMD_HOST).toBeUndefined();
+  });
+
+  it("reads EVERY blank numeric setting as unset, not as 0 (DL-24)", () => {
+    // The audit of DL-20: compose's `${AGENT_NODE_TIMEOUT_MS-1800000}` passes an empty value
+    // through when the operator sets it empty, as its comment invited. `Number("")` is 0, which
+    // fails `min(1000)`, and neither the API nor the worker booted. The same was true of all 23
+    // coerced numeric settings except the few wrapped one by one.
+    process.env.AGENT_NODE_TIMEOUT_MS = "";
+    process.env.PORT = " ";
+    process.env.IMAGE_SD_STEPS = "";
+    process.env.TRUST_PROXY_HOPS = "";
+    const config = loadConfig();
+    expect(config.AGENT_NODE_TIMEOUT_MS).toBeUndefined();
+    expect(config.PORT).toBe(8787);
+    expect(config.IMAGE_SD_STEPS).toBe(1);
+    expect(config.TRUST_PROXY_HOPS).toBe(0);
   });
 
   it("reads a blank numeric limit as unset — a compose file's `${LIMIT:-}` must not stop the boot", () => {

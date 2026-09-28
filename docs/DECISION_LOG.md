@@ -658,3 +658,49 @@ no process matched.
 - `src/plugins/outage-responses.test.ts`: liveness with a cookie; the 503; the classifier,
   including an unreachable model runtime not being called a database outage.
 - `llm-local/src/index.test.ts`: the unreachable embedding runtime.
+
+## DL-24: The fresh audit of DL-19 to DL-23
+
+An independent audit reviewed the code changed by DL-19 to DL-23. It found no P1. Every finding
+below was reproduced or checked against the code before it was fixed.
+
+**P2: an empty numeric setting stopped the boot.** The compose comment on `AGENT_NODE_TIMEOUT_MS`
+(DL-20) says "set it empty". `${X-default}` passes the empty value through, and
+`z.coerce.number()` reads `""` as 0, which fails `min(1000)`. Reproduced: `AGENT_NODE_TIMEOUT_MS=`
+gives "Invalid environment configuration". The same was true of all 23 coerced numeric settings
+except the few wrapped one by one.
+- **Fix:** `loadConfig` drops blank values before parsing, so blank means unset for every field,
+  including future ones.
+- **Test:** `config.test.ts` sets four of them blank.
+
+**P2: a turn that answers only with a tool call could not be charged when cut off.** The local
+provider buffers tool-call fragments until the stream ends. Nothing was yielded before then, so
+the router never committed, and DL-21's partial charge never applied to the typical slow turn: a
+long diff.
+- **Fix:** the provider yields one empty `token` on the first tool-call fragment, and only when
+  no text came first. The router commits on it, and an interrupted turn is charged at least its
+  prompt. The arguments still buffered at that moment cannot be counted, so the estimate
+  undercounts that turn's output.
+- **Test:** `llm-local/src/index.test.ts` covers the empty token and its absence when text comes
+  first.
+
+**P3: a cancel before the WebM step left three orphaned assets.** The MP4 and both caption files
+were stored before the WebM encode, whose cancellation check then threw.
+- **Fix:** every asset is stored after the last ffmpeg step.
+- **Test:** `video-render.integration.test.ts` runs real ffmpeg through a wrapper that counts
+  calls. It cancels exactly before the last call and asserts that nothing was stored. It fails
+  against the previous code, which stored the MP4.
+
+**P3: a pool connect timeout was not classified as an outage.** pg's "timeout exceeded when trying
+to connect" carries no code, so it answered 500. It now answers 503.
+
+**P3, accepted: the silence deadline also runs while the consumer is paused between reads.** Every
+consumer (the agent loop, chat, extraction and the warm-up) reads the stream continuously, so
+this needs a consumer that pauses for 300 s.
+
+**Checked and clean** (by the auditor):
+- `anonymousPaths` cannot bypass deny-by-default.
+- The blank-context rule does not absorb headers or trailing lines.
+- The partial and full charges cannot both apply to one turn.
+- Migration 0006 matches the schema.
+- A browser with H.264 does not skip the MP4 source.

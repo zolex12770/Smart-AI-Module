@@ -513,9 +513,11 @@ export async function processVideoRender(
     const cues = buildSubtitleCues(subtitleInputs);
     let subtitleAssetId: string | null = null;
     let subtitleVttAssetId: string | null = null;
+    // Stored only after the last ffmpeg step (below), so a cancel cannot leave them orphaned.
+    let srt: string | null = null;
 
     if (cues.length > 0) {
-      const srt = renderSrt(cues);
+      srt = renderSrt(cues);
       const srtPath = join(workDir, "subtitles.srt");
       await writeFile(srtPath, srt, "utf8");
 
@@ -547,25 +549,7 @@ export async function processVideoRender(
         void detail;
       }
 
-      subtitleAssetId = await deps.assetStore.store(
-        scope.projectId,
-        Buffer.from(srt, "utf8"),
-        "application/x-subrip",
-        "srt",
-        "video"
-      );
-      subtitleVttAssetId = await deps.assetStore.store(
-        scope.projectId,
-        Buffer.from(renderVtt(cues), "utf8"),
-        "text/vtt",
-        "vtt",
-        "video"
-      );
     }
-
-    const finalBytes = await readFile(finalPath);
-    // Owned by the same tenant as the clips it was assembled from — nothing else could serve it.
-    const assetId = await deps.assetStore.store(scope.projectId, finalBytes, "video/mp4", "mp4", "video");
 
     /**
      * The WebM rendition — DL-19.
@@ -575,10 +559,13 @@ export async function processVideoRender(
      * browser built without the patent-encumbered codecs is in the same position, so the player
      * offers both and lets the browser choose. It is a second output, not a replacement: when
      * this ffmpeg lacks libvpx-vp9 or libopus the MP4 still ships, and the reason is returned.
-     * Cancellation is not swallowed — it reaches the handler below like any other step's.
+     * Cancellation is not swallowed — it reaches the handler below like any other step's. It
+     * runs BEFORE anything is stored (DL-24): a cancel during it used to leave the MP4 and both
+     * caption files stored with nothing referencing them.
      */
     let webmAssetId: string | null = null;
     let webmError: string | null = null;
+    let webmProduced = false;
     const webmPath = join(workDir, "final.webm");
     try {
       await ffmpeg([
@@ -608,10 +595,27 @@ export async function processVideoRender(
         "-sn",
         webmPath,
       ]);
-      webmAssetId = await deps.assetStore.store(scope.projectId, await readFile(webmPath), "video/webm", "webm", "video");
+      webmProduced = true;
     } catch (webmFailure) {
       if (webmFailure instanceof RenderCancelled) throw webmFailure;
       webmError = describeFailureForCaller("render", webmFailure);
+    }
+
+    // Every ffmpeg step is done; from here nothing checks for cancellation, so what is stored is used.
+    if (srt !== null) {
+      subtitleAssetId = await deps.assetStore.store(scope.projectId, Buffer.from(srt, "utf8"), "application/x-subrip", "srt", "video");
+      subtitleVttAssetId = await deps.assetStore.store(
+        scope.projectId,
+        Buffer.from(renderVtt(cues), "utf8"),
+        "text/vtt",
+        "vtt",
+        "video"
+      );
+    }
+    // Owned by the same tenant as the clips it was assembled from — nothing else could serve it.
+    const assetId = await deps.assetStore.store(scope.projectId, await readFile(finalPath), "video/mp4", "mp4", "video");
+    if (webmProduced) {
+      webmAssetId = await deps.assetStore.store(scope.projectId, await readFile(webmPath), "video/webm", "webm", "video");
     }
 
     await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {

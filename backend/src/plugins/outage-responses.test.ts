@@ -57,6 +57,8 @@ describe("isDatabaseUnreachable", () => {
     expect(isDatabaseUnreachable({ query: "select 1", cause: { code: "ECONNREFUSED" } })).toBe(true);
     expect(isDatabaseUnreachable({ query: "select 1", cause: { cause: { code: "57P01" } } })).toBe(true);
     expect(isDatabaseUnreachable({ query: "select 1", cause: { code: "08006" } })).toBe(true);
+    // A pool that cannot get a connection in time carries no code, only this message (DL-24).
+    expect(isDatabaseUnreachable({ query: "select 1", cause: new Error("timeout exceeded when trying to connect") })).toBe(true);
   });
 
   it("does not call a query that failed for another reason an outage", () => {
