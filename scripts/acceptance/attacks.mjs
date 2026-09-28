@@ -13,7 +13,8 @@
  * Results: $ACCEPT_OUT/attacks.json and attacks.md; exit 1 on any FAIL.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { request as httpRequest } from "node:http";
+import { connect as netConnect } from "node:net";
+import { connect as tlsConnect } from "node:tls";
 import { join } from "node:path";
 import { API, Client, requireRunningApi } from "../lib/acceptance.mjs";
 
@@ -185,23 +186,63 @@ await check("UPLOAD-VALIDATION", "Uploads are allow-listed and sniffed, not trus
   return verdict(failures, "executable, disguised HTML and SVG all refused with 400");
 });
 
+/**
+ * The status the server sends for an oversized POST, read off the raw socket.
+ *
+ * The server answers 413 as soon as it has read the Content-Length header, and closes the
+ * connection. A client still uploading then sees EPIPE or ECONNRESET — fetch always, node:http
+ * sometimes, depending on which arrives first (a run on the final image lost that race). Reading
+ * the socket while writing, and stopping at the status line, observes what the server actually
+ * sent, whatever happens to the upload afterwards.
+ */
+function oversizedPostStatus(url, headers, bytes) {
+  const target = new URL(url);
+  const secure = target.protocol === "https:";
+  const port = Number(target.port || (secure ? 443 : 80));
+  return new Promise((resolve) => {
+    const socket = secure
+      ? tlsConnect({ host: target.hostname, port, servername: target.hostname })
+      : netConnect({ host: target.hostname, port });
+    let received = "";
+    let settled = false;
+    const settle = (value) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.on("data", (chunk) => {
+      received += chunk.toString("latin1");
+      const status = /^HTTP\/1\.[01] (\d{3})/.exec(received);
+      if (status) settle(Number(status[1]));
+    });
+    socket.on("error", () => setTimeout(() => settle(received ? `unparseable response: ${received.slice(0, 40)}` : "connection closed without a response"), 50));
+    socket.on("close", () => settle(received ? `unparseable response: ${received.slice(0, 40)}` : "connection closed without a response"));
+    socket.once(secure ? "secureConnect" : "connect", async () => {
+      const head =
+        `POST ${target.pathname}${target.search} HTTP/1.1\r\nHost: ${target.host}\r\n` +
+        Object.entries(headers).map(([k, v]) => `${k}: ${v}\r\n`).join("") +
+        `content-length: ${bytes}\r\nconnection: close\r\n\r\n`;
+      socket.write(head);
+      const chunk = Buffer.alloc(64 * 1024, "x");
+      for (let sent = 0; sent < bytes && !settled && !socket.destroyed; sent += chunk.length) {
+        if (!socket.write(chunk.subarray(0, Math.min(chunk.length, bytes - sent)))) {
+          await new Promise((r) => socket.once("drain", r).once("close", r));
+        }
+      }
+    });
+  });
+}
+
 // --- 7. Oversized and malformed input ---------------------------------------------------------------
 await check("MALFORMED-INPUT", "Oversized bodies, bad JSON and hostile ids fail cleanly (4xx, never 5xx)", async () => {
   const failures = [];
-  // node:http rather than fetch: the server answers 413 and closes while the body is still being
-  // sent, and fetch reports that as a network error instead of the response it received.
-  const bigStatus = await new Promise((resolve) => {
-    const req = httpRequest(`${API}/api/v1/memory`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: alice.cookie, "x-csrf-token": alice.csrf, "x-project-id": alice.projectId },
-    });
-    req.on("response", (res) => {
-      res.resume();
-      resolve(res.statusCode);
-    });
-    req.on("error", () => resolve("connection closed without a response"));
-    req.end(JSON.stringify({ content: "x".repeat(8 * 1024 * 1024) }));
-  });
+  const bigStatus = await oversizedPostStatus(`${API}/api/v1/memory`, {
+    "content-type": "application/json",
+    cookie: alice.cookie,
+    "x-csrf-token": alice.csrf,
+    "x-project-id": alice.projectId,
+  }, 8 * 1024 * 1024);
   if (bigStatus !== 413) failures.push(`8 MiB body → ${bigStatus}`);
   const res = await fetch(`${API}/api/v1/memory`, {
     method: "POST",

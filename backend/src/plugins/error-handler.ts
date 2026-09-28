@@ -7,7 +7,7 @@ import { AppError } from "@ai-platform/shared";
  * them into an HTTP response, so the shape is consistent everywhere.
  */
 export function registerErrorHandler(app: FastifyInstance): void {
-  app.setErrorHandler((err: FastifyError | Error, request, reply) => {
+  app.setErrorHandler(async (err: FastifyError | Error, request, reply) => {
     // The REQUEST's id, not a fresh one (ADR-098). This minted its own UUID, so the id handed
     // to the caller appeared in exactly one log line and could not be used to find the rest of
     // that request's trail. `genReqId` now makes `request.id` a UUID, so it is both unique
@@ -30,6 +30,8 @@ export function registerErrorHandler(app: FastifyInstance): void {
     const statusCode = "statusCode" in err && typeof err.statusCode === "number" ? err.statusCode : 500;
     if (statusCode >= 400 && statusCode < 500) {
       request.log.warn({ err, requestId }, "client error");
+      // Answered only once the refused upload has been read (DL-26); see drainUnreadBody.
+      if (statusCode === 413 && !(await drainUnreadBody(request.raw))) return reply;
       reply.status(statusCode).send({
         error: { code: "code" in err ? String(err.code) : "BAD_REQUEST", message: err.message, requestId },
       });
@@ -74,4 +76,40 @@ export function isDatabaseUnreachable(err: unknown): boolean {
     current = (current as { cause?: unknown }).cause;
   }
   return false;
+}
+
+/**
+ * Read and discard the rest of a refused upload, and only then answer — DL-26.
+ *
+ * Fastify refuses a body as soon as Content-Length (or the running count) exceeds the limit, with
+ * most of the upload still in flight. Answering at once and then closing a socket that still has
+ * unread data sends a TCP RST, and the client's kernel discards the unread 413 when it arrives.
+ * Measured against the built server: 12 of 20 keep-alive uploads, and 18 of 20 with
+ * `Connection: close` (which Node closes right after the response), saw "connection closed"
+ * instead of "too large". Answering after the client has finished sending removes the race.
+ * Bounded: past MAX_DRAIN_BYTES or DRAIN_TIMEOUT_MS the socket is destroyed and false returned.
+ */
+const MAX_DRAIN_BYTES = 64 * 1024 * 1024;
+const DRAIN_TIMEOUT_MS = 10_000;
+
+export function drainUnreadBody(raw: import("node:http").IncomingMessage): Promise<boolean> {
+  if (raw.complete || raw.destroyed || raw.readableEnded) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let drained = 0;
+    const finish = (ok: boolean) => {
+      clearTimeout(timer);
+      raw.removeListener("data", onData);
+      if (!ok) raw.socket?.destroy();
+      resolve(ok);
+    };
+    const onData = (chunk: Buffer) => {
+      drained += chunk.length;
+      if (drained > MAX_DRAIN_BYTES) finish(false);
+    };
+    const timer = setTimeout(() => finish(false), DRAIN_TIMEOUT_MS);
+    raw.on("data", onData);
+    raw.once("end", () => finish(true));
+    raw.once("close", () => finish(raw.complete));
+    raw.resume();
+  });
 }

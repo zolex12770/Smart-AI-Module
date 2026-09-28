@@ -727,3 +727,39 @@ It is a diagnosis only. Nothing is applied on a guess, because indentation can b
 **Test.** `agent-mistakes.test.ts` replays the call from the audit log. The file stays unchanged,
 the error names the indentation and quotes `"  return a - b;"` at line 2. The plain answer is kept
 when the text is not there at all. The first test fails against the previous code.
+
+## DL-26: An oversized upload is answered, not reset
+
+**Context.** The attack suite, run again on the final image, had one failure. MALFORMED-INPUT's
+8 MiB POST saw "connection closed without a response", where two earlier runs had seen 413.
+
+Reading the raw socket reproduced it against the Node process itself, inside the container and
+against the locally built server. That rules out Docker's port proxy.
+
+The cause: Fastify refuses a body as soon as Content-Length exceeds the limit, and the error
+handler answered at once. With most of the upload still unread, closing the socket sends a TCP
+RST, and the client's kernel discards the 413 it has not yet delivered.
+
+Measured against the built server:
+
+| Connection mode | Lost |
+|---|---|
+| Keep-alive, which is what browsers send | 12 of 20 |
+| `Connection: close`, which Node closes right after the response | 18 of 20 |
+
+So a user uploading a file that was too large often saw a network error instead of "too large".
+
+**Decision.**
+- For a 413, the error handler reads and discards the rest of the upload, and answers only after
+  that (`drainUnreadBody`).
+- It is bounded: past 64 MiB or 10 seconds the socket is destroyed.
+- Answering straight away and draining afterwards fixed keep-alive but not `Connection: close`,
+  because Node destroys that socket as soon as the response ends. That is why the answer waits.
+- After the fix, against the built server: 20 of 20 keep-alive and 20 of 20 `Connection: close`
+  uploads received their 413.
+
+**Tests.** `src/plugins/oversized-body.test.ts` sends the uploads from a separate Node process
+over a real socket. In one process, the client's writes and the server's reads share an event
+loop, and the race never happens. The keep-alive case fails against the previous handler (10 of
+15 resets). `attacks.mjs` now reads the raw socket too, so it reports what the server sent
+rather than which side of the race the client landed on.
