@@ -116,6 +116,13 @@ command.
 **`deb.debian.org` is blocked.**
 The images are Debian-based. Build where it is reachable, or use a mirror.
 
+**The sandbox suite (or `verify`'s DOCKER gate) fails with exit code 125, or a pull answers "429 Too
+Many Requests".**
+Exit code 125 means `docker run` could not start the container, usually because the sandbox
+image `node:22-alpine` is missing and Docker Hub is rate-limiting anonymous pulls. Pull it from
+Google's Docker Hub mirror, then tag it:
+`docker pull mirror.gcr.io/library/node:22-alpine && docker tag mirror.gcr.io/library/node:22-alpine node:22-alpine`.
+
 **The worker's metrics are not scraped.**
 The worker has no HTTP listener of its own. Set `METRICS_PORT` (compose uses 9464) and scrape
 that. Set `METRICS_TOKEN` off a private network.

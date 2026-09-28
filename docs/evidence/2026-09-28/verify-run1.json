@@ -1,0 +1,119 @@
+{
+  "finishedAt": "2026-09-28T12:59:21.637Z",
+  "results": [
+    {
+      "gate": "BUILD",
+      "status": "PASS",
+      "detail": "all workspaces built",
+      "seconds": 33
+    },
+    {
+      "gate": "TYPECHECK",
+      "status": "PASS",
+      "detail": "0 errors",
+      "seconds": 52
+    },
+    {
+      "gate": "LINT",
+      "status": "PASS",
+      "detail": "0 errors, 5 warnings",
+      "seconds": 34
+    },
+    {
+      "gate": "UNIT",
+      "status": "PASS",
+      "detail": "996 passed, 0 failed, 2 skipped (26 workspaces)",
+      "seconds": 456
+    },
+    {
+      "gate": "INTEGRATION",
+      "status": "PASS",
+      "detail": "273 passed, 0 failed, 0 skipped (backend application)",
+      "seconds": 280
+    },
+    {
+      "gate": "API",
+      "status": "PASS",
+      "detail": "76 routes documented, each requested once; no drift",
+      "seconds": 8
+    },
+    {
+      "gate": "SECURITY",
+      "status": "FAIL",
+      "detail": "npm audit: no high/critical; possible secrets in backend/packages/tools/src/native/terminal-isolation.test.ts; no mock serves production",
+      "seconds": 3
+    },
+    {
+      "gate": "E2E",
+      "status": "PASS",
+      "detail": "Playwright: 14 passed",
+      "seconds": 52
+    },
+    {
+      "gate": "DATABASE",
+      "status": "PASS",
+      "detail": "migrations apply to an empty DB, re-apply cleanly, match the schema",
+      "seconds": 5
+    },
+    {
+      "gate": "BOUNDARY",
+      "status": "PASS",
+      "detail": "frontend/backend boundary holds",
+      "seconds": 1
+    },
+    {
+      "gate": "BOOT",
+      "status": "PASS",
+      "detail": "every role boots",
+      "seconds": 41
+    },
+    {
+      "gate": "REAL RUNTIME",
+      "status": "PASS",
+      "detail": "AUTH-SIGNUP=PASS AUTH-SESSION=PASS PROVIDERS=PASS CHAT-STREAM=PASS CHAT-HISTORY=PASS USAGE=PASS TENANT-ISOLATION=PASS PERSISTENCE=PASS",
+      "seconds": 0
+    },
+    {
+      "gate": "MEDIA",
+      "status": "PASS",
+      "detail": "IMAGE=PASS AUDIO=PASS VIDEO=PASS",
+      "seconds": 0
+    },
+    {
+      "gate": "AGENT",
+      "status": "PASS",
+      "detail": "CODING-AGENT=PASS",
+      "seconds": 0
+    },
+    {
+      "gate": "RAG",
+      "status": "PASS",
+      "detail": "RAG-INGEST=PASS RAG-ANSWER=PASS RAG-REFUSAL=PASS",
+      "seconds": 0
+    },
+    {
+      "gate": "MEMORY",
+      "status": "PASS",
+      "detail": "MEMORY-FORMATION=PASS MEMORY-RECALL=PASS MEMORY-DELETE=PASS",
+      "seconds": 0
+    },
+    {
+      "gate": "MCP",
+      "status": "PASS",
+      "detail": "MCP=PASS",
+      "seconds": 0
+    },
+    {
+      "gate": "DOCKER",
+      "status": "FAIL",
+      "detail": "real-container sandbox suite failed: 1 passed, 3 failed, 0 skipped",
+      "seconds": 9
+    },
+    {
+      "gate": "TERRAFORM",
+      "status": "PASS",
+      "detail": "fmt, init, validate pass (plan/apply need GCP credentials: docs/PRODUCTION_DEPLOYMENT_BLOCKER.md)",
+      "seconds": 15
+    }
+  ]
+}
