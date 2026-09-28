@@ -152,6 +152,12 @@ const envFields = z.object({
   // This is what lets the platform run with no third-party AI provider at all.
   LLM_BASE_URL: optionalString,
   LLM_MODEL: optionalString,
+  /**
+   * Load the self-hosted chat model in the background at boot (default on). Without it the first
+   * user after a restart waits for a multi-gigabyte load — measured at over five minutes from a
+   * cold disk, long enough for Ollama's own load deadline to fail the request.
+   */
+  LLM_WARMUP: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
   LLM_API_KEY: optionalString,
   LLM_CONTEXT_WINDOW: optionalPositiveInt,
 

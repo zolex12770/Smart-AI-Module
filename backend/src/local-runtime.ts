@@ -194,8 +194,19 @@ function normaliseHost(value: string | undefined): string | undefined {
  * Running `-version` is the only answer that means anything: it resolves the name, proves the
  * binary executes, and costs milliseconds once at boot.
  */
-export async function probeFfmpeg(ffmpegPath: string, timeoutMs = 5_000): Promise<boolean> {
-  return probeBinary(ffmpegPath, ["-version"], timeoutMs);
+export async function probeFfmpeg(ffmpegPath: string, timeoutMs = 30_000, attempts = 2): Promise<boolean> {
+  /**
+   * Generous, and retried — found by restarting the compose stack on a cold machine. The probe
+   * used a 5 s ceiling; while the model runtime was reading 5 GB from an uncached disk, `ffmpeg
+   * -version` took longer than that, the probe answered "not installed", and video generation
+   * stayed disabled for the life of the process on a machine that had ffmpeg all along. A binary
+   * that is absent fails at once (ENOENT), so a long ceiling costs nothing there; it only waits
+   * for one that is present but slow.
+   */
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    if (await probeBinary(ffmpegPath, ["-version"], timeoutMs)) return true;
+  }
+  return false;
 }
 
 /**
@@ -266,4 +277,30 @@ export async function probeBinary(command: string, args: string[], timeoutMs: nu
     child.on("error", () => done(false));
     child.on("close", () => done(true));
   });
+}
+
+/**
+ * Asks the default chat model for one token, in the background, so it is loaded before anyone
+ * waits on it — see `LLM_WARMUP`. Never throws and never blocks the boot: a failure is logged,
+ * and the first real request then simply pays the load as it always did.
+ */
+export async function warmUpChatModel(
+  provider: { name: string; model?: string; streamChat(request: { messages: Array<{ role: "user"; content: string }>; maxOutputTokens?: number }): AsyncIterable<{ type: string }> },
+  logger: Pick<Logger, "info" | "warn">,
+  now: () => number = Date.now
+): Promise<boolean> {
+  const started = now();
+  try {
+    for await (const event of provider.streamChat({ messages: [{ role: "user", content: "Reply with: ok" }], maxOutputTokens: 1 })) {
+      if (event.type === "done") {
+        logger.info({ provider: provider.name, model: provider.model, ms: now() - started }, "chat model warmed up");
+        return true;
+      }
+      if (event.type === "error") break;
+    }
+    logger.warn({ provider: provider.name, ms: now() - started }, "chat model warm-up ended without an answer");
+  } catch (error) {
+    logger.warn({ provider: provider.name, ms: now() - started, error: error instanceof Error ? error.message : String(error) }, "chat model warm-up failed");
+  }
+  return false;
 }

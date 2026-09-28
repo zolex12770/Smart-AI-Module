@@ -92,7 +92,7 @@ import { sql } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import { loadConfig, SECRET_CONFIG_KEYS, type AppConfig, resolveListenHost } from "./config.js";
-import { detectLocalRuntime, detectLocalSpeech, probeFfmpeg } from "./local-runtime.js";
+import { detectLocalRuntime, detectLocalSpeech, probeFfmpeg, warmUpChatModel } from "./local-runtime.js";
 import { startMetricsServer } from "./metrics-server.js";
 import { registerLlmProviders, selectImageProvider, selectVideoProvider } from "./providers.js";
 import type { AppContext } from "./context.js";
@@ -289,6 +289,12 @@ async function main() {
       ? "LLM providers registered"
       : "no LLM provider registered — expected for a worker-role process, fatal for one that serves chat"
   );
+  // Only a self-hosted runtime has a load to hide, and only a process that serves chat needs it
+  // loaded. Not awaited: boot must not wait on a model.
+  if (config.LLM_WARMUP && runs.http && chatProviderCount > 0) {
+    const chatDefault = registry.getDefault();
+    if (chatDefault.name === "local") void warmUpChatModel(chatDefault, logger);
+  }
 
   const sandboxRoot = resolve(config.SANDBOX_ROOT);
   mkdirSync(sandboxRoot, { recursive: true });

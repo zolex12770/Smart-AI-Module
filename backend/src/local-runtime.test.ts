@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { detectLocalRuntime, detectLocalSpeech, pickChatModel, probeBinary, probeFfmpeg } from "./local-runtime.js";
+import { detectLocalRuntime, detectLocalSpeech, pickChatModel, probeBinary, probeFfmpeg, warmUpChatModel } from "./local-runtime.js";
 
 /**
  * Adopting the model runtime already running on this machine — docs/26_DECISIONS.md ADR-118.
@@ -187,6 +187,18 @@ describe("pickChatModel", () => {
  * a real executable from a name that resolves to nothing, not whether ffmpeg is installed here.
  */
 describe("probeFfmpeg", () => {
+  it("waits for a binary that is present but slow to start, instead of calling it absent", async () => {
+    // A stand-in for ffmpeg on a cold, overloaded machine: it answers after 6 s, past the old 5 s ceiling.
+    const slow = join(tmpdir(), `slow-ffmpeg-${process.pid}.sh`);
+    writeFileSync(slow, "#!/bin/sh\nsleep 6\necho ffmpeg version fake\n");
+    chmodSync(slow, 0o755);
+    try {
+      expect(await probeFfmpeg(slow)).toBe(true);
+    } finally {
+      rmSync(slow, { force: true });
+    }
+  }, 30_000);
+
   it("reports a binary that really runs", async () => {
     expect(await probeFfmpeg(process.execPath, 15_000)).toBe(true);
   });
@@ -285,5 +297,44 @@ describe("detectLocalSpeech", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("warmUpChatModel", () => {
+  const logger = () => ({ info: vi.fn(), warn: vi.fn() });
+
+  it("asks for a single token and reports the load time", async () => {
+    const seen: Array<{ maxOutputTokens?: number }> = [];
+    const log = logger();
+    const ok = await warmUpChatModel(
+      {
+        name: "local",
+        model: "qwen2.5:7b",
+        async *streamChat(request) {
+          seen.push(request);
+          yield { type: "done" };
+        },
+      },
+      log
+    );
+    expect(ok).toBe(true);
+    expect(seen[0].maxOutputTokens).toBe(1);
+    expect(log.info).toHaveBeenCalledWith(expect.objectContaining({ model: "qwen2.5:7b" }), "chat model warmed up");
+  });
+
+  it("never throws: a runtime that is down is logged and the boot carries on", async () => {
+    const log = logger();
+    const ok = await warmUpChatModel(
+      {
+        name: "local",
+        // eslint-disable-next-line require-yield
+        async *streamChat() {
+          throw new Error("connect ECONNREFUSED 127.0.0.1:11434");
+        },
+      },
+      log
+    );
+    expect(ok).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ error: expect.stringMatching(/ECONNREFUSED/) }), "chat model warm-up failed");
   });
 });
