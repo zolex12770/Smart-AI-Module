@@ -76,6 +76,8 @@ export interface VideoProject {
   /** Captions for the finished render (ADR-122); null when it had no narration. */
   subtitleAssetId: string | null;
   subtitleVttAssetId: string | null;
+  /** The WebM rendition of the render (DL-19); null when none was produced. */
+  renderWebmAssetId: string | null;
   renderError: string | null;
   /** The render slot — see `claimRenderSlot`. Null means no render has been enqueued yet. */
   renderRequestedAt: Date | null;
@@ -127,6 +129,7 @@ export interface VideoProjectRepository {
       renderError?: string;
       subtitleAssetId?: string | null;
       subtitleVttAssetId?: string | null;
+      renderWebmAssetId?: string | null;
     }
   ): Promise<void>;
   /**
@@ -191,6 +194,7 @@ export class PgVideoProjectRepository implements VideoProjectRepository {
       renderAssetId: null,
       subtitleAssetId: null,
       subtitleVttAssetId: null,
+      renderWebmAssetId: null,
       renderError: null,
       renderRequestedAt: null,
       errorMessage: null,
@@ -227,6 +231,7 @@ export class PgVideoProjectRepository implements VideoProjectRepository {
       renderError?: string;
       subtitleAssetId?: string | null;
       subtitleVttAssetId?: string | null;
+      renderWebmAssetId?: string | null;
     }
   ): Promise<void> {
     await this.db
@@ -238,6 +243,7 @@ export class PgVideoProjectRepository implements VideoProjectRepository {
         ...(patch.renderError !== undefined ? { renderError: patch.renderError } : {}),
         ...(patch.subtitleAssetId !== undefined ? { subtitleAssetId: patch.subtitleAssetId } : {}),
         ...(patch.subtitleVttAssetId !== undefined ? { subtitleVttAssetId: patch.subtitleVttAssetId } : {}),
+        ...(patch.renderWebmAssetId !== undefined ? { renderWebmAssetId: patch.renderWebmAssetId } : {}),
       })
       .where(and(eq(videoProjects.id, id), eq(videoProjects.projectId, projectId)));
   }

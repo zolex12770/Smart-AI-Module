@@ -596,6 +596,13 @@ export const videoProjects = pgTable(
      */
     subtitleAssetId: text("subtitle_asset_id").references(() => assets.id, { onDelete: "set null" }),
     subtitleVttAssetId: text("subtitle_vtt_asset_id").references(() => assets.id, { onDelete: "set null" }),
+    /**
+     * The same video as WebM (VP9 + Opus), beside the MP4 (DL-19). H.264/AAC is not available to
+     * every browser — open-source Chromium builds and some Linux Firefox installs ship without
+     * them — and a video that cannot play is not delivered. Null when the render predates this or
+     * the ffmpeg build lacks the encoders; the MP4 is then the only rendition.
+     */
+    renderWebmAssetId: text("render_webm_asset_id").references(() => assets.id, { onDelete: "set null" }),
     renderError: text("render_error"),
     /** Guards against two settling scenes enqueuing two render jobs (ADR-053). */
     renderRequestedAt: timestamp("render_requested_at", { withTimezone: true }),

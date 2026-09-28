@@ -1,0 +1,2 @@
+ALTER TABLE "video_projects" ADD COLUMN "render_webm_asset_id" text;--> statement-breakpoint
+ALTER TABLE "video_projects" ADD CONSTRAINT "video_projects_render_webm_asset_id_assets_id_fk" FOREIGN KEY ("render_webm_asset_id") REFERENCES "public"."assets"("id") ON DELETE set null ON UPDATE no action;

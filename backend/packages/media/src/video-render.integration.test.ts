@@ -164,6 +164,43 @@ describe.skipIf(!hasFfmpeg)("processVideoRender with a REAL ffmpeg (ADR-069)", (
     expect(asset!.sizeBytes).toBe(bytes.byteLength);
   });
 
+  /**
+   * DL-19: the MP4 alone does not play in a browser without H.264/AAC (measured in the
+   * Playwright Chromium), so a WebM rendition ships beside it. A build that cannot encode it
+   * must still ship the MP4 and say why the WebM is missing.
+   */
+  it("stores a VP9 WebM rendition beside the MP4 when this ffmpeg can encode one", async () => {
+    const videoProjectId = await seedProjectWithClips(2);
+    const outcome = await processVideoRender(
+      { projectRepo, sceneRepo, assetRepo, assetStore: store, ffmpegPath: FFMPEG },
+      { projectId: PROJECT, videoProjectId }
+    );
+    const project = await projectRepo.get(PROJECT, videoProjectId);
+    expect(project?.renderStatus).toBe("succeeded");
+    expect(project?.renderAssetId).toBeTruthy();
+
+    const encoders = execFileSync(FFMPEG!, ["-hide_banner", "-encoders"], { encoding: "utf8", timeout: 20_000 });
+    if (!/libvpx-vp9/.test(encoders) || !/libopus/.test(encoders)) {
+      expect(project?.renderWebmAssetId).toBeNull();
+      expect(outcome.webmAssetId).toBeNull();
+      expect(outcome.webmError).toBeTruthy();
+      return;
+    }
+
+    expect(outcome.webmError).toBeNull();
+    expect(project?.renderWebmAssetId).toBe(outcome.webmAssetId);
+    const webm = await assetRepo.get(PROJECT, project!.renderWebmAssetId!);
+    expect(webm?.mimeType).toBe("video/webm");
+    expect(webm!.id).not.toBe(project!.renderAssetId);
+
+    // Decoded end to end, and the stream really is VP9 — not the MP4's bytes under a new name.
+    const { spawnSync } = await import("node:child_process");
+    const decode = spawnSync(FFMPEG!, ["-hide_banner", "-i", webm!.storagePath, "-f", "null", "-"], { encoding: "utf8" });
+    expect(decode.status).toBe(0);
+    expect(decode.stderr).toMatch(/Input #0, matroska,webm/);
+    expect(decode.stderr).toMatch(/Video: vp9/);
+  });
+
   it("produces a container ffmpeg itself can read back — not merely a non-empty file", async () => {
     const videoProjectId = await seedProjectWithClips(2);
     await processVideoRender(

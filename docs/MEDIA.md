@@ -64,7 +64,7 @@ POST /api/v1/videos ──▶ project in `planning` (202 immediately)
                    video.render job (worker role)
                          │  ffmpeg: clips + narration + subtitles on one timeline
                          ▼
-              MP4 (H.264 + AAC + mov_text), SRT and WebVTT assets
+              MP4 (H.264 + AAC + mov_text), WebM (VP9 + Opus), SRT and WebVTT assets
 ```
 
 - **The storyboard is written in a job, not in the request.** It used to run inside the POST
@@ -87,6 +87,12 @@ POST /api/v1/videos ──▶ project in `planning` (202 immediately)
   settled as `cancelled`. Speech was already cancellable. Verified by tests against
   fake processes (DL-14). **Retry** resumes only unfinished work: a cancelled project resumes, and
   a project stuck in `planning` is re-planned. Both are offered on the video screen.
+
+- **Two renditions** (DL-19). The render also stores a WebM (VP9 + Opus) copy as
+  `renderWebmAssetId`. The player offers the MP4 first, with a codec string, and the WebM second.
+  A browser without H.264/AAC skips the MP4 and plays the WebM. Open-source Chromium, including
+  the one Playwright ships, is such a browser. When the ffmpeg build lacks `libvpx-vp9` or
+  `libopus`, the MP4 still ships and the WebM field stays null.
 
 Verification uses `ffprobe` on the downloaded MP4. The acceptance check requires an H.264 video
 stream, an AAC audio stream, a subtitle stream, a duration of at least 4 s, a valid WebVTT asset,

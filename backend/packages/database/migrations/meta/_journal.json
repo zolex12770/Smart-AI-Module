@@ -43,6 +43,13 @@
       "when": 1790571204756,
       "tag": "0005_confused_roland_deschain",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790581044050,
+      "tag": "0006_skinny_switch",
+      "breakpoints": true
     }
   ]
 }

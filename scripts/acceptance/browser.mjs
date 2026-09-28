@@ -247,16 +247,33 @@ await check("VIDEO-UI", "Generate a short video and let the browser load it, wit
   const info = await video.evaluate(
     (el) =>
       new Promise((resolve) => {
-        const done = () => resolve({ duration: el.duration, width: el.videoWidth, tracks: el.querySelectorAll("track").length });
-        if (el.readyState >= 1) return done();
-        el.addEventListener("loadedmetadata", done, { once: true });
-        el.addEventListener("error", () => resolve({ duration: -1, width: 0, tracks: 0 }), { once: true });
+        // Which rendition the browser chose (DL-19), and proof a frame was decoded, not just a
+        // header read. A <source> that cannot play fires `error` on itself; the last one failing
+        // means the element has nothing left to try.
+        const describe = (extra) => ({
+          duration: el.duration,
+          width: el.videoWidth,
+          tracks: el.querySelectorAll("track").length,
+          type: [...el.querySelectorAll("source")].find((s) => s.src === el.currentSrc)?.type ?? "",
+          mp4: el.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
+          ...extra,
+        });
+        const fail = () => resolve(describe({ duration: -1, width: 0, decoded: false }));
+        el.addEventListener("loadeddata", () => resolve(describe({ decoded: el.readyState >= 2 })), { once: true });
+        el.addEventListener("error", fail, { once: true });
+        const sources = el.querySelectorAll("source");
+        if (sources.length) sources[sources.length - 1].addEventListener("error", fail, { once: true });
         el.load();
       })
   );
   const narrated = await page.locator("main audio").count();
-  const ok = info.duration >= 4 && info.width > 0 && info.tracks > 0 && narrated > 0;
-  return { status: ok ? PASS : FAIL, detail: `the browser loaded the MP4: ${Number(info.duration).toFixed(1)} s, ${info.width}px wide, ${info.tracks} subtitle track(s); ${narrated} narration player(s)` };
+  const ok = info.decoded && info.duration >= 4 && info.width > 0 && info.tracks > 0 && narrated > 0;
+  return {
+    status: ok ? PASS : FAIL,
+    detail:
+      `the browser decoded the render (${info.type || "no source it could play"}; its H.264 support: "${info.mp4}"): ` +
+      `${Number(info.duration).toFixed(1)} s, ${info.width}px wide, ${info.tracks} subtitle track(s); ${narrated} narration player(s)`,
+  };
 });
 
 const ROUTES = ["/", "/chat", "/tasks", "/ask", "/files", "/memory", "/images", "/audio", "/videos", "/usage", "/platform", "/settings"];

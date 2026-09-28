@@ -133,6 +133,13 @@ export interface VideoRenderOutcome {
   /** Asset id of the sidecar `.srt`, when subtitles were produced. */
   subtitleAssetId: string | null;
   subtitleVttAssetId: string | null;
+  /**
+   * Asset id of the WebM (VP9 + Opus) rendition, or null when none was produced (DL-19). The MP4
+   * alone does not play in a browser built without H.264/AAC, which open-source Chromium is.
+   */
+  webmAssetId: string | null;
+  /** Why the WebM rendition is missing, when it is; null when it was produced. */
+  webmError: string | null;
 }
 
 /**
@@ -222,6 +229,8 @@ export async function processVideoRender(
       audioStatus: "included",
       subtitleAssetId: project.subtitleAssetId,
       subtitleVttAssetId: project.subtitleVttAssetId,
+      webmAssetId: project.renderWebmAssetId,
+      webmError: null,
     };
   }
 
@@ -246,6 +255,8 @@ export async function processVideoRender(
       audioStatus: "skipped_no_narration",
       subtitleAssetId: null,
       subtitleVttAssetId: null,
+      webmAssetId: null,
+      webmError: null,
     };
   }
 
@@ -265,6 +276,8 @@ export async function processVideoRender(
       audioStatus: "skipped_no_narration",
       subtitleAssetId: null,
       subtitleVttAssetId: null,
+      webmAssetId: null,
+      webmError: null,
     };
   }
 
@@ -554,6 +567,53 @@ export async function processVideoRender(
     // Owned by the same tenant as the clips it was assembled from — nothing else could serve it.
     const assetId = await deps.assetStore.store(scope.projectId, finalBytes, "video/mp4", "mp4", "video");
 
+    /**
+     * The WebM rendition — DL-19.
+     *
+     * Measured: the Playwright Chromium answered `canPlayType('video/mp4; codecs="avc1.42E01E"')`
+     * with "" and the rendered MP4's `<video>` errored, while VP9 WebM answered "probably". Any
+     * browser built without the patent-encumbered codecs is in the same position, so the player
+     * offers both and lets the browser choose. It is a second output, not a replacement: when
+     * this ffmpeg lacks libvpx-vp9 or libopus the MP4 still ships, and the reason is returned.
+     * Cancellation is not swallowed — it reaches the handler below like any other step's.
+     */
+    let webmAssetId: string | null = null;
+    let webmError: string | null = null;
+    const webmPath = join(workDir, "final.webm");
+    try {
+      await ffmpeg([
+        "-y",
+        "-i",
+        finalPath,
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libvpx-vp9",
+        "-b:v",
+        "0",
+        "-crf",
+        "38",
+        "-deadline",
+        "realtime",
+        "-cpu-used",
+        "8",
+        "-row-mt",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "96k",
+        "-sn",
+        webmPath,
+      ]);
+      webmAssetId = await deps.assetStore.store(scope.projectId, await readFile(webmPath), "video/webm", "webm", "video");
+    } catch (webmFailure) {
+      if (webmFailure instanceof RenderCancelled) throw webmFailure;
+      webmError = describeFailureForCaller("render", webmFailure);
+    }
+
     await deps.projectRepo.updateRender(scope.projectId, scope.videoProjectId, {
       renderStatus: "succeeded",
       renderAssetId: assetId,
@@ -561,6 +621,7 @@ export async function processVideoRender(
       // survived as bytes nothing referenced, and the player had no track to show (ADR-122).
       subtitleAssetId,
       subtitleVttAssetId,
+      renderWebmAssetId: webmAssetId,
     });
     await deps.projectRepo.updateStatus(
       scope.projectId,
@@ -568,7 +629,15 @@ export async function processVideoRender(
       succeededScenes.length === allScenes.length ? "succeeded" : "partially_succeeded"
     );
 
-    return { renderStatus: "succeeded", assetId, audioStatus, subtitleAssetId, subtitleVttAssetId };
+    return {
+      renderStatus: "succeeded",
+      assetId,
+      audioStatus,
+      subtitleAssetId,
+      subtitleVttAssetId,
+      webmAssetId,
+      webmError,
+    };
   } catch (err) {
     if (err instanceof RenderCancelled) {
       // Settled as what it is. `failed` would report a defect where the user made a choice,
@@ -586,6 +655,8 @@ export async function processVideoRender(
         audioStatus: "skipped_no_narration",
         subtitleAssetId: null,
         subtitleVttAssetId: null,
+        webmAssetId: null,
+        webmError: null,
       };
     }
     /**

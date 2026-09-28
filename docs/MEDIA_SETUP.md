@@ -27,7 +27,9 @@ thing, one line per capability.
 
 The backend probes `ffmpeg -version` at boot. The probe allows 30 s and makes 2 attempts, so a
 cold disk does not disable video for the life of the process. Set `FFMPEG_PATH` (and
-`FFPROBE_PATH`) when the binaries are not on `PATH`. Both Docker images include ffmpeg.
+`FFPROBE_PATH`) when the binaries are not on `PATH`. Both Docker images include ffmpeg. The WebM rendition (DL-19) needs the `libvpx-vp9` and
+`libopus` encoders, which the Debian, Ubuntu and Homebrew packages include; check with
+`ffmpeg -hide_banner -encoders | grep -E "libvpx-vp9|libopus"`.
 
 ## 2. Speech — Piper (offline)
 

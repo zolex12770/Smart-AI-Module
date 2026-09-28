@@ -516,3 +516,33 @@ both.**
 - **Stale text.** `TRUST_PROXY_HOPS=1` in the live risk register, the `COOKIE_SAMESITE` template
   comment and a video-page comment were corrected. Superseded historical records
   (`29_FEATURE_MATRIX.md`, `FINAL_PROJECT_AUDIT.md`) are left as written, as their headers state.
+
+## DL-19: A WebM rendition beside every rendered MP4
+
+**Context.** The browser run of the compose stack (images from `81cedf8`) passed 10 of 11 checks.
+VIDEO-UI failed because the `<video>` element raised an error on the rendered MP4. In that
+browser, `canPlayType` returned `""` for `avc1` and `mp4a`, and `"probably"` for VP9 WebM.
+Playwright's Chromium is an open-source build without the H.264/AAC decoders, and no other
+browser was installed. The MP4 is valid: `ffprobe` and the acceptance run decoded it. But a user
+on such a browser (open-source Chromium, some Linux Firefox installs) could not watch their
+video.
+
+**Decision.** The render transcodes the finished MP4 into a WebM (VP9 + Opus, CRF 38, realtime
+preset) and stores it as `video_projects.render_webm_asset_id` (migration 0006). The player lists
+the MP4 first, with a codec string, and the WebM second. A browser plays the first source it can
+decode, so browsers with H.264 are unchanged. The WebM is an addition, not a replacement. If
+this ffmpeg cannot encode it, the MP4 still ships, the column stays null, and the outcome
+returns the reason. A cancel during the transcode still cancels the render.
+
+**Rejected.** Encoding the render itself as VP9 instead of H.264. Safari only recently gained
+WebM support, and downloads would lose the embedded `mov_text` captions, which WebM cannot
+carry.
+
+**Tests.**
+- `video-render.integration.test.ts` runs real ffmpeg. It checks the WebM asset is
+  `video/webm`, decodes it end to end, and requires a `matroska,webm` container with a `vp9`
+  stream.
+- `videos/[id]/page.test.tsx` checks there is no `src` on the element (which would override the
+  sources), the source order and types, and that the caption track is kept.
+- Both fail against the previous code.
+

@@ -1,0 +1,20 @@
+{
+  "web": "http://localhost:3000",
+  "startedAt": "2026-09-28T07:49:40.547Z",
+  "results": [
+    {
+      "id": "SIGNUP",
+      "title": "Sign up in the browser",
+      "status": "PASS",
+      "seconds": 1.2,
+      "detail": "signed up browser-1790581780922@example.com, landed on /chat"
+    },
+    {
+      "id": "VIDEO-UI",
+      "title": "Generate a short video and let the browser load it, with its subtitle track",
+      "status": "PASS",
+      "seconds": 520.8,
+      "detail": "the browser decoded the render (video/webm; codecs=\"vp9, opus\"; its H.264 support: \"\"): 8.0 s, 640px wide, 1 subtitle track(s); 2 narration player(s)"
+    }
+  ]
+}

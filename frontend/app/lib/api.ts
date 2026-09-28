@@ -262,6 +262,8 @@ export interface VideoProject {
   /** Captions for the finished render (ADR-122); the VTT is what a browser <track> can show. */
   subtitleAssetId: string | null;
   subtitleVttAssetId: string | null;
+  /** The same render as WebM (VP9 + Opus), for browsers without H.264/AAC (DL-19). */
+  renderWebmAssetId: string | null;
   cancelRequestedAt: string | null;
   renderError: string | null;
   errorMessage: string | null;

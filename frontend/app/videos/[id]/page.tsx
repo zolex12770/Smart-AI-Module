@@ -177,13 +177,19 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
         <strong>Final render</strong>
         {project.renderStatus === "succeeded" && project.renderAssetId ? (
           <video
-            src={assetUrl(project.renderAssetId)}
             controls
             // The captions are served by the same authenticated asset route as the video, so the
             // track element needs the cookie too (ADR-122). Without this the <track> silently 401s.
             crossOrigin="use-credentials"
             style={{ width: "100%", marginTop: 8, borderRadius: 8 }}
           >
+            {/* The browser plays the first source it can decode (DL-19). The codec string lets a
+                browser without H.264/AAC — open-source Chromium is one — skip the MP4 instead of
+                trying it and failing; it then falls through to the WebM. */}
+            <source src={assetUrl(project.renderAssetId)} type={'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'} />
+            {project.renderWebmAssetId && (
+              <source src={assetUrl(project.renderWebmAssetId)} type={'video/webm; codecs="vp9, opus"'} />
+            )}
             {project.subtitleVttAssetId && (
               <track
                 kind="captions"
