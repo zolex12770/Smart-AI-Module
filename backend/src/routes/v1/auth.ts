@@ -325,14 +325,43 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       request.log.error({ err, project_id: projectId }, "project deleted, but its queued jobs could not be cancelled");
     }
     let tasks = 0;
-    try {
-      for (const task of await ctx.tasks.listNonTerminalForProject(projectId)) {
+    // One at a time, each in its own try: a task that cannot be cancelled must not leave the rest
+    // running, and the answer names each one that was not (audit follow-up, DL-18).
+    for (const task of await ctx.tasks.listNonTerminalForProject(projectId).catch(() => [])) {
+      try {
         await ctx.engine.cancel(task.id, `project deletion by ${authCtx.user.id}`);
         tasks++;
+      } catch (err) {
+        notStopped.push(`agent task ${task.id}`);
+        request.log.error({ err, project_id: projectId, task_id: task.id }, "project deleted, but an agent task could not be cancelled");
+      }
+    }
+
+    /*
+     * Media that is RUNNING, not only queued (audit follow-up, DL-18). Cancelling the queue above
+     * stops work no worker has claimed; a generation a worker is running is stopped by the worker's
+     * cancellation watch, which reads the same request a user's Cancel writes. A row whose job was
+     * just cancelled in the queue would never be settled by anything, so it is settled here.
+     */
+    let media = 0;
+    const settle = "Cancelled: the project was deleted.";
+    try {
+      for (const repo of [ctx.imageGenerations, ctx.audioGenerations]) {
+        for (const generation of await repo.list(projectId)) {
+          if (generation.status !== "pending" && generation.status !== "processing") continue;
+          await repo.requestCancel(projectId, generation.id);
+          if (generation.status === "pending") await repo.updateStatus(projectId, generation.id, "cancelled", { errorMessage: settle });
+          media++;
+        }
+      }
+      for (const video of await ctx.videoProjects.list(projectId)) {
+        if (["succeeded", "partially_succeeded", "failed", "cancelled"].includes(video.status)) continue;
+        await ctx.videoProjects.requestCancel(projectId, video.id);
+        media++;
       }
     } catch (err) {
-      notStopped.push("agent tasks");
-      request.log.error({ err, project_id: projectId }, "project deleted, but an agent task could not be cancelled");
+      notStopped.push("media generations");
+      request.log.error({ err, project_id: projectId }, "project deleted, but its media generations could not all be cancelled");
     }
     let workspaceRemoved = false;
     try {
@@ -342,7 +371,7 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
       notStopped.push("agent workspace");
       request.log.error({ err, project_id: projectId }, "project deleted, but its workspace could not be removed");
     }
-    return { ok: true, stopped: { queuedJobs, tasks, workspaceRemoved }, notStopped };
+    return { ok: true, stopped: { queuedJobs, tasks, media, workspaceRemoved }, notStopped };
   });
 
   app.post("/api/v1/projects/:projectId/members", async (request, reply) => {

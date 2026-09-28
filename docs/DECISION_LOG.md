@@ -439,3 +439,80 @@ sent.
   allows. Fastify's default body limit answered 413 first. Test: `workspace.test.ts`.
 - **DEPLOYMENT.md (finding 20).** The sandbox rows now state that the Cloud Run deployment runs
   process isolation, with `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true`, and what that exposes.
+
+## DL-17: One verify command; attacks and failures run for real
+
+**Decision:**
+
+- **`npm run verify`** runs every release gate and prints each as `PASS`, `FAIL` or
+  `BLOCKED_EXTERNAL`. It exits non-zero on any FAIL, and a gate is never PASS without having run.
+  - `BLOCKED_EXTERNAL` means this machine cannot provide something: no model runtime, no Docker
+    daemon, or a registry it cannot reach.
+  - If a model runtime *is* reachable but the API is not, the runtime gates **FAIL**. The stack
+    is not running, and nothing external is to blame.
+- **`attacks.mjs`, `failure-injection.mjs` and `extra-scenarios.mjs`** exercise the running
+  system: its HTTP surface, its dependencies and its models. Unit and route tests already prove
+  each defence in-process; these catch what only the assembled system can get wrong.
+- **Environment reference.** `docs/ENVIRONMENT.md` is generated from the env templates, and a
+  test fails when it is stale. The two `.env.example` copies had drifted while their header said
+  a test kept them identical; now a test does.
+
+**Mistakes these scripts caught in themselves, on first run:**
+
+- **Oversized body.** Node's `fetch` reports "network error" when a server answers 413 and closes
+  mid-upload. `curl` shows the 413 was sent. The check now reads the response over `node:http`.
+- **Backslash paths.** A backslash is an ordinary filename character on POSIX. `..\..\x` is a
+  literal filename there, not a traversal. The check now asserts it stays inside the workspace as
+  one literal name, instead of expecting a refusal that POSIX semantics do not call for.
+- **Rate limits.** A second run inside one minute met the upload limit, and a later acceptance run
+  met the login window that the X-Forwarded-For spoofing check had deliberately spent. Both limits
+  were working as designed. The upload check now waits out `retry-after`. The spoofing check is
+  opt-in and documented as spending the window.
+
+## DL-18: The fresh independent audit, and what it changed
+
+An independent read-only audit of everything changed in this pass (`63b8b71..10abb12`) found no
+P1 issues, 4 P2 and 8 P3. All twelve are fixed below.
+
+### P2 findings
+
+**1. A cancelled local video scene was recorded `failed`.**
+- The motion provider *returns* a failure when its ffmpeg is killed. The orchestrator looked for
+  the cancellation only in its `catch`.
+- **Fix:** it now checks `watch.wasCancelled()` on a returned failure too.
+- **Test:** `media-cancellation.test.ts`. It fails against the previous orchestrator.
+
+**2. The job-cancel route answered `ok` for a generation that had already finished.**
+- **Fix:** it now answers 409 "already finished", or `alreadyRequested` for a cancel requested
+  twice.
+- **Test:** `job-cancel.test.ts`.
+
+**3. Deleting a project stopped queued media but not running media, while the UI said it stopped
+both.**
+- **Fix:** the route now requests cancellation on every in-flight image, audio and video project.
+  The workers' watches read that request. Rows whose queued job was cancelled are settled. Each
+  agent task is cancelled in its own `try`, so one failure no longer skips the rest.
+- **Test:** `project-delete.test.ts` (extended).
+
+**4. `npm run verify` could report a previous run's acceptance results as this run's.**
+- **Fix:** the result file is removed before the run, and results that predate the run are
+  rejected. A runtime gate now fails when any of its checks did not run, instead of passing on a
+  subset.
+
+### P3 findings
+
+- **Router commit.** `onCommit` fired before the router's error-event failover check, so a partial
+  charge could name a provider that was failed over. It now fires after that check, on both the
+  failover and named-provider paths. Two router tests fail against the previous router.
+- **Last-admin race.** The guard read the admin rows and wrote separately, so two admins demoting
+  each other at once could leave none. Guard and write now share one transaction with the rows
+  locked `FOR UPDATE`, for removal too. A concurrent test (two service calls at once) fails
+  against the previous code.
+- **Truncation marker.** A cut-off answer was marked only on screen. The stored message now
+  carries the same marker, and a test checks the frontend uses the same words.
+- **Extraction after a mid-stream error.** It wrote a 0-token `unknown` usage row and parsed half
+  a JSON object. It now records an estimate under `llm:memory-extraction-partial:<requestId>` and
+  learns nothing from the turn. The test fails against the previous code.
+- **Stale text.** `TRUST_PROXY_HOPS=1` in the live risk register, the `COOKIE_SAMESITE` template
+  comment and a video-page comment were corrected. Superseded historical records
+  (`29_FEATURE_MATRIX.md`, `FINAL_PROJECT_AUDIT.md`) are left as written, as their headers state.

@@ -1,112 +1,80 @@
 # Project status
 
-**Date:** 2026-09-27 · **Branch:** `claude/zen-brahmagupta-6l5o4u`
+**Last verified:** 2026-09-28, branch `claude/zen-brahmagupta-6l5o4u`.
+The commits for each run are in [FINAL_PRODUCTION_READINESS_REPORT.md](FINAL_PRODUCTION_READINESS_REPORT.md).
 
-This file is the status matrix. The evidence behind each cell, and the exact commands, are in
-[FINAL_PRODUCTION_READINESS_REPORT.md](FINAL_PRODUCTION_READINESS_REPORT.md). Earlier status
-documents are kept as records only: [history/](history/) and the root `PROJECT_STATUS.md`. Their
-numbers are not current.
+## States
 
-## Columns
+Every cell uses exactly one of these values. Each state is reached only through the one before
+it, except `BLOCKED_EXTERNAL`.
 
-| Column | Means |
+| State | Means |
 |---|---|
-| **Code** | Implemented in this repository. |
-| **Local** | Its automated tests pass: `npm test` locally, and the CI workflow on GitHub Actions. |
-| **E2E** | Exercised end to end through the running system: Playwright in a real browser, or `scripts/acceptance/full-system.mjs` over HTTP, or both. |
-| **Real Runtime** | Exercised against real providers with no mocks, and its output inspected: Ollama `qwen2.5:7b` and `nomic-embed-text`, stable-diffusion.cpp SDXL, Piper, ffmpeg, Postgres + pgvector. This happened in development mode and in the Docker Compose stack. |
-| **Production** | Exercised in a deployed cloud environment. |
+| `NOT_STARTED` | No code. |
+| `IN_PROGRESS` | Code exists and is not finished. |
+| `IMPLEMENTED` | Code is complete and has unit or route tests. |
+| `LOCALLY_VERIFIED` | Its automated tests pass: `npm test`, locally and on GitHub Actions. |
+| `E2E_VERIFIED` | Exercised end to end through the running system: Playwright against the real API and database, or an acceptance script over HTTP. |
+| `REAL_RUNTIME_VERIFIED` | Exercised against real providers with no mocks, and the *output* inspected. The providers are Ollama (`qwen2.5:7b`, `nomic-embed-text`), stable-diffusion.cpp (SDXL), Piper, ffmpeg, and Postgres 16 with pgvector, run in the Docker Compose stack. |
+| `PRODUCTION_VERIFIED` | Exercised in a deployed cloud environment. **No row has this state.** |
+| `BLOCKED_EXTERNAL` | Cannot be verified here for a reason outside the repository. For every Production cell, the reason is a GCP project with credentials ([PRODUCTION_DEPLOYMENT_BLOCKER.md](PRODUCTION_DEPLOYMENT_BLOCKER.md)). |
 
-Only four values are used: `PASS`, `FAIL`, `BLOCKED_EXTERNAL` and `NOT_IMPLEMENTED`.
-**Production is `BLOCKED_EXTERNAL` in every row.** Nothing has been deployed to a cloud, because
-no GCP project or credentials are available here. **Status** is the verdict for the repository
-as delivered: `PASS` means Code, Local, E2E and Real Runtime all pass.
+## Commands the matrix refers to
+
+| Short name | Command |
+|---|---|
+| `unit` | `npm test` (with `.local-tools/test-env.sh` sourced, the binary-gated suites run too) |
+| `e2e` | `cd frontend && npx playwright test` |
+| `accept` | `ACCEPT_API_URL=… ACCEPT_ADMIN_EMAIL=… ACCEPT_ADMIN_PASSWORD=… node scripts/acceptance/full-system.mjs` |
+| `browser` | `WEB_URL=… node scripts/acceptance/browser.mjs` |
+| `attacks` | `ACCEPT_API_URL=… node scripts/acceptance/attacks.mjs` |
+| `inject` | `COMPOSE="docker compose …" ACCEPT_API_URL=… node scripts/acceptance/failure-injection.mjs` |
+| `extra` | `ACCEPT_API_URL=… node scripts/acceptance/extra-scenarios.mjs` |
+| `stack` | `docker compose -f docker-compose.yml -f docker-compose.sdcpp.yml up -d` (the runtime command for every row) |
 
 ## Matrix
 
-| Capability | Code | Local | E2E | Real Runtime | Production | Status |
-|---|---|---|---|---|---|---|
-| Auth | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Multi-tenancy | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Chat | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Streaming | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Tool calling | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Agent | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Coding agent | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Memory | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| RAG | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Image | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Audio | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Video | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| MCP | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Usage | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Quota | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Security | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Observability | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Docker | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Terraform | PASS | PASS | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL |
-| CI/CD | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Frontend | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Backend | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
+The evidence files are in [evidence/2026-09-28/](evidence/2026-09-28/). "Known limitations" says what the
+verification does *not* show.
 
-What the less obvious cells mean:
+| Capability | Code status | Local status | E2E status | Real runtime status | Production status | Evidence | Last verification date | Test command | Runtime command | Known limitations |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Auth (sessions, API keys, CSRF, password change) | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance AUTH-SIGNUP/AUTH-SESSION; attacks CSRF, API-KEY-SCOPE, UNAUTHENTICATED (72 routes → 401); browser SIGNUP, LOGOUT-LOGIN | 2026-09-28 | `unit`, `e2e` | `stack` + `accept` | No SSO, MFA, password reset or email verification (by decision) |
+| Invitations and roles | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | `project-members.test.ts` (12, incl. a concurrent last-admin race); attacks ENUMERATION | 2026-09-28 | `unit` | `stack` + `attacks` | With no email verification, an invitation goes to whoever signs in with that address |
+| Multi-tenancy | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance TENANT-ISOLATION; attacks TENANT-IDOR (6 probes → 404) | 2026-09-28 | `unit`, `e2e` | `stack` + `accept` | — |
+| Chat | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance CHAT-HISTORY; browser CHAT-MULTI-TURN; `chat-overrides`, `chat-billing` tests | 2026-09-28 | `unit`, `e2e` | `stack` + `accept`, `browser` | A 7B model on CPU; answer quality is the model's |
+| Streaming | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance CHAT-STREAM (35 events over 8.2 s); browser CHAT-STREAMING (80 distinct rendered lengths through the same-origin proxy), CHAT-CANCEL | 2026-09-28 | `unit`, `e2e` | `stack` + `browser` | The proxy's one-hour timeout is measured locally, not on Cloud Run |
+| Tool calling | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance CODING-AGENT, MCP (real tool calls by qwen2.5:7b) | 2026-09-28 | `unit` | `stack` + `accept` | Chat reports a tool call and does not run it (by decision); agents run tools |
+| Agent | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance MCP; `autonomous.test.ts` (inconclusive verification, retry charge keys, real provider/model) | 2026-09-28 | `unit` | `stack` + `accept` | One API instance: the live event bus is in-process (ADR-159) |
+| Coding agent | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance CODING-AGENT (COMPLETED in 547 s, independent test run exit 0); extra CODING-SECOND, CODING-BAD-PATCH | 2026-09-28 | `unit` | `stack` + `accept`, `extra` | A 7B model sometimes fails a task. The platform then reports FAILED, never COMPLETED over a failing test |
+| Memory | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance MEMORY-FORMATION/RECALL/DELETE (a new conversation recalled NIGHTHAWK-908536); browser MEMORY-UI | 2026-09-28 | `unit` | `stack` + `accept`, `browser` | Extraction quality depends on the model; ungrounded identifiers are dropped |
+| RAG | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance RAG-INGEST/ANSWER/REFUSAL; browser RAG-UI (citation shown, unanswerable refused); attacks RAG-INJECTION (instruction in a document not followed) | 2026-09-28 | `unit` | `stack` + `accept`, `browser`, `attacks` | Prompt-injection resistance is measured on one injection; it is not a guarantee |
+| Image | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance IMAGE (SDXL 512×512, pixels measured); extra IMAGE-NEGATIVE, IMAGE-REPRODUCIBLE; inject MEDIA-CRASH | 2026-09-28 | `unit` | `stack` + `accept`, `extra` | 5–10 min per image on 4 CPU cores |
+| Audio | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance AUDIO (Piper, 4.09 s, RMS 0.136); browser AUDIO-UI (played in the page) | 2026-09-28 | `unit` | `stack` + `accept`, `browser` | One bundled voice |
+| Video | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance VIDEO (MP4 h264+aac+mov_text, 8.0 s, 2 narrated scenes, WebVTT); browser VIDEO-UI | 2026-09-28 | `unit` | `stack` + `accept`, `browser` | Local video is a still animated by ffmpeg ("image-motion"), not a video model, and it is labelled so. Replicate is fixture-tested only (no token) |
+| MCP | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance MCP (the real filesystem server read a planted word; another project's directory refused); inject MCP-CRASH | 2026-09-28 | `unit` | `stack` + `accept`, `inject` | Crash detection is a 60 s health check |
+| Usage and cost | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance USAGE (23 479 real tokens); `usage.test.ts`; `chat-billing.test.ts` (partial turns charged) | 2026-09-28 | `unit`, `e2e` | `stack` + `accept` | Cost is shown only for priced models. A local model has no price, so its cost is not shown as $0 |
+| Quota | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance QUOTA (a 56 s video refused at 60 s/month with 8 s used; nothing created) | 2026-09-28 | `unit` | `stack` + `accept` | — |
+| Security | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | attacks 11/11 + XFF-SPOOF; CI gitleaks, `npm audit`, no-fake-in-production | 2026-09-28 | `unit`, `verify` SECURITY | `stack` + `attacks` | On Cloud Run the agent sandbox is process isolation (stated in DEPLOYMENT.md) |
+| Resilience (failure injection) | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | inject LLM-DOWN, DB-DOWN, WORKER-DOWN, MEDIA-CRASH, MCP-CRASH | 2026-09-28 | `unit` | `stack` + `inject` | Measured on one machine; no multi-instance failover |
+| Observability | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | acceptance METRICS (API and worker both scraped, counters non-zero); AUDIT | 2026-09-28 | `unit` | `stack` + `accept` | No trace collector is deployed; spans are exported to logs |
+| Frontend | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | 122 unit tests; Playwright 14/14; browser ROUTES (12 screens, no console errors) | 2026-09-28 | `unit`, `e2e` | `cd frontend && npm run dev` | — |
+| Backend | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | 76 routes, each requested by the contract test; boot 8/8; migrations 3/3 | 2026-09-28 | `unit` | `cd backend && npm run dev` | — |
+| Docker | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL | both images built (CI and locally); the compose stack ran every runtime script above | 2026-09-28 | CI `infrastructure` job | `stack` | Locally the API image runtime is Ubuntu because deb.debian.org is blocked here; CI builds the repository's Debian image |
+| Terraform | IMPLEMENTED | LOCALLY_VERIFIED | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | `terraform fmt -check` and `validate` pass (CI and locally) | 2026-09-28 | `verify` TERRAFORM | — | `plan`/`apply` need a GCP project |
+| CI/CD | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | E2E_VERIFIED | BLOCKED_EXTERNAL | GitHub Actions, 5 jobs green; see the report for run ids | 2026-09-28 | `.github/workflows/ci.yml` | — | No deployment pipeline: deployment is the runbook |
+| Cloud deployment | IMPLEMENTED | LOCALLY_VERIFIED | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | [PRODUCTION_DEPLOYMENT_BLOCKER.md](PRODUCTION_DEPLOYMENT_BLOCKER.md) | 2026-09-28 | — | — | Never applied. The hop count, internal ingress and Cloud SQL sharing are unverified |
 
-- **Terraform**: `fmt`, `init` and `validate` pass in CI, which gives Code and Local. `plan` and
-  `apply` need a GCP project and credentials, so E2E, Real Runtime and Status are
-  `BLOCKED_EXTERNAL`.
-- **CI/CD**: every CI stage the brief lists runs on GitHub Actions and is green. That covers
-  install, lint, typecheck, unit, integration and API tests, the build, security checks,
-  migrations, the browser E2E suite and both Docker builds. The API image is also booted against a
-  real Postgres. The latest run, 36327781128 on `0487870`, is green. No deployment pipeline exists: deploying is the reviewed runbook in
-  `infrastructure/`, and it needs the same GCP access.
-- **Docker**: both images build in CI. The full compose stack (postgres/pgvector, ollama, api,
-  worker, web) was brought up here and the full-system acceptance was run against it. See the
-  report.
-- **Coding agent / Memory**: these depend on a 7B model running on CPU. Individual runs have
-  failed (model variance: a mis-copied digit, a tool call written as text, the wrong filename).
-  Each failure ended in a truthful `FAILED` and led to a platform fix. After the fixes, 3 of 3
-  coding probes and 4 of 4 memory probes succeeded. The report gives every run.
+## Gates
 
-## Completion gate
-
-| Gate | Status |
-|---|---|
-| Frontend structure | PASS |
-| Backend structure | PASS |
-| Build | PASS |
-| Typecheck | PASS |
-| Lint | PASS |
-| Unit tests | PASS |
-| Integration tests | PASS |
-| API tests | PASS |
-| Browser E2E | PASS |
-| Auth | PASS |
-| Tenant isolation | PASS |
-| Chat | PASS |
-| Streaming | PASS |
-| Memory | PASS |
-| RAG | PASS |
-| Coding agent | PASS |
-| Image generation | PASS |
-| Audio generation | PASS |
-| Video generation | PASS |
-| MCP | PASS |
-| Usage | PASS |
-| Quota | PASS |
-| Security | PASS |
-| Observability | PASS |
-| Local startup | PASS |
-| Docker | PASS |
-| Terraform | BLOCKED_EXTERNAL |
-| Cloud deployment | BLOCKED_EXTERNAL |
-| CI | PASS |
+The latest `npm run verify` output is recorded in the report. The CI run ids are listed there
+too.
 
 ## Not implemented, by decision
 
-These are named so that their absence is not mistaken for an oversight. None is claimed
-anywhere as working.
+These are named so their absence is not mistaken for an oversight:
 
-- SSO/OIDC, MFA, password reset and email verification. Only sessions and API keys exist.
-- Per-project tool policy. Enabling a tool is a deployment-wide action for a system administrator.
-- A deployment pipeline (CD). Deployment is the runbook.
-- Vertex AI. The Google adapter uses the Gemini Developer API.
+- SSO/OIDC, MFA, password reset and email verification;
+- a per-project tool policy;
+- a deployment pipeline (CD);
+- Vertex AI.

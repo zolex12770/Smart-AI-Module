@@ -52,6 +52,9 @@ function scopedProjectId(authCtx: AuthContext): string {
   return authCtx.projectId;
 }
 
+/** Appended to an answer that stopped at the output limit, in storage and on screen alike. */
+export const TRUNCATION_MARKER = "\n\n[This answer was cut off at the output limit. Ask the model to continue, or for a shorter answer.]";
+
 /** A conversation's first title: the opening user message, on one line, cut at a word. */
 function titleFrom(messages: Array<{ role: string; content: string }>): string | undefined {
   const first = messages.find((m) => m.role === "user")?.content.replace(/\s+/g, " ").trim();
@@ -607,7 +610,13 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                   projectId,
                   conversationId: conversation.id,
                   role: "assistant",
-                  content: event.message.content,
+                  // Marked in the stored text too (DL-18): the screen marked a cut-off answer as it
+                  // streamed, and after a reload the same answer read as complete. Same words as
+                  // the screen's, so live and reloaded agree.
+                  content:
+                    event.finishReason === "length"
+                      ? `${event.message.content}${TRUNCATION_MARKER}`
+                      : event.message.content,
                   ...(toolCalls ? { toolCalls } : {}),
                   providerUsed: event.provider,
                   modelUsed: event.model,
@@ -794,6 +803,9 @@ async function extractMemories(
     let provider = "unknown";
     let model = "unknown";
     let usage = { inputTokens: 0, outputTokens: 0 };
+    let sawDone = false;
+    let failedMidStream: string | null = null;
+    let committed: { provider: string; model: string } | null = null;
     for await (const event of ctx.router.streamChat({
       messages: [
         { role: "system", content: MEMORY_EXTRACTION_PROMPT },
@@ -802,14 +814,53 @@ async function extractMemories(
       // The reply is parsed as JSON; where the provider can guarantee the syntax, it should.
       responseFormat: "json_object",
       // A background call with nobody waiting on it still gets a deadline (audit finding 19).
-    }, { signal: AbortSignal.timeout(ctx.auxiliaryCallTimeoutMs ?? AUXILIARY_CALL_TIMEOUT_MS) })) {
+    }, {
+      signal: AbortSignal.timeout(ctx.auxiliaryCallTimeoutMs ?? AUXILIARY_CALL_TIMEOUT_MS),
+      onCommit: (commit) => {
+        committed = commit;
+      },
+    })) {
       if (event.type === "token") text += event.delta;
+      if (event.type === "error") {
+        failedMidStream = event.message;
+        break;
+      }
       if (event.type === "done") {
+        sawDone = true;
         text = event.message.content || text;
         provider = event.provider;
         model = event.model;
         usage = event.usage;
       }
+    }
+
+    // A provider that failed partway (DL-18): the call spent real tokens and produced no usable
+    // reply. It is charged the same estimate chat charges for a cut-off turn — not a 0-token
+    // "unknown" row — and nothing is parsed out of half a JSON object.
+    if (!sawDone) {
+      const spentWith = committed as { provider: string; model: string } | null;
+      if (spentWith) {
+        const partial = { inputTokens: estimate, outputTokens: estimatePromptTokens(text) };
+        await ctx.usage.create({
+          id: uuid(),
+          projectId: input.projectId,
+          userId: input.userId,
+          kind: "llm",
+          provider: spentWith.provider,
+          model: spentWith.model,
+          inputTokens: partial.inputTokens,
+          outputTokens: partial.outputTokens,
+          units: null,
+          estimatedCostUsd: estimateLlmCostUsd(spentWith.provider, spentWith.model, partial),
+          requestId: input.requestId,
+          idempotencyKey: `llm:memory-extraction-partial:${input.requestId}`,
+        });
+      }
+      input.logger.warn(
+        { request_id: input.requestId, error: failedMidStream ?? "the stream ended without a result" },
+        "memory extraction failed partway; nothing was learned from this turn"
+      );
+      return;
     }
 
     // Charged as soon as the call is over, BEFORE the reply is parsed or stored — audit finding

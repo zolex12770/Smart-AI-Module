@@ -891,17 +891,26 @@ export class AuthService {
    */
   async removeProjectMember(ctx: AuthContext, userId: string): Promise<boolean> {
     if (!ctx.projectId) throw new ValidationError("A project must be selected.");
-    const members = await this.listProjectMembers(ctx);
-    const target = members.find((m) => m.userId === userId);
+    const projectId = ctx.projectId;
+    // Read and delete under one lock on the project's member rows, for the same reason as the
+    // role change: two concurrent removals of the last two admins must not both succeed (DL-18).
+    const target = await this.db.transaction(async (tx) => {
+      const members = await tx
+        .select({ userId: projectMembers.userId, role: projectMembers.role })
+        .from(projectMembers)
+        .where(eq(projectMembers.projectId, projectId))
+        .for("update");
+      const found = members.find((m) => m.userId === userId);
+      if (!found) return null;
+      if (found.role === "admin" && members.filter((m) => m.role === "admin").length === 1) {
+        throw new ValidationError(
+          "This is the project's last administrator. Add another before removing this one, or the project cannot be administered again."
+        );
+      }
+      await tx.delete(projectMembers).where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId)));
+      return found;
+    });
     if (!target) return false;
-    if (target.role === "admin" && members.filter((m) => m.role === "admin").length === 1) {
-      throw new ValidationError(
-        "This is the project's last administrator. Add another before removing this one, or the project cannot be administered again."
-      );
-    }
-    await this.db
-      .delete(projectMembers)
-      .where(and(eq(projectMembers.projectId, ctx.projectId), eq(projectMembers.userId, userId)));
     await this.recordAudit({
       userId: ctx.user.id,
       projectId: ctx.projectId,
@@ -983,15 +992,20 @@ export class AuthService {
     if (!ctx.projectId) throw new ValidationError("A project must be selected.");
     const target = await this.db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
     if (!target[0]) throw new NotFoundError(`No account exists for ${email}.`);
-    await this.assertNotDemotingLastAdmin(ctx.projectId, target[0].id, role);
     const now = this.now();
-    await this.db
-      .insert(projectMembers)
-      .values({ id: uuid(), projectId: ctx.projectId, userId: target[0].id, role, createdAt: now })
-      .onConflictDoUpdate({
-        target: [projectMembers.projectId, projectMembers.userId],
-        set: { role },
-      });
+    const projectId = ctx.projectId;
+    // The guard and the write in one transaction, with the admin rows locked: two admins demoting
+    // each other at the same moment must not both see "another admin remains" (DL-18).
+    await this.db.transaction(async (tx) => {
+      await this.assertNotDemotingLastAdmin(tx, projectId, target[0].id, role);
+      await tx
+        .insert(projectMembers)
+        .values({ id: uuid(), projectId, userId: target[0].id, role, createdAt: now })
+        .onConflictDoUpdate({
+          target: [projectMembers.projectId, projectMembers.userId],
+          set: { role },
+        });
+    });
     await this.recordAudit({
       userId: ctx.user.id,
       projectId: ctx.projectId,
@@ -1005,12 +1019,18 @@ export class AuthService {
     return { userId: target[0].id };
   }
 
-  private async assertNotDemotingLastAdmin(projectId: string, userId: string, role: ProjectRole): Promise<void> {
+  private async assertNotDemotingLastAdmin(
+    tx: Pick<DrizzleDb, "select">,
+    projectId: string,
+    userId: string,
+    role: ProjectRole
+  ): Promise<void> {
     if (role === "admin") return;
-    const admins = await this.db
+    const admins = await tx
       .select({ userId: projectMembers.userId })
       .from(projectMembers)
-      .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.role, "admin")));
+      .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.role, "admin")))
+      .for("update");
     if (admins.length === 1 && admins[0].userId === userId) {
       throw new ValidationError(
         "This is the project's last administrator. Make another member an admin before changing this one's role, or the project cannot be administered again."

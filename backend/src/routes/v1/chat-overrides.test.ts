@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { conversations, PgUsageRecordRepository, type PgliteDb } from "@ai-platform/database";
+import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { QuotaManager } from "@ai-platform/quota";
+import { TRUNCATION_MARKER } from "./chat.js";
 import { buildTestApp, closeTestApp } from "../../test-app.js";
 import type { AppContext } from "../../context.js";
 
@@ -74,5 +78,61 @@ describe("POST /api/v1/chat — per-request overrides", () => {
     const allowed = await chat({ maxOutputTokens: 100 });
     expect(allowed.statusCode).toBe(200);
     expect(stream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /api/v1/chat — an answer cut off at the output limit", () => {
+  let app: FastifyInstance;
+  let db: PgliteDb;
+  let ctx: AppContext;
+  let auth: Awaited<ReturnType<typeof buildTestApp>>["auth"];
+
+  beforeEach(async () => {
+    ({ app, db, ctx, auth } = await buildTestApp());
+  });
+
+  afterEach(async () => {
+    await closeTestApp(app, db, ctx);
+  });
+
+  it("is stored with the same marker the screen shows, so a reload does not present it as complete", async () => {
+    const registry = new ModelRegistry();
+    registry.register(
+      {
+        name: "capped",
+        isMock: false,
+        model: "capped-1",
+        capabilities: () => ({ streaming: true, toolCalling: false, structuredOutput: false, vision: false, contextWindow: null }),
+        async *streamChat() {
+          yield { type: "token", delta: "The first three steps are" };
+          yield {
+            type: "done",
+            message: { role: "assistant", content: "The first three steps are" },
+            usage: { inputTokens: 5, outputTokens: 7 },
+            provider: "capped",
+            model: "capped-1",
+            finishReason: "length",
+          };
+        },
+      },
+      { asDefault: true }
+    );
+    ctx.router = new ModelRouter(registry);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat",
+      headers: auth.headers,
+      payload: { messages: [{ role: "user", content: "List every step" }] },
+    });
+    const conversationId = res.headers["x-conversation-id"] as string;
+    const stored = (
+      await app.inject({ method: "GET", url: `/api/v1/conversations/${conversationId}/messages`, headers: auth.headers })
+    ).json() as { messages: Array<{ role: string; content: string }> };
+    const answer = stored.messages.find((m) => m.role === "assistant")!;
+    expect(answer.content).toBe(`The first three steps are${TRUNCATION_MARKER}`);
+    // The frontend cannot import this constant (it imports nothing from the backend); it must
+    // carry the same words.
+    const view = readFileSync(fileURLToPath(new URL("../../../../frontend/app/chat/ChatView.tsx", import.meta.url)), "utf8");
+    expect(view).toContain(TRUNCATION_MARKER.trim());
   });
 });

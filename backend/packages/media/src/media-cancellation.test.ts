@@ -191,6 +191,50 @@ describe("cancelled media work never reaches the provider", () => {
     expect(row?.status).toBe("cancelled");
   });
 
+  it("settles a scene stopped mid-generation as cancelled when the provider RETURNS a failure (audit, DL-18)", async () => {
+    // The local motion provider kills ffmpeg on abort and returns `{status:"failed"}` — it does not
+    // throw — and the scene used to be recorded `failed` and queued for a retry.
+    const projectRepo = new PgVideoProjectRepository(db);
+    const sceneRepo = new PgVideoSceneRepository(db);
+    const videoProjectId = uuid();
+    await projectRepo.create({
+      id: videoProjectId,
+      projectId: PROJECT,
+      createdByUserId: USER,
+      prompt: "a harbour at dawn",
+      targetDurationSeconds: 4,
+      sceneClipSeconds: 4,
+      sceneCount: 1,
+    });
+    const [scene] = await sceneRepo.createMany(
+      { projectId: PROJECT, videoProjectId },
+      [{ id: uuid(), sceneIndex: 0, shotDescription: "a wide shot", durationSeconds: 4 }]
+    );
+    const provider: VideoProvider = {
+      name: "stoppable",
+      isMock: false,
+      getCapabilities: () => ({ maxDurationSeconds: 30, supportsSeed: false, hasFastTier: true, worstCaseDeadlineMs: 60_000 }),
+      generateVideo: (_req, _store, signal) =>
+        new Promise((resolve) => {
+          signal?.addEventListener("abort", () =>
+            resolve({ status: "failed", providerName: "stoppable", error: "ffmpeg was stopped: the scene was cancelled." })
+          );
+        }),
+    };
+    const running = processVideoScene(
+      { projectRepo, sceneRepo, assetStore: store, provider, jobQueue: neverEnqueues() },
+      { projectId: PROJECT, videoProjectId },
+      scene.id
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    await projectRepo.requestCancel(PROJECT, videoProjectId);
+    await running;
+
+    const row = await sceneRepo.get({ projectId: PROJECT, videoProjectId }, scene.id);
+    expect(row?.status).toBe("cancelled");
+    expect(row?.retryCount ?? 0).toBe(0);
+  }, 20_000);
+
   it("still runs work that was not cancelled", async () => {
     const generationRepo = new PgImageGenerationRepository(db);
     const id = uuid();

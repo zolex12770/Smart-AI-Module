@@ -232,6 +232,25 @@ describe("project members", () => {
       expect(rows.find((m) => m.userId === auth.userId)?.role).toBe("admin");
     });
 
+    it("never lets two admins demote each other at the same moment into a project with none", async () => {
+      // Audit follow-up (DL-18): the guard was a read and a separate write, so two concurrent
+      // demotions could both see "another admin remains".
+      // Straight at the service, twice at once: over HTTP the permission check usually settles the
+      // order first, which would hide the race this is about.
+      const second = await secondUser("race-admin");
+      await join(second, "admin");
+      const me = await myEmail();
+      const as = (userId: string) =>
+        ({ user: { id: userId }, projectId: auth.projectId, method: "session" }) as unknown as Parameters<typeof ctx.auth.addProjectMember>[0];
+      const outcomes = await Promise.allSettled([
+        ctx.auth.addProjectMember(as(auth.userId), second.email, "editor"),
+        ctx.auth.addProjectMember(as(second.userId), me, "editor"),
+      ]);
+      expect(outcomes.map((o) => o.status).sort()).toEqual(["fulfilled", "rejected"]);
+      const rows = ((await members(auth.headers)).json() as { members: Array<{ role: string }> }).members;
+      expect(rows.filter((m) => m.role === "admin")).toHaveLength(1);
+    });
+
     it("changes a current member's role directly, and still lets a second admin step down", async () => {
       const second = await secondUser("second-admin");
       await join(second, "editor");

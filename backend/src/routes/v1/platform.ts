@@ -213,7 +213,17 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
       const repo = queue === "image.generate" ? ctx.imageGenerations : ctx.audioGenerations;
       const generationId = job.data.generationId;
       // The record first: a worker that picks the job up in between sees the request and stops.
-      await repo.requestCancel(projectId, generationId);
+      const requested = await repo.requestCancel(projectId, generationId);
+      if (!requested) {
+        // False means finished, or already asked. Only the second is a success to report: a
+        // finished generation was not cancelled, and answering `ok` would say it was.
+        const current = await repo.get(projectId, generationId);
+        if (!current) throw notFound();
+        if (!current.cancelRequestedAt || !["pending", "processing"].includes(current.status)) {
+          throw new ConflictError(`This ${queue === "image.generate" ? "image" : "audio"} generation already finished (${current.status}); there is nothing to cancel.`);
+        }
+        return { ok: true, generationId, alreadyRequested: true };
+      }
       await ctx.jobQueue.cancelForProject(projectId, queue, id);
       const generation = await repo.get(projectId, generationId);
       // Still queued, so no worker will ever settle it: settle it here. One already running is

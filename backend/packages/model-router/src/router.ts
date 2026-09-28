@@ -172,7 +172,16 @@ export class ModelRouter {
     if (request.provider) {
       const provider = this.registry.get(request.provider);
       if (!provider) throw new ProviderError(`Unknown provider "${request.provider}".`);
-      yield* this.streamWithRetry(provider, request, reportRetry, reportCall, signal, reportCommit);
+      // No failover here, but the same rule for what a commit is: a first event that is not an
+      // error (DL-18 — it used to be reported one step earlier, before that check).
+      let committed = false;
+      for await (const event of this.streamWithRetry(provider, request, reportRetry, reportCall, signal)) {
+        if (!committed && event.type !== "error") {
+          committed = true;
+          reportCommit({ provider: provider.name, model: provider.model });
+        }
+        yield event;
+      }
       return;
     }
 
@@ -246,7 +255,7 @@ export class ModelRouter {
         continue;
       }
 
-      const iterator = this.streamWithRetry(provider, request, reportRetry, reportCall, signal, reportCommit)[Symbol.asyncIterator]();
+      const iterator = this.streamWithRetry(provider, request, reportRetry, reportCall, signal)[Symbol.asyncIterator]();
       let first: IteratorResult<ChatStreamEvent>;
       try {
         // Abortable here too, not only in the inner loop (ADR-146): this is the pull the CALLER
@@ -280,8 +289,11 @@ export class ModelRouter {
         continue;
       }
 
-      // Committed: this provider produced a real first event.
+      // Committed: this provider produced a real first event. Only now is it the one being paid:
+      // an `error` first event above fails over, and reporting a commit before that check would
+      // charge a partial turn to a provider that answered nothing (audit follow-up, DL-18).
       this.recordSuccess(provider.name);
+      reportCommit({ provider: provider.name, model: provider.model });
       try {
         yield first.value;
         while (true) {
@@ -333,8 +345,7 @@ export class ModelRouter {
     request: ChatRequest,
     reportRetry: (r: ProviderRetry) => void,
     reportCall: (c: ProviderCallOutcome) => void,
-    signal?: AbortSignal,
-    reportCommit: (c: { provider: string; model: string }) => void = () => undefined
+    signal?: AbortSignal
   ): AsyncGenerator<ChatStreamEvent, void, unknown> {
     for (let attempt = 1; attempt <= this.retryPolicy.maxAttempts; attempt++) {
       // Per ATTEMPT, so a retried call is two measurements rather than one long one — which is
@@ -368,7 +379,6 @@ export class ModelRouter {
         continue;
       }
       if (first.done) return;
-      reportCommit({ provider: provider.name, model: provider.model });
       let settled = false;
       // Whether the provider actually FINISHED, which is not the same as whether it reported
       // token counts: a `done` event may carry no usage, and treating that as an abandoned

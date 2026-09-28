@@ -32,7 +32,7 @@
  *   OLLAMA_URL                   where to look for a model runtime (default http://127.0.0.1:11434)
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -231,11 +231,19 @@ if (wantsRuntime) {
   const modelUp = await reachable(`${OLLAMA_URL}/api/tags`);
   if (apiUp) {
     const out = join(OUT, "acceptance");
+    const resultFile = join(out, "full-system.json");
+    // A previous run's results must never stand in for this one's (audit follow-up, DL-18): the
+    // file is removed first, and what is read back must have started after this verify did.
+    rmSync(resultFile, { force: true });
+    const runStarted = Date.now();
     const res = await run("REAL RUNTIME", "node", ["scripts/acceptance/full-system.mjs"], {
       env: { ACCEPT_API_URL: API_URL, ACCEPT_OUT: out },
     });
     try {
-      acceptance = JSON.parse(readFileSync(join(out, "full-system.json"), "utf8"));
+      acceptance = JSON.parse(readFileSync(resultFile, "utf8"));
+      if (!(Date.parse(acceptance.startedAt) >= runStarted - 1000)) {
+        acceptance = { error: `the acceptance results predate this run (exit ${res.code})` };
+      }
     } catch {
       acceptance = { error: `the acceptance run produced no results (exit ${res.code})` };
     }
@@ -252,7 +260,9 @@ for (const [name, ids] of Object.entries(RUNTIME_GATES)) {
     if (acceptance?.unavailable) return acceptance.unavailable;
     if (acceptance?.error) return { status: FAIL, detail: acceptance.error };
     const checks = (acceptance.results ?? acceptance.checks ?? []).filter((c) => ids.includes(c.id));
-    if (checks.length === 0) return { status: FAIL, detail: `none of ${ids.join(", ")} ran` };
+    // Every check the gate stands for must have run; a subset is not the gate (DL-18).
+    const missing = ids.filter((id) => !checks.some((c) => c.id === id));
+    if (missing.length) return { status: FAIL, detail: `did not run: ${missing.join(", ")}` };
     const failedChecks = checks.filter((c) => c.status === FAIL);
     const blockedChecks = checks.filter((c) => c.status === BLOCKED);
     const summary = checks.map((c) => `${c.id}=${c.status === PASS ? "PASS" : c.status}`).join(" ");

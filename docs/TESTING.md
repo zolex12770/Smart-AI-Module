@@ -48,6 +48,31 @@ a model file. CI downloads SD-Turbo and runs both, and its **"Assert the gated s
 ran"** step fails the build if any gated suite skipped there. Locally they were run against SDXL
 base (see [MEDIA.md](MEDIA.md)); the 2 skips above are from the run without `IMAGE_SD_*`.
 
+## One command: `npm run verify`
+
+`scripts/verify.mjs` runs every gate and prints one line each, `PASS`, `FAIL` or
+`BLOCKED_EXTERNAL`:
+
+- BUILD, TYPECHECK, LINT, UNIT, INTEGRATION, API
+- SECURITY, E2E, DATABASE, BOUNDARY, BOOT
+- REAL RUNTIME, MEDIA, AGENT, RAG, MEMORY, MCP
+- DOCKER, TERRAFORM
+
+It exits non-zero when any gate fails. `BLOCKED_EXTERNAL` does not fail the run unless
+`VERIFY_STRICT=1`. It is reserved for something this machine cannot provide: no model runtime,
+no Docker daemon, or a registry it cannot reach. The six runtime gates come from one
+full-system acceptance run against `ACCEPT_API_URL`. Logs and `verify.json` go to
+`verify-results/`.
+
+## Runtime scripts beyond the acceptance run
+
+| Script | What it does to a running stack | Pass condition |
+|---|---|---|
+| `scripts/acceptance/browser.mjs` | A real Chromium drives the web app. It signs up, then covers streaming (samples the rendered length while tokens arrive), multi-turn and reload, Stop, memory, RAG with citations and a refusal, image/audio/video playback in the page, 12 routes, and sign-out/sign-in | Every check PASS, and no unexpected console error or ≥400 response on any screen |
+| `scripts/acceptance/attacks.mjs` | Attacks the running API: every protected route anonymously, CSRF, cross-tenant IDOR, API-key scope, path traversal, upload spoofing, oversized and hostile input, model and output-cap overrides, account enumeration, response headers, prompt injection through a document. `ATTACK_RATE_LIMIT=1` adds X-Forwarded-For spoofing against the login limiter | Each attack refused with the specific answer its defence gives |
+| `scripts/acceptance/failure-injection.mjs` | Stops Ollama, then Postgres, then the worker. Kills sd-cli mid-image and the MCP server process (Docker Compose) | Each failure is prompt, honest and uncharged, and the platform recovers once the dependency returns |
+| `scripts/acceptance/extra-scenarios.mjs` | Runs a second, unrelated coding task and a task where the naive patch is wrong; sends invalid image requests; generates images to check seed reproducibility | Coding verdicts agree with an independent test run; invalid requests queue nothing; the same seed gives the same bytes |
+
 ## Full-system acceptance
 
 `scripts/acceptance/full-system.mjs` drives the user journey against a running API with real

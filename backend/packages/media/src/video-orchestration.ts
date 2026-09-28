@@ -415,7 +415,15 @@ export async function processVideoScene(
       watch.signal
     );
 
-    if (result.status !== "succeeded" || !result.video) {
+    if ((result.status !== "succeeded" || !result.video) && watch.wasCancelled()) {
+      // A provider stopped by the cancellation RETURNS a failure rather than throwing (the local
+      // motion provider kills ffmpeg and reports it), so the cancelled branch must be reached from
+      // here too — otherwise the scene read `failed`, was queued for a retry, and the project
+      // settled `partially_succeeded` over a stop the user asked for (audit finding, DL-18).
+      await deps.sceneRepo.updateStatus(scope, sceneId, "cancelled", {
+        lastError: "Cancelled while the provider was generating this scene.",
+      });
+    } else if (result.status !== "succeeded" || !result.video) {
       deps.logger?.warn({ sceneId, videoProjectId: scope.videoProjectId, error: result.error }, "video scene failed");
       await deps.sceneRepo.updateStatus(scope, sceneId, "failed", {
         // ADR-155 — a provider's message names its endpoint, and `lastError` is served to the

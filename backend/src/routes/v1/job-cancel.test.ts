@@ -47,6 +47,23 @@ describe("POST /api/v1/jobs/:queue/:id/cancel", () => {
     expect(generation?.status).toBe("cancelled");
   });
 
+  it("does not claim to cancel a generation that already finished", async () => {
+    // Audit: the route answered `ok: true` for a finished job — nothing was cancelled.
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/v1/images",
+      headers: auth.headers,
+      payload: { prompt: "a lighthouse", aspectRatio: "1:1", quality: "fast" },
+    });
+    const generationId = (created.json() as { generation: { id: string } }).generation.id;
+    const jobId = await jobFor("image.generate");
+    await ctx.imageGenerations.updateStatus(auth.projectId, generationId, "succeeded", {});
+    const res = await app.inject({ method: "POST", url: `/api/v1/jobs/image.generate/${jobId}/cancel`, headers: auth.headers });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/already finished/);
+    expect((await ctx.imageGenerations.get(auth.projectId, generationId))?.status).toBe("succeeded");
+  });
+
   it("refuses to strand one step of a video, and says where to cancel it", async () => {
     await ctx.jobQueue.ensureQueue("video.scene");
     const jobId = (await ctx.jobQueue.enqueue("video.scene", { projectId: auth.projectId, videoProjectId: "v", sceneId: "s" }))!;

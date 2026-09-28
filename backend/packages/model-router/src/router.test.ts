@@ -488,3 +488,52 @@ describe("provider call reporting (ADR-132)", () => {
     expect(calls[0]!.status).toBe("cancelled");
   });
 });
+
+describe("commit reporting (DL-18)", () => {
+  const provider = (name: string, events: ChatStreamEvent[]): LLMProvider => ({
+    name,
+    isMock: false,
+    model: `${name}-model`,
+    capabilities: (): ProviderCapabilities => ({ streaming: true, toolCalling: false, structuredOutput: false, vision: false, contextWindow: null }),
+    async *streamChat() {
+      for (const event of events) yield event;
+    },
+  });
+  const done = (name: string): ChatStreamEvent => ({
+    type: "done",
+    message: { role: "assistant", content: "hi" },
+    usage: { inputTokens: 1, outputTokens: 1 },
+    provider: name,
+    model: `${name}-model`,
+    finishReason: "stop",
+  });
+
+  it("reports the provider that answered, never one whose first event was an error and was failed over", async () => {
+    const registry = new ModelRegistry();
+    registry.register(provider("broken", [{ type: "error", message: "upstream said no" }]), { asDefault: true });
+    registry.register(provider("working", [{ type: "token", delta: "hi" }, done("working")]));
+    const commits: string[] = [];
+    const events: ChatStreamEvent[] = [];
+    for await (const event of new ModelRouter(registry).streamChat(
+      { messages: [{ role: "user", content: "hello" }] },
+      { onCommit: (c) => commits.push(c.provider) }
+    )) {
+      events.push(event);
+    }
+    expect(commits).toEqual(["working"]);
+    expect(events.at(-1)).toMatchObject({ type: "done", provider: "working" });
+  });
+
+  it("reports nothing for a named provider whose only event is an error", async () => {
+    const registry = new ModelRegistry();
+    registry.register(provider("broken", [{ type: "error", message: "upstream said no" }]), { asDefault: true });
+    const commits: string[] = [];
+    for await (const _event of new ModelRouter(registry).streamChat(
+      { messages: [{ role: "user", content: "hello" }], provider: "broken" },
+      { onCommit: (c) => commits.push(c.provider) }
+    )) {
+      // draining
+    }
+    expect(commits).toEqual([]);
+  });
+});

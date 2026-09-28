@@ -133,7 +133,7 @@ default in `config.ts` applies.
 | Variable | Template value | What it does |
 |---|---|---|
 | `AUTH_RATE_LIMIT_MAX` | unset (e.g. `5`) | [OPTIONAL] Signup/login attempts per 10 minutes from one address (login gets double). |
-| `COOKIE_SAMESITE` | unset (e.g. `none`) | [PROD] Cookie SameSite. Derived from COOKIE_SECURE unless set: a deployed web app and API are different hostnames, so Lax would never send the cookie and nobody could sign in (ADR-070). |
+| `COOKIE_SAMESITE` | unset (e.g. `none`) | [PROD] Cookie SameSite. Derived from COOKIE_SECURE unless set: `none` when Secure, else `lax`. `none` is needed when the browser calls the API on another site (web app and API on different hostnames): Lax would never send the cookie there (ADR-070). Behind the web app's same-origin proxy (NEXT_PUBLIC_API_PROXY_TARGET, the Terraform deployment) set `lax`: the cookie is then first-party, which browsers blocking third-party cookies accept (DL-1). |
 | `WEB_FETCH_ALLOWLIST` | unset (e.g. `example.com,api.github.com`) | [OPTIONAL] Hostnames web.fetch may reach, comma-separated. Unset means any PUBLIC address is allowed (private ranges are always refused). An allowlist is the answer to a prompt-injected agent using egress to exfiltrate (ADR-104). |
 | `SESSION_TTL_DAYS` | `30` | Sessions are httpOnly cookies; Secure is forced on in production. |
 | `COOKIE_SECURE` | unset (e.g. `true`) | Sessions are httpOnly cookies; Secure is forced on in production. |

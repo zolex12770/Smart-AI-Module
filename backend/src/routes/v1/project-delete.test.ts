@@ -45,17 +45,26 @@ describe("DELETE /api/v1/projects/:projectId", () => {
     const jobId = (await ctx.jobQueue.enqueue("image.generate", { projectId, generationId: "g1" }))!;
     const task = await ctx.tasks.create({ id: uuid(), projectId, taskType: "autonomous", input: { goal: "x" } });
     const survivor = await ctx.tasks.create({ id: uuid(), projectId: auth.projectId, taskType: "autonomous", input: { goal: "y" } });
+    // Media: one waiting in the queue, one a worker is running.
+    const request = { prompt: "a lighthouse", aspectRatio: "1:1" as const, quality: "fast" as const };
+    const queued = await ctx.imageGenerations.create({ id: uuid(), projectId, createdByUserId: auth.userId, request });
+    const running = await ctx.imageGenerations.create({ id: uuid(), projectId, createdByUserId: auth.userId, request });
+    await ctx.imageGenerations.updateStatus(projectId, running.id, "processing", {});
     const workspace = join(ctx.sandboxRoot, projectId);
     mkdirSync(workspace, { recursive: true });
     writeFileSync(join(workspace, "notes.txt"), "agent output");
 
     const res = await app.inject({ method: "DELETE", url: `/api/v1/projects/${projectId}`, headers });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ ok: true, stopped: { queuedJobs: 1, tasks: 1, workspaceRemoved: true } });
+    expect(res.json()).toMatchObject({ ok: true, stopped: { queuedJobs: 1, tasks: 1, media: 2, workspaceRemoved: true }, notStopped: [] });
 
     expect((await ctx.jobQueue.getJob("image.generate", jobId))?.state).toBe("cancelled");
     expect((await ctx.tasks.getUnscoped(task.id))?.state).toBe("CANCELLED");
     expect(existsSync(workspace)).toBe(false);
+    // The queued one is settled (nothing else ever would); the running one is asked to stop, which
+    // is what its worker's cancellation watch reads (DL-18).
+    expect((await ctx.imageGenerations.get(projectId, queued.id))?.status).toBe("cancelled");
+    expect((await ctx.imageGenerations.get(projectId, running.id))?.cancelRequestedAt).toBeTruthy();
     // Another project's work is untouched.
     expect((await ctx.tasks.getUnscoped(survivor.id))?.state).not.toBe("CANCELLED");
   });

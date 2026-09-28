@@ -146,6 +146,44 @@ describe("chat billing for turns that do not finish", () => {
     expect(keys.some((k) => k.startsWith("llm:memory-extraction:"))).toBe(true);
   });
 
+  it("charges an extraction that failed partway as an estimate, never as a 0-token unknown row (DL-18)", async () => {
+    ctx.memoryExtractionEnabled = true;
+    useProvider(async function* (request) {
+      const extracting = request.messages[0]?.role === "system" && request.responseFormat === "json_object";
+      if (extracting) {
+        yield { type: "token", delta: '{"facts":[{"content":"The user keeps' };
+        throw new Error("connection reset by peer");
+      }
+      yield { type: "token", delta: "Noted." };
+      yield {
+        type: "done",
+        message: { role: "assistant", content: "Noted." },
+        usage: { inputTokens: 40, outputTokens: 2 },
+        provider: "scripted",
+        model: "scripted-1",
+        finishReason: "stop",
+      };
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/v1/chat",
+      headers: auth.headers,
+      payload: { messages: [{ role: "user", content: "I keep a boat called Tern." }] },
+    });
+    expect(res.statusCode).toBe(200);
+    let charged = await rows();
+    for (let i = 0; i < 50 && !charged.some((r) => (r.idempotencyKey ?? "").startsWith("llm:memory-extraction")); i++) {
+      await sleep(50);
+      charged = await rows();
+    }
+    const extraction = charged.filter((r) => (r.idempotencyKey ?? "").startsWith("llm:memory-extraction"));
+    expect(extraction).toHaveLength(1);
+    expect(extraction[0].idempotencyKey).toMatch(/^llm:memory-extraction-partial:/);
+    expect(extraction[0]).toMatchObject({ provider: "scripted", model: "scripted-1" });
+    expect(charged.some((r) => r.provider === "unknown")).toBe(false);
+    expect(await ctx.memoryItems.listRecent({ projectId: auth.projectId, userId: auth.userId, limit: 5 })).toEqual([]);
+  });
+
   it("refuses an over-quota turn before writing a conversation or a message", async () => {
     ctx.quota = new QuotaManager(new PgUsageRecordRepository(db), { dailyTokenLimit: 10 });
     const res = await app.inject({

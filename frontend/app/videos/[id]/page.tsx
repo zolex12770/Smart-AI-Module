@@ -45,7 +45,7 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
     }
   }
 
-  /** Stops scenes that have not started yet (ADR-122); one already generating finishes. */
+  /** Stops every scene: queued ones never start, and one already generating is stopped mid-run (DL-14). */
   async function handleCancel() {
     setCancelling(true);
     setActionError(null);
