@@ -1,0 +1,48 @@
+{
+  "api": "http://127.0.0.1:8787",
+  "startedAt": "2026-09-28T08:01:21.704Z",
+  "counts": {
+    "PASS": 2,
+    "FAIL": 1,
+    "BLOCKED_EXTERNAL": 1
+  },
+  "results": [
+    {
+      "id": "CODING-SECOND",
+      "title": "A second, unrelated coding task: the source is fixed and the test passes, verified here",
+      "status": "FAIL",
+      "seconds": 602,
+      "detail": "task FAILED; independent run: exit 1: node:assert:150; test untouched: true",
+      "evidence": {
+        "source": "function slugify(title) {\n  return title.replace(/\\W+/g, '-').replace('-', '').toLowerCase().trim();\n}\n\nmodule.exports = { slugify };\n"
+      }
+    },
+    {
+      "id": "CODING-BAD-PATCH",
+      "title": "Where a naive patch is wrong, the task's verdict agrees with the test, and the test is not edited",
+      "status": "PASS",
+      "seconds": 602,
+      "detail": "task FAILED; independent run: exit 1: node:assert:150; verdict agrees with the test: true; test untouched: true; reason: Node \"399dca74-3b7a-4647-ab1a-68d897d77643\" exceeded its 600000ms timeout.",
+      "evidence": {
+        "source": "// Returns the duration in seconds: '90s', '2m', '1h30m', '1h 5m 10s'.\nfunction parseDuration(text) {\n  return parseInt(text, 10);\n}\n\nmodule.exports = { parseDuration };\n",
+        "state": "FAILED"
+      }
+    },
+    {
+      "id": "IMAGE-NEGATIVE",
+      "title": "Invalid image requests are refused before anything is queued",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "5 invalid requests, each 400; no generation created",
+      "evidence": null
+    },
+    {
+      "id": "IMAGE-REPRODUCIBLE",
+      "title": "The same prompt and seed give the same image, byte for byte; another seed gives another",
+      "status": "BLOCKED_EXTERNAL",
+      "seconds": 0,
+      "detail": "no real image provider configured",
+      "evidence": null
+    }
+  ]
+}

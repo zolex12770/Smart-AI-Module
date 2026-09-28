@@ -176,7 +176,11 @@ async function generate(prompt, seed) {
 
 await check("IMAGE-REPRODUCIBLE", "The same prompt and seed give the same image, byte for byte; another seed gives another", async () => {
   const providers = await user.call("GET", "/api/v1/providers");
-  if (!providers.body?.image?.available || providers.body?.image?.isMock) return { status: BLOCKED, detail: "no real image provider configured" };
+  // The body is `{ providers: { image, video, speech } }`.
+  const image = providers.body?.providers?.image;
+  if (!image?.available) return { status: BLOCKED, detail: "no image provider is configured on this deployment" };
+  // A mock is not "not configured": it is a placeholder, and a reproducibility claim about it is worthless.
+  if (image.isMock) return { status: FAIL, detail: `the image provider is a MOCK (${image.name})` };
   const prompt = "a red lighthouse on a rocky shore under a clear sky";
   const a = await generate(prompt, 4242);
   const b = await generate(prompt, 4242);

@@ -546,3 +546,26 @@ carry.
   sources), the source order and types, and that the caption track is kept.
 - Both fail against the previous code.
 
+
+## DL-20: The compose stack gets the agent node budget its model needs
+
+**Context.** In the first extra-scenarios run on compose, both coding tasks were stopped by the
+planner's 10-minute node deadline. The audit trail of CODING-SECOND shows 9 turns of
+qwen2.5:7b on 4 CPU cores, about 5 output tokens/s. The platform behaved correctly: the task
+ended `FAILED` with the reason, the test file was untouched, and an independent run agreed. But
+docs/ENVIRONMENT.md already recommends `AGENT_NODE_TIMEOUT_MS=1800000` for exactly this setup, and
+`docker-compose.yml` did not pass the variable through, so the stack could not follow its own
+documentation.
+
+**Decision.** Compose passes `AGENT_NODE_TIMEOUT_MS`, defaulting to 30 minutes. Setting it empty
+keeps the planner's per-node deadlines. The FAIL from the first run is kept as evidence
+(`evidence/2026-09-28/extra-scenarios-run1-600s-node-budget.md`); it is not overwritten.
+
+**Also fixed.** Three acceptance scripts read the wrong response fields:
+
+- `extra-scenarios.mjs` and `failure-injection.mjs` read `/api/v1/providers` as `body.image`
+  where the API answers `body.providers.image`. IMAGE-REPRODUCIBLE was therefore reported
+  `BLOCKED_EXTERNAL` on a stack that had SDXL. Both scripts now read the right field, and a mock
+  provider is a FAIL, not a block.
+- `attacks.mjs` read the same response wrongly. It fell back to `/api/v1/models`, which was
+  right by accident; it now reads `/api/v1/models` directly.

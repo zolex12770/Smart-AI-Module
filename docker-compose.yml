@@ -48,6 +48,10 @@ x-api-environment: &api-environment
   MONTHLY_TOKEN_LIMIT: ${MONTHLY_TOKEN_LIMIT:-}
   DAILY_IMAGE_LIMIT: ${DAILY_IMAGE_LIMIT:-}
   MONTHLY_VIDEO_SECONDS_LIMIT: ${MONTHLY_VIDEO_SECONDS_LIMIT:-}
+  # The stack's default model is a 7B on CPU (~5 output tokens/s here). The planner's 10-minute
+  # node deadline stopped a coding task after 9 model turns (DL-20), so this stack uses the
+  # 30 minutes docs/ENVIRONMENT.md recommends for that setup. Set it empty to keep the planner's.
+  AGENT_NODE_TIMEOUT_MS: ${AGENT_NODE_TIMEOUT_MS-1800000}
 
 services:
   postgres:

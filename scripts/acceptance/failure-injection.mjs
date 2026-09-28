@@ -150,7 +150,10 @@ await check("WORKER-DOWN", "Worker stopped: queued work waits, durably, and comp
 // --- A media provider dying mid-generation ------------------------------------------------------------
 await check("MEDIA-CRASH", "The image process killed mid-generation: the image fails honestly and is not charged", async () => {
   const providers = await user.call("GET", "/api/v1/providers");
-  if (!providers.body?.image?.available || providers.body?.image?.isMock) return { status: BLOCKED, detail: "no real image provider configured" };
+  // The body is `{ providers: { image, video, speech } }`.
+  const image = providers.body?.providers?.image;
+  if (!image?.available) return { status: BLOCKED, detail: "no image provider is configured on this deployment" };
+  if (image.isMock) return { status: FAIL, detail: `the image provider is a MOCK (${image.name}); a crash of it proves nothing` };
   const before = (await user.call("GET", "/api/v1/usage")).body?.projectUsage?.images?.generatedToday ?? 0;
   const created = await user.call("POST", "/api/v1/images", { prompt: "a lighthouse at dusk", aspectRatio: "1:1", quality: "fast" });
   const id = created.body?.generation?.id;
