@@ -296,7 +296,9 @@ await gate("TERRAFORM", async () => {
   if (version.code !== 0) return { status: FAIL, detail: "terraform is not installed (https://developer.hashicorp.com/terraform/install)" };
   const fmt = await run("TERRAFORM", "terraform", ["fmt", "-check", "-recursive"], { cwd });
   if (fmt.code !== 0) return { status: FAIL, detail: "terraform fmt -check found unformatted files" };
-  const init = await run("TERRAFORM", "terraform", ["init", "-backend=false", "-input=false"], { cwd });
+  // -lockfile=readonly: a gate must not rewrite a tracked file. An init against a local provider
+  // mirror added this platform's hashes to .terraform.lock.hcl, and the change got committed.
+  const init = await run("TERRAFORM", "terraform", ["init", "-backend=false", "-input=false", "-lockfile=readonly"], { cwd });
   if (init.code !== 0) {
     if (/registry\.terraform\.io|Forbidden|could not connect|timeout|no such host/i.test(init.output) && !existsSync(join(cwd, ".terraform"))) {
       return { status: BLOCKED, detail: "providers cannot be downloaded (registry unreachable); set TF_CLI_CONFIG_FILE to a filesystem mirror" };
