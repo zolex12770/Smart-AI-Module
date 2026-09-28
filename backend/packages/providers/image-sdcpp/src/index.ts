@@ -133,11 +133,12 @@ export class SdCppImageProvider implements ImageProvider {
    */
   async generateImage(
     req: ImageGenerationRequest,
-    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
+    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>,
+    signal?: AbortSignal
   ): Promise<ImageResult> {
     const run = this.tail.then(
-      () => this.generateOne(req, store),
-      () => this.generateOne(req, store)
+      () => this.generateOne(req, store, signal),
+      () => this.generateOne(req, store, signal)
     );
     this.tail = run.catch(() => undefined);
     return run;
@@ -145,8 +146,11 @@ export class SdCppImageProvider implements ImageProvider {
 
   private async generateOne(
     req: ImageGenerationRequest,
-    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
+    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>,
+    signal?: AbortSignal
   ): Promise<ImageResult> {
+    // Cancelled while it waited its turn behind another generation: never start the process.
+    if (signal?.aborted) return { status: "failed", providerName: this.name, error: "Cancelled before generation started." };
     const { width, height } = dimensionsFor(req.aspectRatio, this.options.size);
     // A distilled turbo model ignores extra steps; a standard one needs them. `quality` scales
     // what the deployment configured rather than inventing a number of its own.
@@ -168,7 +172,7 @@ export class SdCppImageProvider implements ImageProvider {
     if (this.options.threads !== undefined) args.push("-t", String(this.options.threads));
 
     try {
-      await this.run(args);
+      await this.run(args, signal);
       const bytes = await readFile(outPath);
       // A PNG, not merely a file: the first eight bytes are the signature every decoder checks.
       if (bytes.byteLength < 1024 || bytes.subarray(1, 4).toString("ascii") !== "PNG") {
@@ -193,7 +197,7 @@ export class SdCppImageProvider implements ImageProvider {
     }
   }
 
-  private run(args: string[]): Promise<void> {
+  private run(args: string[], signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
       const child = this.options.spawnImpl(this.options.binaryPath, args, {
         cwd: dirname(this.options.binaryPath),
@@ -220,6 +224,15 @@ export class SdCppImageProvider implements ImageProvider {
         child.kill("SIGKILL");
         finish(new Error(`stable-diffusion.cpp did not finish within ${this.options.timeoutMs}ms.`));
       }, this.options.timeoutMs);
+      // Audit finding 5: Cancel on a processing image did nothing — the process ran to the end
+      // and the result was written as a success over the request to stop. It is killed now.
+      const onAbort = () => {
+        child.kill("SIGKILL");
+        finish(new Error("stable-diffusion.cpp was stopped: the generation was cancelled."));
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort, { once: true });
+      child.once("close", () => signal?.removeEventListener("abort", onAbort));
 
       child.stderr?.on("data", (chunk: Buffer) => {
         if (stderr.length < 8_000) stderr += chunk.toString("utf8");

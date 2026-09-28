@@ -40,3 +40,6 @@ frontend/playwright-report/
 .verify-migrations-apply.mjs
 .migration-check/
 acceptance-results/
+
+# npm run verify output
+verify-results/

@@ -122,7 +122,8 @@ export class OpenAICompatibleImageProvider implements ImageProvider {
 
   async generateImage(
     req: ImageGenerationRequest,
-    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
+    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>,
+    signal?: AbortSignal
   ): Promise<ImageResult> {
     const size = this.sizeFor(req.aspectRatio);
     const body: Record<string, unknown> = {
@@ -143,6 +144,10 @@ export class OpenAICompatibleImageProvider implements ImageProvider {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    // A cancellation stops the request as well as the deadline does (audit finding 5).
+    const onCancel = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener("abort", onCancel, { once: true });
     try {
       const res = await this.fetchImpl(`${this.baseUrl}/images/generations`, {
         method: "POST",
@@ -190,11 +195,14 @@ export class OpenAICompatibleImageProvider implements ImageProvider {
         providerName: this.name,
         error:
           err instanceof Error && err.name === "AbortError"
-            ? `Image generation timed out after ${this.requestTimeoutMs}ms.`
+            ? signal?.aborted
+              ? "Image generation was cancelled."
+              : `Image generation timed out after ${this.requestTimeoutMs}ms.`
             : `Could not reach the image provider at ${this.baseUrl}: ${err instanceof Error ? err.message : String(err)}`,
       };
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", onCancel);
     }
   }
 

@@ -23,18 +23,27 @@ interface UsageResponse {
     llm: { tokensToday: number; tokensThisMonth: number; estimatedCostUsdThisMonth: number | null; pricedCallsOnly: boolean };
     images: { generatedToday: number };
     video: { secondsGeneratedThisMonth: number };
+    /** Audit finding 22: enforced, and never reported until now. */
+    embeddings?: { tokensToday: number; tokensThisMonth: number };
+    speech?: { charactersToday: number; charactersThisMonth: number };
   };
   /** This project's share of it. Deliberately not compared against a limit: nothing enforces one. */
   projectUsage?: {
-    llm: { tokensToday: number; tokensThisMonth: number };
+    llm: { tokensToday: number; tokensThisMonth: number; estimatedCostUsdThisMonth?: number | null };
     images: { generatedToday: number };
     video: { secondsGeneratedThisMonth: number };
+    embeddings?: { tokensThisMonth: number };
+    speech?: { charactersThisMonth: number };
   };
   limits: {
     dailyTokenLimit: number | null;
     monthlyTokenLimit: number | null;
     dailyImageLimit: number | null;
     monthlyVideoSecondsLimit: number | null;
+    dailyEmbeddingTokenLimit?: number | null;
+    monthlyEmbeddingTokenLimit?: number | null;
+    dailySpeechCharacterLimit?: number | null;
+    monthlySpeechCharacterLimit?: number | null;
   };
 }
 
@@ -97,6 +106,26 @@ function UsageView() {
           used={usage.video.secondsGeneratedThisMonth}
           limit={limits.monthlyVideoSecondsLimit}
         />
+        {usage.embeddings ? (
+          <>
+            <Meter label="Embedding tokens today" used={usage.embeddings.tokensToday} limit={limits.dailyEmbeddingTokenLimit ?? null} />
+            <Meter
+              label="Embedding tokens this month"
+              used={usage.embeddings.tokensThisMonth}
+              limit={limits.monthlyEmbeddingTokenLimit ?? null}
+            />
+          </>
+        ) : null}
+        {usage.speech ? (
+          <>
+            <Meter label="Speech characters today" used={usage.speech.charactersToday} limit={limits.dailySpeechCharacterLimit ?? null} />
+            <Meter
+              label="Speech characters this month"
+              used={usage.speech.charactersThisMonth}
+              limit={limits.monthlySpeechCharacterLimit ?? null}
+            />
+          </>
+        ) : null}
       </div>
 
       {projectUsage && (
@@ -114,16 +143,25 @@ function UsageView() {
               used={projectUsage.video.secondsGeneratedThisMonth}
               limit={null}
             />
+            {projectUsage.embeddings ? (
+              <Meter label="Embedding tokens this month" used={projectUsage.embeddings.tokensThisMonth} limit={null} />
+            ) : null}
+            {projectUsage.speech ? (
+              <Meter label="Speech characters this month" used={projectUsage.speech.charactersThisMonth} limit={null} />
+            ) : null}
           </div>
         </>
       )}
 
-      <h2>Estimated cost this month</h2>
+      <h2>Estimated cost this month (organization)</h2>
       <p className="usage-cost">
         {usage.llm.estimatedCostUsdThisMonth === null
           ? "Unknown"
           : `$${usage.llm.estimatedCostUsdThisMonth.toFixed(4)}`}
       </p>
+      {typeof projectUsage?.llm.estimatedCostUsdThisMonth === "number" ? (
+        <p className="auth-hint">This project: ${projectUsage.llm.estimatedCostUsdThisMonth.toFixed(4)}</p>
+      ) : null}
       {/* The API reports this honestly rather than implying a total it cannot compute. */}
       <p className="auth-hint">
         Calls made with a model that has no researched price contribute nothing to this figure rather than

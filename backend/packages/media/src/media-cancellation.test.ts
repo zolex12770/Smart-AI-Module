@@ -97,6 +97,48 @@ describe("cancelled media work never reaches the provider", () => {
     expect(row?.attemptCount).toBe(0);
   });
 
+  it("stops an image that is already generating, and settles it as cancelled (audit finding 5)", async () => {
+    const generationRepo = new PgImageGenerationRepository(db);
+    const id = uuid();
+    await generationRepo.create({
+      id,
+      projectId: PROJECT,
+      createdByUserId: USER,
+      request: { prompt: "a harbour", aspectRatio: "1:1", quality: "fast" },
+    });
+    let sawSignal: AbortSignal | undefined;
+    const provider: ImageProvider = {
+      name: "slow",
+      isMock: false,
+      getCapabilities: () => ({
+        supportsNegativePrompt: false,
+        supportsSeed: false,
+        maxImagesPerCall: 1,
+        supportedAspectRatios: ["1:1"],
+        hasFastTier: true,
+      }),
+      // Like sd-cli under a kill: returns a failure once the signal fires.
+      generateImage: (_req, _store, signal) =>
+        new Promise((resolve) => {
+          sawSignal = signal;
+          signal?.addEventListener("abort", () =>
+            resolve({ status: "failed", providerName: "slow", error: "stopped: cancelled" })
+          );
+        }),
+    };
+    const controller = new AbortController();
+    const running = processImageGeneration({ generationRepo, assetStore: store, provider }, PROJECT, id, controller.signal);
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await generationRepo.get(PROJECT, id))?.status).toBe("processing");
+    controller.abort();
+    await running;
+
+    expect(sawSignal).toBe(controller.signal);
+    const row = await generationRepo.get(PROJECT, id);
+    expect(row?.status).toBe("cancelled");
+    expect(row?.resultAssetId ?? null).toBeNull();
+  });
+
   it("settles a cancelled video scene without calling the provider", async () => {
     const projectRepo = new PgVideoProjectRepository(db);
     const sceneRepo = new PgVideoSceneRepository(db);

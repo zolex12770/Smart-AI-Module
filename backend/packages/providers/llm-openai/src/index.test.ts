@@ -302,3 +302,49 @@ describe("OpenAIProvider failure modes that must not look like success", () => {
     );
   });
 });
+
+/**
+ * A deadline and a cancellation the HTTP call obeys — audit finding 19. The request had no signal
+ * at all: a stalled connection hung its caller forever, and a cancelled chat left the provider
+ * streaming (and billing) tokens nobody read.
+ */
+describe("deadline and cancellation", () => {
+  const FIRST_FRAME = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Hel\"}\n\n";
+  /** A response that sends one frame, then nothing, and ends only when the request is aborted. */
+  const stallingFetch = (seen: { signal?: AbortSignal }) =>
+    (async (_url: unknown, init?: RequestInit) => {
+      seen.signal = init?.signal ?? undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(FIRST_FRAME));
+          init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+        },
+      });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+
+  it("gives up at the deadline with a timeout the router retries", async () => {
+    const seen: { signal?: AbortSignal } = {};
+    const provider = new OpenAIProvider({ apiKey: "test-key", fetchImpl: stallingFetch(seen), requestTimeoutMs: 100 });
+    const started = Date.now();
+    await expect(
+      (async () => {
+        for await (const _event of provider.streamChat({ messages: [{ role: "user", content: "hi" }] })) {
+          // draining
+        }
+      })()
+    ).rejects.toThrow(/did not complete within .*timeout/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(seen.signal?.aborted).toBe(true);
+  });
+
+  it("aborts the HTTP request when the consumer stops reading", async () => {
+    const seen: { signal?: AbortSignal } = {};
+    const provider = new OpenAIProvider({ apiKey: "test-key", fetchImpl: stallingFetch(seen) });
+    const stream = provider.streamChat({ messages: [{ role: "user", content: "hi" }] });
+    const first = await stream.next();
+    expect(first.value).toMatchObject({ type: "token" });
+    await stream.return(undefined);
+    expect(seen.signal?.aborted).toBe(true);
+  });
+});

@@ -69,6 +69,13 @@ export interface UsageRecordRepository {
   sumLlmTokensForTenantSince(projectId: string, since: Date): Promise<number>;
   countImagesForTenantSince(projectId: string, since: Date): Promise<number>;
   sumVideoSecondsForTenantSince(projectId: string, since: Date): Promise<number>;
+  /** Audit finding 22: cost, embeddings and speech, organization-wide, for `/api/v1/usage`. */
+  sumLlmCostUsdForTenantSince(projectId: string, since: Date): Promise<number>;
+  /** This project's share of the same two. */
+  sumEmbeddingTokensSince(projectId: string, since: Date): Promise<number>;
+  sumSpeechCharactersSince(projectId: string, since: Date): Promise<number>;
+  sumEmbeddingTokensForTenantSince(projectId: string, since: Date): Promise<number>;
+  sumSpeechCharactersForTenantSince(projectId: string, since: Date): Promise<number>;
 }
 
 export class PgUsageRecordRepository implements UsageRecordRepository {
@@ -195,6 +202,10 @@ export class PgUsageRecordRepository implements UsageRecordRepository {
 
   async sumVideoSecondsForTenantSince(projectId: string, since: Date): Promise<number> {
     return this.sumTenantColumnSince(projectId, "video", usageRecords.units, since);
+  }
+
+  async sumLlmCostUsdForTenantSince(projectId: string, since: Date): Promise<number> {
+    return this.sumTenantColumnSince(projectId, "llm", usageRecords.estimatedCostUsd, since);
   }
 
   async sumEmbeddingTokensForTenantSince(projectId: string, since: Date): Promise<number> {

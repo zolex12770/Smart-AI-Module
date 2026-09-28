@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { AUXILIARY_CALL_TIMEOUT_MS } from "./rag.js";
 import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
 import {
   CONVERSATION_SUMMARY_PROMPT,
@@ -259,7 +260,9 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
               // Zero temperature: a summary is a record, not a composition, and a different
               // paraphrase on every request would make the conversation drift by itself.
               temperature: 0,
-            })) {
+              // A deadline (audit finding 19): this runs before the response headers, so a
+              // stalled provider used to hold the whole chat request with nothing sent.
+            }, { signal: AbortSignal.timeout(ctx.auxiliaryCallTimeoutMs ?? AUXILIARY_CALL_TIMEOUT_MS) })) {
               if (event.type === "token") text += event.delta;
               else if (event.type === "done") {
                 usage = event.usage;
@@ -798,7 +801,8 @@ async function extractMemories(
       ],
       // The reply is parsed as JSON; where the provider can guarantee the syntax, it should.
       responseFormat: "json_object",
-    })) {
+      // A background call with nobody waiting on it still gets a deadline (audit finding 19).
+    }, { signal: AbortSignal.timeout(ctx.auxiliaryCallTimeoutMs ?? AUXILIARY_CALL_TIMEOUT_MS) })) {
       if (event.type === "token") text += event.delta;
       if (event.type === "done") {
         text = event.message.content || text;

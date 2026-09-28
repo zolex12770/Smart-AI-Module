@@ -99,9 +99,15 @@ export class ImageMotionVideoProvider implements VideoProvider {
     return `a generated still (${this.options.imageProvider.name}) animated by ffmpeg — motion, not a video model`;
   }
 
+  /**
+   * `signal` reaches both halves — audit finding 6: the still (the image provider kills its
+   * process) and the ffmpeg render. Before, neither could be stopped and docs/MEDIA.md said
+   * cancellation reached a running provider call.
+   */
   async generateVideo(
     req: VideoGenerationRequest,
-    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
+    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>,
+    signal?: AbortSignal
   ): Promise<VideoResult> {
     if (req.durationSeconds > MAX_DURATION_SECONDS) {
       return {
@@ -126,7 +132,8 @@ export class ImageMotionVideoProvider implements VideoProvider {
         async (bytes) => {
           still = bytes;
           return "in-memory";
-        }
+        },
+        signal
       );
       if (image.status !== "succeeded" || !still) {
         return {
@@ -139,7 +146,8 @@ export class ImageMotionVideoProvider implements VideoProvider {
       const stillPath = join(dir, "still.png");
       await writeFile(stillPath, still as Buffer);
       const outPath = join(dir, "clip.mp4");
-      await this.render(stillPath, outPath, req);
+      if (signal?.aborted) return { status: "failed", providerName: this.name, error: "Cancelled before the clip was rendered." };
+      await this.render(stillPath, outPath, req, signal);
 
       const bytes = await readFile(outPath);
       // An MP4's first box is `ftyp`; anything else is not a container a player will open.
@@ -169,7 +177,7 @@ export class ImageMotionVideoProvider implements VideoProvider {
   }
 
   /** Ken Burns: a slow push or drift, alternating by scene so a sequence does not pulse. */
-  private render(stillPath: string, outPath: string, req: VideoGenerationRequest): Promise<void> {
+  private render(stillPath: string, outPath: string, req: VideoGenerationRequest, signal?: AbortSignal): Promise<void> {
     const frames = Math.max(1, Math.round(req.durationSeconds * this.options.fps));
     const { width, height, fps } = this.options;
     // Zoom in on even scenes, out on odd ones. `zoompan` needs the frame count and an output size.
@@ -217,6 +225,13 @@ export class ImageMotionVideoProvider implements VideoProvider {
         child.kill("SIGKILL");
         finish(new Error(`ffmpeg did not finish within ${this.options.timeoutMs}ms.`));
       }, this.options.timeoutMs);
+      const onAbort = () => {
+        child.kill("SIGKILL");
+        finish(new Error("ffmpeg was stopped: the scene was cancelled."));
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener("abort", onAbort, { once: true });
+      child.once("close", () => signal?.removeEventListener("abort", onAbort));
 
       child.stderr?.on("data", (chunk: Buffer) => {
         if (stderr.length < 8_000) stderr += chunk.toString("utf8");

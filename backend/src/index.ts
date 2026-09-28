@@ -943,14 +943,22 @@ async function main() {
           // `generation_duration_seconds` answers is "how long does this provider take".
           const startedAt = Date.now();
           let generation: Awaited<ReturnType<typeof imageGenerations.get>> = undefined;
+          // Cancel while processing reaches the provider now (audit finding 5): the watch polls the
+          // row the API writes, and its signal kills sd-cli or aborts the hosted request.
+          const watch = watchForCancellation(async () => {
+            const current = await imageGenerations.get(projectId, generationId);
+            return Boolean(current?.cancelRequestedAt);
+          });
           try {
             await processImageGeneration(
               { generationRepo: imageGenerations, assetStore, provider: imageProvider },
               projectId,
-              generationId
+              generationId,
+              watch.signal
             );
             generation = await imageGenerations.get(projectId, generationId);
           } finally {
+            watch.stop();
             /**
              * docs/20_OBSERVABILITY.md §2.1 `generation_duration_seconds` / `generation_total`.
              *

@@ -86,4 +86,43 @@ describe("GET /api/v1/usage and quota enforcement (real buildServer() app, app.i
     expect(res.statusCode).toBe(429);
     expect(res.json().error.code).toBe("QUOTA_EXCEEDED");
   });
+
+  it("reports cost, embeddings and speech per organization, and this project's share apart", async () => {
+    // Audit finding 22: the cost inside the ORGANIZATION block was summed over this project only,
+    // and embedding and speech limits were enforced but never reported.
+    const other = await app.inject({ method: "POST", url: "/api/v1/projects", headers: auth.headers, payload: { name: "Second" } });
+    const otherId = (other.json() as { project: { id: string } }).project.id;
+    const repo = new PgUsageRecordRepository(db);
+    const row = (projectId: string, kind: "llm" | "embedding" | "speech", key: string, over: Record<string, unknown>) =>
+      repo.create({
+        id: key,
+        projectId,
+        userId: auth.userId,
+        kind,
+        provider: "p",
+        model: "m",
+        inputTokens: null,
+        outputTokens: null,
+        units: null,
+        estimatedCostUsd: null,
+        requestId: null,
+        idempotencyKey: key,
+        ...over,
+      });
+    await row(auth.projectId, "llm", "a", { inputTokens: 1, outputTokens: 1, estimatedCostUsd: 0.25 });
+    await row(otherId, "llm", "b", { inputTokens: 1, outputTokens: 1, estimatedCostUsd: 0.5 });
+    await row(auth.projectId, "embedding", "c", { inputTokens: 40 });
+    await row(otherId, "embedding", "d", { inputTokens: 60 });
+    await row(otherId, "speech", "e", { units: 300 });
+    ctx.quota = new QuotaManager(repo, { monthlyEmbeddingTokenLimit: 1000, dailySpeechCharacterLimit: 5000 });
+
+    const body = (await app.inject({ method: "GET", url: "/api/v1/usage", headers: auth.headers })).json();
+    expect(body.usage.llm.estimatedCostUsdThisMonth).toBeCloseTo(0.75);
+    expect(body.projectUsage.llm.estimatedCostUsdThisMonth).toBeCloseTo(0.25);
+    expect(body.usage.embeddings).toEqual({ tokensToday: 100, tokensThisMonth: 100 });
+    expect(body.projectUsage.embeddings).toEqual({ tokensThisMonth: 40 });
+    expect(body.usage.speech).toEqual({ charactersToday: 300, charactersThisMonth: 300 });
+    expect(body.projectUsage.speech).toEqual({ charactersThisMonth: 0 });
+    expect(body.limits).toMatchObject({ monthlyEmbeddingTokenLimit: 1000, dailySpeechCharacterLimit: 5000 });
+  });
 });

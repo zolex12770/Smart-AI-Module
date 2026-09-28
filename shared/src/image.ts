@@ -57,8 +57,13 @@ export interface ImageProvider {
   readonly name: string;
   readonly isMock: boolean;
   getCapabilities(): ImageProviderCapabilities;
+  /**
+   * `signal` — a cancellation the provider must act on: stop the process or the request, and
+   * report a failure (audit finding 5). Optional so a caller with nothing to cancel passes none.
+   */
   generateImage(
     req: ImageGenerationRequest,
-    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
+    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>,
+    signal?: AbortSignal
   ): Promise<ImageResult>;
 }

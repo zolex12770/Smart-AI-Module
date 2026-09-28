@@ -126,6 +126,10 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
   app.post(
     "/api/v1/workspace/files",
     {
+      // Audit finding 26: the schema allows a 1 MiB file, and Fastify's default 1 MiB body limit
+      // refused one with 413 before the schema ever ran — the JSON envelope, and escaping (up to
+      // six bytes per character for `\u0000`), make the body larger than the file it carries.
+      bodyLimit: 6 * MAX_FILE_BYTES + 4096,
       config: {
         rateLimit: {
           max: 120,

@@ -50,12 +50,15 @@ export class MockImageProvider implements ImageProvider {
 
   async generateImage(
     req: ImageGenerationRequest,
-    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>
+    store: (bytes: Buffer, mimeType: string, ext: string) => Promise<string>,
+    signal?: AbortSignal
   ): Promise<ImageResult> {
     // Simulate real, non-zero latency (docs/05 §1: even "fast" tiers take seconds) so the
     // async job pipeline this always runs through (docs/07 §1.6) is genuinely exercised,
     // not short-circuited by an instant resolve.
     await sleep(300 + Math.random() * 400);
+    // Honours a cancellation like the real providers do, so the pipeline's cancel path is testable.
+    if (signal?.aborted) return { status: "failed", providerName: this.name, error: "Cancelled." };
 
     const { width, height } = ASPECT_RATIO_DIMENSIONS[req.aspectRatio];
     const seed = req.seed ?? hashToSeed(req.prompt);

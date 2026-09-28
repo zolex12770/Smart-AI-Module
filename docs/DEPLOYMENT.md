@@ -126,8 +126,8 @@ than one that will not start.
 
 | Variable | Production value | Why |
 |---|---|---|
-| `SANDBOX_RUNTIME` | `docker` | The agent runs commands a model chose. Process isolation shares the host's network and filesystem. |
-| `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION` | `false` | Refuse to start rather than silently downgrade isolation. |
+| `SANDBOX_RUNTIME` | `docker` where the host can run containers (a VM, compose). **Cloud Run cannot**: the Terraform deployment runs `process` | The agent runs commands a model chose. Process isolation shares the container's network and filesystem. |
+| `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION` | `false` with docker isolation. **`true` in the Terraform (Cloud Run) deployment** — its explicit acknowledgement, since Cloud Run gives no nested container isolation | Without the acknowledgement a production API refuses to start rather than silently downgrade. With it on Cloud Run, a model-chosen command that escapes its workspace reaches the API container's filesystem and network: the container is the blast radius, which is why its service account is scoped to one bucket and one database. Use a VM with docker when that is not acceptable. |
 | `UPLOAD_SCAN_REQUIRED` | `true` | Refuse uploads (503) rather than accept them unscanned. |
 | `CLAMD_HOST` | `127.0.0.1` | The `clamav/clamav` sidecar on the worker pool. |
 | `COOKIE_SECURE` | implied by `NODE_ENV=production` | Session cookies over TLS only. |

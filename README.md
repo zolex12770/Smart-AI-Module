@@ -59,7 +59,7 @@ a clear "no model configured" error, not a stub.
 
 Image, speech and video generation turn on when their software is configured
 ([docs/MEDIA.md](docs/MEDIA.md)). The details are in
-[docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md).
+[docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md).
 
 ### With Docker
 
@@ -89,7 +89,7 @@ in each result.
 | [docs/FINAL_PRODUCTION_READINESS_REPORT.md](docs/FINAL_PRODUCTION_READINESS_REPORT.md) | what was verified, how, and what is blocked |
 | [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | the status matrix |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the system as built |
-| [docs/LOCAL_DEVELOPMENT.md](docs/LOCAL_DEVELOPMENT.md) | running and developing locally |
+| [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md) | running and developing locally |
 | [docs/PROVIDERS.md](docs/PROVIDERS.md) | model providers and how to configure each |
 | [docs/MEDIA.md](docs/MEDIA.md) | image, speech and video generation |
 | [docs/TESTING.md](docs/TESTING.md) | test layers and the acceptance script |

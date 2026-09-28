@@ -46,6 +46,18 @@ describe("the project workspace", () => {
     expect(files.find((f) => f.path === "src/index.test.ts")!.sizeBytes).toBeGreaterThan(0);
   });
 
+  it("accepts a file as large as its own documented limit", async () => {
+    // Audit finding 26: the schema allows 1 MiB, and Fastify's default body limit (also 1 MiB,
+    // for the whole JSON body) answered 413 first. With quotes and newlines escaped, the body is
+    // well over a MiB.
+    const content = 'line with "quotes"\n'.repeat(Math.floor((1024 * 1024) / 19));
+    expect(content.length).toBeLessThanOrEqual(1024 * 1024);
+    expect((await write("big.txt", content)).statusCode).toBe(201);
+    // One character more than the limit is the schema's refusal, not the transport's.
+    const over = await write("too-big.txt", "x".repeat(1024 * 1024 + 1));
+    expect(over.statusCode).toBe(400);
+  });
+
   it("puts the file where the agent's own tools will find it", async () => {
     // The whole point: the same path, through the tool the agent actually uses.
     await write("notes.txt", "seeded by the operator");

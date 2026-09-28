@@ -111,6 +111,35 @@ describe("SdCppImageProvider mechanics", () => {
   const provider = (impl: ReturnType<typeof fakeSpawn>["impl"], over: Record<string, unknown> = {}) =>
     new SdCppImageProvider({ binaryPath, modelPath, spawnImpl: impl, ...over });
 
+  it("kills the process when the generation is cancelled, and reports it (audit finding 5)", async () => {
+    let killed: string | undefined;
+    const { impl: inner } = fakeSpawn({ hang: true });
+    const impl = ((file: string, args: string[], options: { env?: Record<string, string> }) => {
+      const child = (inner as unknown as (...a: unknown[]) => EventEmitter & { kill: (s?: string) => void })(file, args, options);
+      child.kill = (s?: string) => {
+        killed = s;
+        setImmediate(() => child.emit("close", null));
+      };
+      return child;
+    }) as unknown as typeof inner;
+    const controller = new AbortController();
+    const pending = provider(impl).generateImage(request({ prompt: "slow" }), async () => "never", controller.signal);
+    setTimeout(() => controller.abort(), 50);
+    const result = await pending;
+    expect(killed).toBe("SIGKILL");
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/cancelled/);
+  });
+
+  it("does not start a generation that was cancelled while it waited its turn", async () => {
+    const { impl, seen } = fakeSpawn({});
+    const controller = new AbortController();
+    controller.abort();
+    const result = await provider(impl).generateImage(request({ prompt: "never" }), async () => "never", controller.signal);
+    expect(result.status).toBe("failed");
+    expect(seen).toHaveLength(0);
+  });
+
   it("runs one generation at a time, and says so in its capabilities", async () => {
     // Two scene stills requested together used to spawn two diffusion processes at once; on a
     // 15 GB machine with a chat model loaded, that ended in the OOM killer.

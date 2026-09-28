@@ -1,8 +1,18 @@
-# Local development
+# Local setup
 
 Two ways to run the platform on one machine: **two terminals** (fastest to iterate on), or
 **Docker Compose** (the production images, with Postgres). Both use models that run on your
 machine; no hosted AI account is needed.
+
+| Setting | Two terminals | Docker Compose | Change it with |
+|---|---|---|---|
+| FRONTEND_PORT | 3000 | 3000 | `cd frontend && npm run dev -- -p <port>`; the API's `CORS_ORIGIN` must then name it |
+| BACKEND_PORT | 8787 | 8787 | `PORT` in `.env`; the frontend's `NEXT_PUBLIC_API_URL` must then name it |
+| DATABASE | embedded PostgreSQL (PGlite + pgvector) in `backend/data/pgdata` | `pgvector/pgvector:pg16` | `DATABASE_URL` for a standalone Postgres |
+| MODEL_RUNTIME | Ollama on 127.0.0.1:11434, detected at boot (`qwen2.5:7b`, `nomic-embed-text`) | the `ollama` service | `LLM_BASE_URL` + `LLM_MODEL`, or a hosted key |
+| MEDIA_RUNTIME | none until configured; see [MEDIA_SETUP.md](MEDIA_SETUP.md) | ffmpeg and Piper in the image; SD via `docker-compose.sdcpp.yml` | `IMAGE_SD_*`, `SPEECH_PROVIDER`/`PIPER_*`, `FFMPEG_PATH` |
+
+Every variable, with what it does: [ENVIRONMENT.md](ENVIRONMENT.md).
 
 ## Prerequisites
 
@@ -14,7 +24,7 @@ machine; no hosted AI account is needed.
   ```
   Without one, the platform still starts; chat and the agent report that no model is configured.
 - Optional, for media: `ffmpeg` (video), [Piper](https://github.com/rhasspy/piper) and a voice
-  (speech), a stable-diffusion.cpp binary and model (images) — see [MEDIA.md](MEDIA.md).
+  (speech), a stable-diffusion.cpp binary and model (images) — see [MEDIA_SETUP.md](MEDIA_SETUP.md).
 
 ## Two terminals
 
@@ -67,6 +77,7 @@ single machine.
 ## Checks
 
 ```bash
+npm run verify                      # every gate below, one PASS / FAIL / BLOCKED_EXTERNAL line each
 npm run build && npm run typecheck && npm run lint && npm test   # from the root
 bash scripts/verify-boundary.sh     # frontend/backend separation, from the syntax tree
 bash scripts/verify-migrations.sh   # migrations apply to an empty DB, no drift
@@ -79,11 +90,4 @@ node scripts/acceptance/full-system.mjs   # the whole user journey against a run
 
 ## Troubleshooting
 
-- **PGlite `RuntimeError: Aborted()` at boot**: the local database was corrupted by a forced kill.
-  Delete `backend/data/pgdata`; it is re-created and migrated on the next boot.
-- **Chat says no model is configured**: start Ollama (above), or set `LLM_BASE_URL` and
-  `LLM_MODEL`.
-- **The agent's answers ignore the task on long runs**: the model's context window is too small
-  for the run. Raise `OLLAMA_CONTEXT_LENGTH` (and `LLM_CONTEXT_WINDOW` if set explicitly).
-- **Sign-up returns 429**: the per-IP sign-up limit (`AUTH_RATE_LIMIT_MAX`, default 5 per 10
-  minutes; login allows twice that) is working. Wait, or raise it for scripted testing.
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md).

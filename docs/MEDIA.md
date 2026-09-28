@@ -81,8 +81,12 @@ POST /api/v1/videos ──▶ project in `planning` (202 immediately)
   `partially_succeeded`, `failed` or `cancelled`; a separate `renderStatus` for the ffmpeg step
   (`skipped_no_ffmpeg` when there is none: the clips exist and are downloadable, and no MP4 is
   pretended).
-- **Cancellation** reaches a running provider call; **retry** resumes only unfinished work (a
-  project stuck in `planning` is re-planned).
+- **Cancellation** reaches a running provider call. The worker polls the row every 3 s. When it
+  sees a cancel request, it kills the running stable-diffusion.cpp or ffmpeg process, or aborts
+  the hosted request (Replicate, an OpenAI-compatible image API). The scene or image is then
+  settled as `cancelled`. Speech was already cancellable. Verified by tests against
+  fake processes (DL-14). **Retry** resumes only unfinished work: a cancelled project resumes, and
+  a project stuck in `planning` is re-planned. Both are offered on the video screen.
 
 Verification uses `ffprobe` on the downloaded MP4. The acceptance check requires an H.264 video
 stream, an AAC audio stream, a subtitle stream, a duration of at least 4 s, a valid WebVTT asset,

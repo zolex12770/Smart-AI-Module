@@ -363,3 +363,79 @@ the response reported nothing, the job stayed queued and the task stayed open.
 - `ChatView.test.tsx`: rename, delete and truncation.
 - `settings/projects.test.tsx`.
 - The Tasks workspace viewer test.
+
+## DL-14: Cancelling media stops the process that is running it
+
+**Found by:** audit findings 5, 6 and 7.
+
+**Problem:**
+
+- **Finding 5.** `ImageProvider.generateImage` had no signal. Cancel on a *processing* image
+  therefore did nothing: sd-cli ran to the end, the result was written `succeeded` over the
+  request, and the image was charged.
+- **Finding 6.** The local motion-video provider could not be stopped either. docs/MEDIA.md said
+  cancellation "reaches a running provider call".
+- **Finding 7.** `POST /jobs/:queue/:id/cancel` called `boss.cancel` only. The image or audio row
+  stayed `pending` forever, and a video scene kept its `jobId`, so orchestration skipped it for
+  good.
+
+**Decision:**
+
+- **Image (finding 5).** `generateImage(req, store, signal?)`.
+  - sd-cli is killed (SIGKILL) on abort, and a generation cancelled while it waited its turn
+    never starts.
+  - The OpenAI-compatible adapter aborts its fetch.
+  - The image worker runs the same cancellation watch as audio and video.
+  - `processImageGeneration` settles a stopped generation as `cancelled`. It is not charged,
+    because no usage row is written for a non-success. A provider that finished before the stop
+    reached it produced a real image, which is kept and charged as one.
+- **Video (finding 6).** `ImageMotionVideoProvider.generateVideo(req, store, signal?)` passes the
+  signal to the still and kills ffmpeg on abort. MEDIA.md now describes what actually happens.
+- **Raw job cancel (finding 7).**
+  - For image and audio jobs, the route requests cancellation on the record, cancels the job,
+    and settles a still-queued record as `cancelled`.
+  - Video and document jobs are one step of a larger whole. A raw cancel of one of them is
+    refused (409) with the screen that can cancel the whole thing.
+
+**Tests:**
+
+- `image-sdcpp`: kill on cancel, and no start once cancelled.
+- `video-motion`: kills ffmpeg, and the still receives the signal.
+- `media-cancellation.test.ts`: an image already generating is settled `cancelled`. It fails
+  against the previous `processImageGeneration`, where it hung until the test timeout.
+- `job-cancel.test.ts`: 2 of 3 fail against the previous route.
+
+## DL-15: Deadlines on every model call
+
+**Found by:** audit finding 19.
+
+**Problem:** the hosted chat adapters (Anthropic, OpenAI, Google) called `fetch` with no signal.
+The RAG answer, conversation summary and memory extraction called the router with none. So a
+stalled provider hung those requests forever, and the summary hung before the chat's headers were
+sent.
+
+**Decision:**
+
+- Each hosted adapter owns an AbortController:
+  - a deadline, `requestTimeoutMs` (default 300 s, as llm-local). The error message says
+    "timeout", which the router classifies as retryable;
+  - an abort when the consumer stops reading, so a cancelled chat closes the HTTP connection
+    instead of leaving the provider billing tokens nobody reads.
+- RAG, summary and extraction calls use a 300 s deadline. RAG also aborts when its client
+  disconnects, and answers 503 at the deadline.
+
+**Tests:**
+
+- Each adapter: the deadline, and abort on `return()`. Both fail against the previous adapters.
+- `rag-deadline.test.ts`: fails against the previous route, where it hung past the test timeout.
+
+## DL-16: Smaller corrections
+
+- **Usage (finding 22).** The organization block's cost was summed over one project; it is now
+  the organization's. The project's own cost is reported beside it. Embedding and speech usage
+  and limits, which were enforced but never reported, are in the response and on the Usage page.
+  Tests: `usage.test.ts`, `usage/page.test.tsx`.
+- **Workspace writes (finding 26).** The workspace write route accepts the 1 MiB file its schema
+  allows. Fastify's default body limit answered 413 first. Test: `workspace.test.ts`.
+- **DEPLOYMENT.md (finding 20).** The sandbox rows now state that the Cloud Run deployment runs
+  process isolation, with `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true`, and what that exposes.

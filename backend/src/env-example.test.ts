@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -22,4 +23,18 @@ describe("env templates", () => {
       expect(missing).toEqual([]);
     });
   }
+
+  it("keeps the two templates byte-identical, as their header says", () => {
+    // They had drifted (ALLOW_MOCK_PROVIDERS documented in one, not the other) while the header
+    // told readers a test kept them identical. Now one does.
+    expect(read("../.env.example")).toBe(read("../../.env.example"));
+  });
+
+  it("keeps docs/ENVIRONMENT.md generated from them", () => {
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL("../../scripts/generate-env-docs.mjs", import.meta.url)), "--check"], {
+      encoding: "utf8",
+    });
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+  });
 });

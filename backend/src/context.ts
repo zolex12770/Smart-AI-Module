@@ -39,6 +39,8 @@ export interface AppContext {
   corsOrigin: string;
   /** CHAT_MAX_OUTPUT_TOKENS — the ceiling on, and default for, one chat turn's output. */
   chatMaxOutputTokens: number;
+  /** Overrides AUXILIARY_CALL_TIMEOUT_MS (RAG answers, summaries, memory extraction); tests only. */
+  auxiliaryCallTimeoutMs?: number;
   engine: AgentEngine;
   tasks: TaskRepository;
   taskNodes: TaskNodeRepository;

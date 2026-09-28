@@ -35,6 +35,12 @@ export interface GoogleProviderOptions {
   baseUrl?: string;
   /** Injectable for tests — defaults to global fetch. See docs/21_TESTING_STRATEGY.md. */
   fetchImpl?: typeof fetch;
+  /**
+   * The longest one streamed call may run before it is abandoned — audit finding 19. It had no
+   * deadline at all, so a stalled connection held a chat, RAG or agent request open forever.
+   * Default 300 s, the same as llm-local.
+   */
+  requestTimeoutMs?: number;
 }
 
 /**
@@ -72,6 +78,7 @@ export class GoogleProvider implements LLMProvider {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly requestTimeoutMs: number;
 
   constructor(options: GoogleProviderOptions) {
     if (!options.apiKey) {
@@ -81,6 +88,7 @@ export class GoogleProvider implements LLMProvider {
     this.model = options.model ?? DEFAULT_MODEL;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 300_000;
   }
 
   /**
@@ -99,7 +107,40 @@ export class GoogleProvider implements LLMProvider {
     };
   }
 
+  /**
+   * The call, under a deadline and a cancellation it can actually act on — audit finding 19.
+   *
+   * The request's own signal is aborted when the deadline passes and when the consumer stops
+   * reading (the router's `return()` on a cancelled chat runs the `finally`), so the HTTP
+   * connection is closed rather than left streaming tokens nobody reads and someone pays for.
+   */
   async *streamChat(request: ChatRequest): AsyncGenerator<ChatStreamEvent, void, unknown> {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.requestTimeoutMs);
+    try {
+      yield* this.streamChatWithSignal(request, controller.signal);
+    } catch (err) {
+      if (timedOut) {
+        throw new ProviderError(
+          `Google Gemini request did not complete within ${Math.round(this.requestTimeoutMs / 1000)}s and was abandoned (timeout).`,
+          err
+        );
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+
+  private async *streamChatWithSignal(
+    request: ChatRequest,
+    signal: AbortSignal
+  ): AsyncGenerator<ChatStreamEvent, void, unknown> {
     const model = request.model ?? this.model;
     const { systemInstruction, contents } = toGeminiContents(request.messages);
 
@@ -136,6 +177,7 @@ export class GoogleProvider implements LLMProvider {
           "content-type": "application/json",
         },
         body: JSON.stringify(body),
+        signal,
       }
     );
 

@@ -114,6 +114,12 @@ function scopeOf(authCtx: AuthContext): string {
   return authCtx.projectId;
 }
 
+/**
+ * The longest a model call made on a caller's behalf outside chat and the agent may run — audit
+ * finding 19. The same ceiling the provider adapters apply to themselves.
+ */
+export const AUXILIARY_CALL_TIMEOUT_MS = 300_000;
+
 export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
   // Real async job (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md, docs/25_IMPLEMENTATION_ROADMAP.md
   // Phase 7) — returns immediately with the document in "ingesting" status; poll
@@ -417,54 +423,75 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
       let answer = "";
       let usedModel: string | undefined;
       let usedProvider: string | undefined;
-      for await (const event of ctx.router.streamChat({
-        messages: [
-          { role: "system", content: RAG_SYSTEM_PROMPT },
-          {
-            role: "user",
-            // The passages are untrusted third-party content and are delimited as such
-            // (docs/13_SECURITY_ARCHITECTURE.md §9): a document that contains instructions is
-            // data about instructions, never instructions to follow.
-            content: `Context:\n<untrusted-document-content>\n${context}\n</untrusted-document-content>\n\nQuestion: ${parsed.data.question}`,
-          },
-        ],
-      })) {
-        if (event.type === "done") {
-          answer = event.message.content ?? "";
-          usedModel = event.model;
-          usedProvider = event.provider;
-          // Billable work, so it is recorded. A capability that spends tokens without writing a
-          // usage row is a hole in the ledger (ADR-046/ADR-054) — and this endpoint spends them
-          // on every call.
-          await ctx.usage.create({
-            id: uuid(),
-            projectId,
-            userId: authCtx.user.id,
-            kind: "llm",
-            provider: event.provider,
-            model: event.model,
-            inputTokens: event.usage.inputTokens,
-            outputTokens: event.usage.outputTokens,
-            units: null,
-            estimatedCostUsd: estimateLlmCostUsd(event.provider, event.model, event.usage),
-            requestId: request.id,
-            // One request, one charge. The request id is the natural key here -- unlike chat
-            // there is no persisted assistant message to hang it off -- so a retried request
-            // conflicts on the unique index instead of double-charging.
-            //
-            // This is sound only because `genReqId` mints a UUID (ADR-098). With Fastify's
-            // default per-process counter it collided across restarts and replicas, and a
-            // collision here DROPS the charge instead of duplicating it.
-            idempotencyKey: `llm:rag-query:${request.id}`,
-          });
-        } else if (event.type === "error") {
-          // The provider's own words can carry its URL, model names and account details, so the
-          // caller gets a stable sentence and the request id; the detail goes to the log (ADR-119).
-          request.log.error({ request_id: request.id, project_id: projectId, err: event.message }, "RAG answer failed");
+      // Audit finding 19: this call had no deadline and no cancellation — a stalled provider held
+      // the request open forever, and a client that went away still paid for the whole answer.
+      // The reply socket, not the request stream: Fastify drains a POST body and closes that early.
+      const disconnected = new AbortController();
+      const onClose = () => {
+        if (!reply.raw.writableEnded) disconnected.abort();
+      };
+      reply.raw.on("close", onClose);
+      const signal = AbortSignal.any([disconnected.signal, AbortSignal.timeout(ctx.auxiliaryCallTimeoutMs ?? AUXILIARY_CALL_TIMEOUT_MS)]);
+      try {
+        for await (const event of ctx.router.streamChat({
+          messages: [
+            { role: "system", content: RAG_SYSTEM_PROMPT },
+            {
+              role: "user",
+              // The passages are untrusted third-party content and are delimited as such
+              // (docs/13_SECURITY_ARCHITECTURE.md §9): a document that contains instructions is
+              // data about instructions, never instructions to follow.
+              content: `Context:\n<untrusted-document-content>\n${context}\n</untrusted-document-content>\n\nQuestion: ${parsed.data.question}`,
+            },
+          ],
+        }, { signal })) {
+          if (event.type === "done") {
+            answer = event.message.content ?? "";
+            usedModel = event.model;
+            usedProvider = event.provider;
+            // Billable work, so it is recorded. A capability that spends tokens without writing a
+            // usage row is a hole in the ledger (ADR-046/ADR-054) — and this endpoint spends them
+            // on every call.
+            await ctx.usage.create({
+              id: uuid(),
+              projectId,
+              userId: authCtx.user.id,
+              kind: "llm",
+              provider: event.provider,
+              model: event.model,
+              inputTokens: event.usage.inputTokens,
+              outputTokens: event.usage.outputTokens,
+              units: null,
+              estimatedCostUsd: estimateLlmCostUsd(event.provider, event.model, event.usage),
+              requestId: request.id,
+              // One request, one charge. The request id is the natural key here -- unlike chat
+              // there is no persisted assistant message to hang it off -- so a retried request
+              // conflicts on the unique index instead of double-charging.
+              //
+              // This is sound only because `genReqId` mints a UUID (ADR-098). With Fastify's
+              // default per-process counter it collided across restarts and replicas, and a
+              // collision here DROPS the charge instead of duplicating it.
+              idempotencyKey: `llm:rag-query:${request.id}`,
+            });
+          } else if (event.type === "error") {
+            // The provider's own words can carry its URL, model names and account details, so the
+            // caller gets a stable sentence and the request id; the detail goes to the log (ADR-119).
+            request.log.error({ request_id: request.id, project_id: projectId, err: event.message }, "RAG answer failed");
+            throw new ServiceUnavailableError(
+              "The model provider could not answer this question. The request id in this response identifies it in the server log."
+            );
+          }
+        }
+      } catch (err) {
+        if (signal.aborted && !disconnected.signal.aborted) {
+          request.log.error({ request_id: request.id, project_id: projectId, err }, "RAG answer timed out");
           throw new ServiceUnavailableError(
-            "The model provider could not answer this question. The request id in this response identifies it in the server log."
+            `The model provider did not answer within ${Math.round((ctx.auxiliaryCallTimeoutMs ?? AUXILIARY_CALL_TIMEOUT_MS) / 1000)}s. Try again; the request id in this response identifies it in the server log.`
           );
         }
+        throw err;
+      } finally {
+        reply.raw.off("close", onClose);
       }
       const verdict = checkGrounding({ answer, citations, retrievedCount: results.length });
       if (verdict.outcome === "refused" || verdict.outcome === "empty") {

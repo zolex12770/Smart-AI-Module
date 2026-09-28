@@ -74,6 +74,15 @@ export function registerUsageRoute(app: FastifyInstance, ctx: AppContext): void 
       imagesToday,
       videoSecondsThisMonth,
       estimatedCostUsdThisMonth,
+      // Audit finding 22: the cost figure was this PROJECT's, printed inside the organization
+      // block; and embedding and speech limits were enforced but never reported.
+      orgCostUsdThisMonth,
+      orgEmbeddingTokensToday,
+      orgEmbeddingTokensThisMonth,
+      orgSpeechCharactersToday,
+      orgSpeechCharactersThisMonth,
+      embeddingTokensThisMonth,
+      speechCharactersThisMonth,
     ] = await Promise.all([
       ctx.usage.sumLlmTokensForTenantSince(projectId, startOfDay(now)),
       ctx.usage.sumLlmTokensForTenantSince(projectId, startOfMonth(now)),
@@ -84,6 +93,13 @@ export function registerUsageRoute(app: FastifyInstance, ctx: AppContext): void 
       ctx.usage.countImagesSince(projectId, startOfDay(now)),
       ctx.usage.sumVideoSecondsSince(projectId, startOfMonth(now)),
       ctx.usage.sumLlmCostUsdSince(projectId, startOfMonth(now)),
+      ctx.usage.sumLlmCostUsdForTenantSince(projectId, startOfMonth(now)),
+      ctx.usage.sumEmbeddingTokensForTenantSince(projectId, startOfDay(now)),
+      ctx.usage.sumEmbeddingTokensForTenantSince(projectId, startOfMonth(now)),
+      ctx.usage.sumSpeechCharactersForTenantSince(projectId, startOfDay(now)),
+      ctx.usage.sumSpeechCharactersForTenantSince(projectId, startOfMonth(now)),
+      ctx.usage.sumEmbeddingTokensSince(projectId, startOfMonth(now)),
+      ctx.usage.sumSpeechCharactersSince(projectId, startOfMonth(now)),
     ]);
 
     return {
@@ -93,17 +109,21 @@ export function registerUsageRoute(app: FastifyInstance, ctx: AppContext): void 
         llm: {
           tokensToday: orgTokensToday,
           tokensThisMonth: orgTokensThisMonth,
-          estimatedCostUsdThisMonth,
+          estimatedCostUsdThisMonth: orgCostUsdThisMonth,
           pricedCallsOnly: true,
         },
         images: { generatedToday: orgImagesToday },
         video: { secondsGeneratedThisMonth: orgVideoSecondsThisMonth },
+        embeddings: { tokensToday: orgEmbeddingTokensToday, tokensThisMonth: orgEmbeddingTokensThisMonth },
+        speech: { charactersToday: orgSpeechCharactersToday, charactersThisMonth: orgSpeechCharactersThisMonth },
       },
       /** This project's share of it. Never compared against `limits` — nothing enforces it. */
       projectUsage: {
-        llm: { tokensToday, tokensThisMonth },
+        llm: { tokensToday, tokensThisMonth, estimatedCostUsdThisMonth, pricedCallsOnly: true },
         images: { generatedToday: imagesToday },
         video: { secondsGeneratedThisMonth: videoSecondsThisMonth },
+        embeddings: { tokensThisMonth: embeddingTokensThisMonth },
+        speech: { charactersThisMonth: speechCharactersThisMonth },
       },
       /** Which scope `usage` describes, said in the payload rather than only in a docstring. */
       usageScope: "organization" as const,
@@ -112,6 +132,10 @@ export function registerUsageRoute(app: FastifyInstance, ctx: AppContext): void 
         monthlyTokenLimit: limits.monthlyTokenLimit ?? null,
         dailyImageLimit: limits.dailyImageLimit ?? null,
         monthlyVideoSecondsLimit: limits.monthlyVideoSecondsLimit ?? null,
+        dailyEmbeddingTokenLimit: limits.dailyEmbeddingTokenLimit ?? null,
+        monthlyEmbeddingTokenLimit: limits.monthlyEmbeddingTokenLimit ?? null,
+        dailySpeechCharacterLimit: limits.dailySpeechCharacterLimit ?? null,
+        monthlySpeechCharacterLimit: limits.monthlySpeechCharacterLimit ?? null,
       },
     };
   });

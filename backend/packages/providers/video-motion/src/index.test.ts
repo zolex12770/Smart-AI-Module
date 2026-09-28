@@ -161,6 +161,37 @@ describe("ImageMotionVideoProvider mechanics", () => {
     expect(plain.maxConcurrency).toBeUndefined();
   });
 
+  it("kills ffmpeg when the scene is cancelled, and passes the cancellation to the still (audit finding 6)", async () => {
+    let killed: string | undefined;
+    const { impl: inner } = fakeFfmpeg({ hang: true });
+    const impl = ((file: string, args: string[], options: { env?: Record<string, string> }) => {
+      const child = (inner as unknown as (...a: unknown[]) => EventEmitter & { kill: (s?: string) => void })(file, args, options);
+      child.kill = (s?: string) => {
+        killed = s;
+      };
+      return child;
+    }) as unknown as typeof inner;
+    let stillSignal: AbortSignal | undefined;
+    const base = stillProvider();
+    const still = {
+      ...base,
+      getCapabilities: base.getCapabilities.bind(base),
+      generateImage: (req: Parameters<typeof base.generateImage>[0], store: Parameters<typeof base.generateImage>[1], signal?: AbortSignal) => {
+        stillSignal = signal;
+        return base.generateImage(req, store);
+      },
+    };
+    const controller = new AbortController();
+    const provider = new ImageMotionVideoProvider({ imageProvider: still, ffmpegPath, spawnImpl: impl });
+    const pending = provider.generateVideo(request({ durationSeconds: 4 }), async () => "never", controller.signal);
+    setTimeout(() => controller.abort(), 100);
+    const result = await pending;
+    expect(stillSignal).toBe(controller.signal);
+    expect(killed).toBe("SIGKILL");
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/cancelled/);
+  });
+
   it("asks ffmpeg for the requested duration, frame rate and codec", async () => {
     const { impl, seen } = fakeFfmpeg({});
     const provider = new ImageMotionVideoProvider({ imageProvider: stillProvider(), ffmpegPath, spawnImpl: impl, fps: 24 });

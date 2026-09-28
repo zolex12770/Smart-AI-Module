@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { NotFoundError, QuotaExceededError, ServiceUnavailableError, ValidationError, type Permission } from "@ai-platform/shared";
+import { ConflictError, NotFoundError, QuotaExceededError, ServiceUnavailableError, ValidationError, type Permission } from "@ai-platform/shared";
 import { z } from "zod";
 import { scrapeMetrics } from "@ai-platform/observability";
 import type { AppContext } from "../../context.js";
@@ -181,10 +181,51 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
     };
   });
 
+  /**
+   * Cancelling a job cancels what it was FOR — audit finding 7.
+   *
+   * This called `boss.cancel` and nothing else. The image or audio row the job would have settled
+   * stayed `pending` forever; a video scene kept its `jobId` and orchestration skipped it for
+   * good, so that video could never finish or be retried; a document stayed `ingesting`. Now an
+   * image or audio job is cancelled through its own record, which is settled `cancelled`. Video
+   * and document jobs are part of a larger whole with its own cancel (the video's Cancel, a
+   * document's Delete), and a raw cancel of one piece is refused with where to go instead.
+   */
   app.post<{ Params: { queue: string; id: string } }>("/api/v1/jobs/:queue/:id/cancel", async (request) => {
     const authCtx = await requireProject(request, ctx.auth, "project:write");
-    const cancelled = await ctx.jobQueue.cancelForProject(authCtx.projectId!, request.params.queue, request.params.id);
-    if (!cancelled) throw new NotFoundError(`Job "${request.params.id}" not found in queue "${request.params.queue}".`);
+    const projectId = authCtx.projectId!;
+    const { queue, id } = request.params;
+    const notFound = () => new NotFoundError(`Job "${id}" not found in queue "${queue}".`);
+
+    if (queue.startsWith("video.") || queue.startsWith("document.")) {
+      const job = await ctx.jobQueue.getJob<{ projectId?: string }>(queue, id).catch(() => null);
+      if (!job || job.data?.projectId !== projectId) throw notFound();
+      throw new ConflictError(
+        queue.startsWith("video.")
+          ? "This job is one step of a video. Cancel the video from its own screen, which stops every step and keeps it retryable."
+          : "This job is one step of a document's ingestion. Delete the document from Files to stop it."
+      );
+    }
+
+    if (queue === "image.generate" || queue === "audio.generate") {
+      const job = await ctx.jobQueue.getJob<{ projectId?: string; generationId?: string }>(queue, id).catch(() => null);
+      if (!job || job.data?.projectId !== projectId || !job.data.generationId) throw notFound();
+      const repo = queue === "image.generate" ? ctx.imageGenerations : ctx.audioGenerations;
+      const generationId = job.data.generationId;
+      // The record first: a worker that picks the job up in between sees the request and stops.
+      await repo.requestCancel(projectId, generationId);
+      await ctx.jobQueue.cancelForProject(projectId, queue, id);
+      const generation = await repo.get(projectId, generationId);
+      // Still queued, so no worker will ever settle it: settle it here. One already running is
+      // settled by its worker, whose watch now sees the request (DL-14).
+      if (generation?.status === "pending") {
+        await repo.updateStatus(projectId, generationId, "cancelled", { errorMessage: "Cancelled before generation started." });
+      }
+      return { ok: true, generationId };
+    }
+
+    const cancelled = await ctx.jobQueue.cancelForProject(projectId, queue, id);
+    if (!cancelled) throw notFound();
     return { ok: true };
   });
 

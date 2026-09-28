@@ -101,11 +101,19 @@ against a real standalone Postgres for the first time.
 
 ## 5. Verify
 
-- `curl https://<api-service-url>/api/health` → `{"status":"ok"}`, and
-  `curl https://<api-service-url>/api/v1/files` → `401` (every non-public route needs a session).
-- Open `https://<web-service-url>` → the chat screen should load and be able to reach the API
-  (check the browser network tab for CORS errors — `CORS_ORIGIN` is wired to the web service's
-  own URL automatically by `terraform/main.tf`).
+- `curl https://<web-service-url>/api/health` → `{"status":"ok"}`, and
+  `curl https://<web-service-url>/api/v1/files` → `401` (every non-public route needs a session).
+- The API's ingress is internal-only (DL-2): every request, including the `curl`s in this section,
+  goes through the web service, which proxies `/api/*`. `curl https://<api-service-url>/api/health`
+  from outside must FAIL (403/404 from Cloud Run's front end) — that is the check that nobody can
+  bypass the proxy and its `X-Forwarded-For` accounting.
+- Open `https://<web-service-url>` → the chat screen should load, and the browser's network tab
+  should show only same-origin requests (`/api/v1/...` on the web host), with the session cookie
+  `SameSite=Lax`.
+- **`TRUST_PROXY_HOPS=2`** (never verified live): sign in from two different networks and check
+  the audit log (`GET /api/v1/audit`) records two different `ipAddress` values, each the real
+  caller's. One shared address means the hop count is too low; an address you can change by
+  sending your own `X-Forwarded-For` means it is too high.
 - `gcloud logging read` or the Cloud Run service's Logs tab should show the same structured JSON
   log lines (`packages/observability`) seen in local dev.
 - **The api/worker split (ADR-039) — the one thing no local environment could verify, since it
@@ -129,7 +137,7 @@ against a real standalone Postgres for the first time.
   means the API service account does (they are separate identities, ADR-039). Nothing should
   appear under the instance's local `ASSETS_ROOT`.
 - **Document upload end to end (ADR-041).** `curl -F "file=@some.pdf;type=application/pdf"
-  https://<api-service-url>/api/v1/files/upload` → `202` with `"sourcePath":null` and an
+  https://<web-service-url>/api/v1/files/upload` → `202` with `"sourcePath":null` and an
   `assetId`; `gsutil ls gs://<media-bucket>/document/` lists `<assetId>.pdf`; polling
   `GET /api/v1/files/<id>` reaches `ready` (the worker pool's logs show the `document.ingest`
   job); then an `answer_from_documents` task can retrieve its content. A `400` naming the
@@ -144,7 +152,7 @@ against a real standalone Postgres for the first time.
   stdin so it never lands on your disk; it is written here in two halves, exactly as this
   repo's tests assemble it, so that no file in a checkout ever contains the contiguous
   signature for a host antivirus to quarantine:
-  `printf '%s%s' 'X5O!P%%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD' '-ANTIVIRUS-TEST-FILE!$H+H*' | curl -F "file=@-;filename=eicar.txt;type=text/plain" https://<api-service-url>/api/v1/files/upload`
+  `printf '%s%s' 'X5O!P%%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD' '-ANTIVIRUS-TEST-FILE!$H+H*' | curl -F "file=@-;filename=eicar.txt;type=text/plain" https://<web-service-url>/api/v1/files/upload`
   → `202` with `"status":"scanning"`; within a minute `GET /api/v1/files/<id>` shows
   `"status":"rejected"`, `"scanStatus":"infected"`, an `errorMessage` naming the signature,
   and `"assetId":null`; `gsutil ls gs://<media-bucket>/document/` must NOT list the object;
