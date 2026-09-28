@@ -1,0 +1,48 @@
+{
+  "api": "http://127.0.0.1:8787",
+  "startedAt": "2026-09-28T11:15:39.829Z",
+  "counts": {
+    "PASS": 3,
+    "FAIL": 1,
+    "BLOCKED_EXTERNAL": 0
+  },
+  "results": [
+    {
+      "id": "CODING-SECOND",
+      "title": "A second, unrelated coding task: the source is fixed and the test passes, verified here",
+      "status": "FAIL",
+      "seconds": 672,
+      "detail": "task FAILED; independent run: exit 1: /tmp/extra-coding-fHgBiR/slugify.js:6; test untouched: true",
+      "evidence": {
+        "source": "function slugify(title) {\n  return title.trim().replace(' ', '-');\n  return value.toLowerCase();\n\nmodule.exports = { slugify };\n"
+      }
+    },
+    {
+      "id": "CODING-BAD-PATCH",
+      "title": "Where a naive patch is wrong, the task's verdict agrees with the test, and the test is not edited",
+      "status": "PASS",
+      "seconds": 1138,
+      "detail": "task FAILED; independent run: exit 1: node:assert:150; verdict agrees with the test: true; test untouched: true; reason: The agent stopped after 12 turns (max_iterations) without reaching an answer.",
+      "evidence": {
+        "source": "// Returns the duration in seconds: '90s', '2m', '1h30m', '1h 5m 10s'.\n// Add proper parsing for 'm' (minutes).\nfunction parseDuration(text) {\n  const parts = text.split(/( )?m/);\n  return parseInt(parts[0] * 60 + (parts.length > 1 ? parseInt(parts[1], 10) : 0), 10);\n}\n\nmodule.exports = { parseDuration };\n",
+        "state": "FAILED"
+      }
+    },
+    {
+      "id": "IMAGE-NEGATIVE",
+      "title": "Invalid image requests are refused before anything is queued",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "5 invalid requests, each 400; no generation created",
+      "evidence": null
+    },
+    {
+      "id": "IMAGE-REPRODUCIBLE",
+      "title": "The same prompt and seed give the same image, byte for byte; another seed gives another",
+      "status": "PASS",
+      "seconds": 1082,
+      "detail": "seed 4242 twice → identical sha256 f7c2c1b99b51dc98… (290724 bytes, 512×512); seed 777 → 86e4b93435d2821a…",
+      "evidence": null
+    }
+  ]
+}
