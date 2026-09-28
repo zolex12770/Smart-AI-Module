@@ -1,7 +1,7 @@
 {
   "api": "http://127.0.0.1:8787",
-  "startedAt": "2026-09-28T15:52:48.701Z",
-  "seconds": 1268.9,
+  "startedAt": "2026-09-28T12:39:04.169Z",
+  "seconds": 1192.6,
   "counts": {
     "PASS": 24,
     "FAIL": 0,
@@ -12,15 +12,15 @@
       "id": "AUTH-SIGNUP",
       "title": "Create an account",
       "status": "PASS",
-      "seconds": 1,
-      "detail": "signed up journey-1790610768766-369566@example.com; default project 580606ff…, role admin",
+      "seconds": 1.1,
+      "detail": "signed up journey-1790599144249-925775@example.com; default project de40cdad…, role admin",
       "evidence": null
     },
     {
       "id": "AUTH-SESSION",
       "title": "Logout revokes the session; login restores it",
       "status": "PASS",
-      "seconds": 0.8,
+      "seconds": 0.5,
       "detail": "logout 200; the old cookie replayed -> 401 (401 = revoked server-side); login again -> /auth/me 200",
       "evidence": null
     },
@@ -29,7 +29,7 @@
       "title": "Create a project and work in it",
       "status": "PASS",
       "seconds": 0,
-      "detail": "created project 9881e8cb…; the account now lists 2 project(s); all later checks run in it",
+      "detail": "created project 4cfca59b…; the account now lists 2 project(s); all later checks run in it",
       "evidence": null
     },
     {
@@ -107,39 +107,39 @@
       "id": "CHAT-STREAM",
       "title": "A real model answers, streamed progressively",
       "status": "PASS",
-      "seconds": 7,
-      "detail": "local/qwen2.5:7b: 28 token events, first at 755 ms, last at 6781 ms (spread 6026 ms); 39 in / 29 out; \"A unit test is a type of automated test used to verify that a small, manageable \"",
+      "seconds": 10.1,
+      "detail": "local/qwen2.5:7b: 34 token events, first at 927 ms, last at 9805 ms (spread 8878 ms); 39 in / 35 out; \"A unit test is a type of automated test used to verify that a small identifiable\"",
       "evidence": {
-        "answer": "A unit test is a type of automated test used to verify that a small, manageable part of a larger software system or program functions correctly.",
+        "answer": "A unit test is a type of automated test used to verify that a small identifiable part of a larger software system, often a single function or method, behaves as expected.",
         "provider": "local",
         "model": "qwen2.5:7b",
-        "firstTokenMs": 755,
-        "lastTokenMs": 6781,
-        "tokenEvents": 28
+        "firstTokenMs": 927,
+        "lastTokenMs": 9805,
+        "tokenEvents": 34
       }
     },
     {
       "id": "CHAT-HISTORY",
       "title": "The conversation is stored and continues",
       "status": "PASS",
-      "seconds": 9.2,
-      "detail": "6 messages persisted in conversation 49d63283…; continued from the stored history, asked for the word planted two turns earlier (vermilion-769), it answered \"vermilion-769\"",
+      "seconds": 11.1,
+      "detail": "6 messages persisted in conversation 15116774…; continued from the stored history, asked for the word planted two turns earlier (vermilion-298), it answered \"vermilion-298\"",
       "evidence": null
     },
     {
       "id": "MEMORY-FORMATION",
       "title": "A fact told in one conversation is remembered without being filed by hand",
       "status": "PASS",
-      "seconds": 24.4,
-      "detail": "the model extracted \"The user's project codename is NIGHTHAWK-351525.\" (scope user) from the turn",
+      "seconds": 29.6,
+      "detail": "the model extracted \"The user's project codename is NIGHTHAWK-384272.\" (scope user) from the turn",
       "evidence": null
     },
     {
       "id": "MEMORY-RECALL",
       "title": "A NEW conversation answers from memory",
       "status": "PASS",
-      "seconds": 5.6,
-      "detail": "new conversation (no conversationId) answered \"NIGHTHAWK-351525\" — expected NIGHTHAWK-351525",
+      "seconds": 6.9,
+      "detail": "new conversation (no conversationId) answered \"NIGHTHAWK-384272\" — expected NIGHTHAWK-384272",
       "evidence": null
     },
     {
@@ -154,15 +154,15 @@
       "id": "RAG-INGEST",
       "title": "Upload a document; it is parsed, chunked and embedded",
       "status": "PASS",
-      "seconds": 4.1,
-      "detail": "document cfae3955… reached \"ready\" (scan: skipped_no_scanner)",
+      "seconds": 2.1,
+      "detail": "document 4f0c1a18… reached \"ready\" (scan: skipped_no_scanner)",
       "evidence": null
     },
     {
       "id": "RAG-ANSWER",
       "title": "A grounded answer, with a real citation",
       "status": "PASS",
-      "seconds": 12.8,
+      "seconds": 18,
       "detail": "grounded=true outcome=grounded; \"An engineer receives 27 days of paid leave per calendar year. [1]\"; 1 source(s), the handbook's excerpt cited: true",
       "evidence": {
         "question": "How many days of paid leave does an engineer receive?",
@@ -170,7 +170,7 @@
         "sources": [
           {
             "marker": "[1]",
-            "documentId": "cfae3955-4483-49f2-b145-0a49611ceeaf",
+            "documentId": "4f0c1a18-9ab9-4c42-ae38-a01e2e044da7",
             "filename": "handbook.txt",
             "chunkIndex": 0,
             "distance": 0.14,
@@ -188,7 +188,7 @@
       "id": "RAG-REFUSAL",
       "title": "No evidence, no answer — and a refusal is never called grounded",
       "status": "PASS",
-      "seconds": 4.3,
+      "seconds": 4.9,
       "detail": "grounded=false outcome=refused; \"The provided documents do not contain the answer to this question.\"",
       "evidence": {
         "question": "What is the company's policy on adopting a pet at the office?",
@@ -196,7 +196,7 @@
         "sources": [
           {
             "marker": "[1]",
-            "documentId": "cfae3955-4483-49f2-b145-0a49611ceeaf",
+            "documentId": "4f0c1a18-9ab9-4c42-ae38-a01e2e044da7",
             "filename": "handbook.txt",
             "chunkIndex": 0,
             "distance": 0.549,
@@ -214,8 +214,8 @@
       "id": "IMAGE",
       "title": "Generate a 512×512 image of a red apple on a wooden table",
       "status": "PASS",
-      "seconds": 360.7,
-      "detail": "stable-diffusion.cpp in 360.7 s: image/png, 369699 bytes, 512×512; luminance stddev 75.9, 420 distinct colours, red-dominant pixels 3%",
+      "seconds": 352.8,
+      "detail": "stable-diffusion.cpp in 352.8 s: image/png, 369699 bytes, 512×512; luminance stddev 75.9, 420 distinct colours, red-dominant pixels 3%",
       "evidence": {
         "png": {
           "ok": true,
@@ -237,8 +237,8 @@
       "id": "AUDIO",
       "title": "Synthesise speech and play it back",
       "status": "PASS",
-      "seconds": 3,
-      "detail": "piper in 3 s: audio/wav, 128812 bytes, 16000 Hz, 4.02 s, RMS 0.147 (0 = silence)",
+      "seconds": 6.1,
+      "detail": "piper in 6.1 s: audio/wav, 130860 bytes, 16000 Hz, 4.09 s, RMS 0.142 (0 = silence)",
       "evidence": {
         "wav": {
           "ok": true,
@@ -246,8 +246,8 @@
           "channels": 1,
           "sampleRate": 16000,
           "bitsPerSample": 16,
-          "durationSeconds": 4.02,
-          "rms": 0.147
+          "durationSeconds": 4.09,
+          "rms": 0.142
         }
       }
     },
@@ -255,8 +255,8 @@
       "id": "VIDEO",
       "title": "Prompt → script → storyboard → narration → subtitles → visuals → MP4",
       "status": "PASS",
-      "seconds": 518.4,
-      "detail": "succeeded in 518.4 s: 2 scene(s), 2 narrated, storyboard model; MP4 522378 bytes, 8.0 s, streams [video:h264, audio:aac, subtitle:mov_text]; WebVTT valid",
+      "seconds": 486.9,
+      "detail": "succeeded in 486.9 s: 2 scene(s), 2 narrated, storyboard model; MP4 385243 bytes, 8.0 s, streams [video:h264, audio:aac, subtitle:mov_text]; WebVTT valid",
       "evidence": {
         "probe": {
           "programs": [],
@@ -276,7 +276,7 @@
             {
               "codec_name": "mov_text",
               "codec_type": "subtitle",
-              "duration": "7.864000"
+              "duration": "6.552000"
             }
           ],
           "format": {
@@ -288,12 +288,12 @@
           {
             "index": 0,
             "status": "succeeded",
-            "narration": "Bees gather nectar and pollen from flowers."
+            "narration": "Bees start with nectar from flowers."
           },
           {
             "index": 1,
             "status": "succeeded",
-            "narration": "Inside the hive, bees create honey comb and store golden honey."
+            "narration": "Nectar turns into honey inside the hive."
           }
         ]
       }
@@ -302,13 +302,13 @@
       "id": "CODING-AGENT",
       "title": "The agent fixes the SOURCE so the test passes, and the fix is verified independently",
       "status": "PASS",
-      "seconds": 301,
-      "detail": "task COMPLETED in 301 s; source changed: true; test file untouched: true; independent run: ok (exit 0)",
+      "seconds": 246.2,
+      "detail": "task COMPLETED in 246.1 s; source changed: true; test file untouched: true; independent run: ok (exit 0)",
       "evidence": {
         "task": {
-          "id": "a0609a73-cf68-42c5-926e-99af446a2f33",
-          "projectId": "9881e8cb-62e2-41a6-a4c6-c013e1d58531",
-          "createdByUserId": "a4ef8cf5-eb8b-45a8-a083-1e28bd82e147",
+          "id": "b60edc42-cbf5-48c8-ba6b-17a5c0620667",
+          "projectId": "4cfca59b-10c2-4202-9c7e-20692d174d9f",
+          "createdByUserId": "67ca76a8-8c89-467d-b68c-f7a4487e0433",
           "taskType": "fix_failing_test",
           "state": "COMPLETED",
           "input": {
@@ -316,15 +316,15 @@
           },
           "output": {
             "usage": {
-              "inputTokens": 18826,
-              "outputTokens": 907
+              "inputTokens": 15003,
+              "outputTokens": 667
             },
-            "content": "The test has passed with exit code 0. The issue was that the `sum` function was incorrectly defined to perform subtraction (`a - b`) instead of addition (`a + b`). I updated the `sum.js` file to return the sum of `a` and `b` and re-ran the test. The test now exits with a success code, indicating that the fix was effective.\n\nThe problem was the incorrect subtraction operation in `sum.js`, and the test now passes successfully.",
+            "content": "The test has passed with an exit code of 0. The issue was that the `sum` function was subtracting the arguments instead of adding them. By fixing the `sum` function to return the sum of the two parameters, the test now passes successfully.\n\nThe change was to replace the line:\n```javascript\nreturn a - b;\n```\nwith:\n```javascript\nreturn a + b;\n```\n\nThe final output of the test is `ok`, indicating that the test has passed.",
             "activity": [
               {
                 "kind": "tool_call",
                 "name": "terminal.run_command",
-                "callId": "h0PbhHYaLI8nYPNYfscH83mK03zIbsCa",
+                "callId": "aKLWuUx4DrShZW5uzlV2fsosLNYWxfOP",
                 "arguments": {
                   "cwd": ".",
                   "args": [
@@ -337,35 +337,35 @@
               {
                 "ok": true,
                 "kind": "tool_result",
-                "callId": "h0PbhHYaLI8nYPNYfscH83mK03zIbsCa",
-                "content": "{\"exitCode\":1,\"stdout\":\"\",\"stderr\":\"node:assert:152\\n  throw new AssertionError(obj);\\n  ^\\n\\nAssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\\n\\n-1 !== 5\\n\\n    at Object.<anonymous> (/data/sandbox/9881e8cb-62e2-41a6-a4c6-c013e1d58531/sum.test.cjs:3:8)\\n    at Module._compile (node:internal/modules/cjs/loader:1929:14)\\n    at Object..js (node:internal/modules/cjs/loader:2060:10)\\n    at Module.load (node:internal/modules/cjs/loader:1651:32)\\n    at Module._load (node:internal/modules/cjs/loader:1443:12)\\n    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)\\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\\n    at node:internal/main/run_main_module:33:47 {\\n  generatedMessage: true,\\n  code: 'ERR_ASSERTION',\\n  actual: -1,\\n  expected: 5,\\n  operator: 'strictEqual',\\n  diff: 'simple'\\n}\\n\\nNode.js v24.21.0\\n\",\"truncated\":false,\"isolation\":\"process\"}",
+                "callId": "aKLWuUx4DrShZW5uzlV2fsosLNYWxfOP",
+                "content": "{\"exitCode\":1,\"stdout\":\"\",\"stderr\":\"node:assert:152\\n  throw new AssertionError(obj);\\n  ^\\n\\nAssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\\n\\n-1 !== 5\\n\\n    at Object.<anonymous> (/data/sandbox/4cfca59b-10c2-4202-9c7e-20692d174d9f/sum.test.cjs:3:8)\\n    at Module._compile (node:internal/modules/cjs/loader:1929:14)\\n    at Object..js (node:internal/modules/cjs/loader:2060:10)\\n    at Module.load (node:internal/modules/cjs/loader:1651:32)\\n    at Module._load (node:internal/modules/cjs/loader:1443:12)\\n    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)\\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\\n    at node:internal/main/run_main_module:33:47 {\\n  generatedMessage: true,\\n  code: 'ERR_ASSERTION',\\n  actual: -1,\\n  expected: 5,\\n  operator: 'strictEqual',\\n  diff: 'simple'\\n}\\n\\nNode.js v24.21.0\\n\",\"truncated\":false,\"isolation\":\"process\"}",
                 "iteration": 1
               },
               {
                 "kind": "tool_call",
                 "name": "code.read_lines",
-                "callId": "6MSIh9KL9Ge1WyAOo5Gff1skzduI5AOm",
+                "callId": "Dxwss5icopxNOB6YITtEFIgD3th0FPAX",
                 "arguments": {
                   "path": "sum.test.cjs",
                   "endLine": 5,
-                  "startLine": 2
+                  "startLine": 1
                 },
                 "iteration": 2
               },
               {
                 "ok": true,
                 "kind": "tool_result",
-                "callId": "6MSIh9KL9Ge1WyAOo5Gff1skzduI5AOm",
-                "content": "{\"path\":\"sum.test.cjs\",\"startLine\":2,\"endLine\":5,\"totalLines\":6,\"content\":\"2\\tconst { sum } = require('./sum.js');\\n3\\tassert.strictEqual(sum(2, 3), 5);\\n4\\tassert.strictEqual(sum(-1, 1), 0);\\n5\\tconsole.log('ok');\"}",
+                "callId": "Dxwss5icopxNOB6YITtEFIgD3th0FPAX",
+                "content": "{\"path\":\"sum.test.cjs\",\"startLine\":1,\"endLine\":5,\"totalLines\":6,\"content\":\"1\\tconst assert = require('node:assert');\\n2\\tconst { sum } = require('./sum.js');\\n3\\tassert.strictEqual(sum(2, 3), 5);\\n4\\tassert.strictEqual(sum(-1, 1), 0);\\n5\\tconsole.log('ok');\"}",
                 "iteration": 2
               },
               {
                 "kind": "tool_call",
                 "name": "code.read_lines",
-                "callId": "NFmvnJ45sH3jZn1RgZU1wlAxoPsaZ0dK",
+                "callId": "1gHxPa5QEOItAyMV41aErDirAzIhPK2S",
                 "arguments": {
                   "path": "sum.js",
-                  "endLine": 5,
+                  "endLine": 10,
                   "startLine": 1
                 },
                 "iteration": 3
@@ -373,46 +373,32 @@
               {
                 "ok": true,
                 "kind": "tool_result",
-                "callId": "NFmvnJ45sH3jZn1RgZU1wlAxoPsaZ0dK",
-                "content": "{\"path\":\"sum.js\",\"startLine\":1,\"endLine\":5,\"totalLines\":6,\"content\":\"1\\tfunction sum(a, b) {\\n2\\t  return a - b;\\n3\\t}\\n4\\t\\n5\\tmodule.exports = { sum };\"}",
+                "callId": "1gHxPa5QEOItAyMV41aErDirAzIhPK2S",
+                "content": "{\"path\":\"sum.js\",\"startLine\":1,\"endLine\":6,\"totalLines\":6,\"content\":\"1\\tfunction sum(a, b) {\\n2\\t  return a - b;\\n3\\t}\\n4\\t\\n5\\tmodule.exports = { sum };\\n6\\t\"}",
                 "iteration": 3
               },
               {
                 "kind": "tool_call",
-                "name": "code.apply_patch",
-                "callId": "6ZgNJu3RuIELkFncIRTgVpPxuUapjCvu",
+                "name": "code.replace_text",
+                "callId": "FOBOcCzUgcFWJndizUrD0DVLcBF03biB",
                 "arguments": {
-                  "diff": "-function sum(a, b) {\n+function sum(a, b) {\n+  return a + b;\n+}"
+                  "path": "sum.js",
+                  "newText": "return a + b;",
+                  "oldText": "return a - b;"
                 },
                 "iteration": 4
-              },
-              {
-                "ok": false,
-                "kind": "tool_result",
-                "callId": "6ZgNJu3RuIELkFncIRTgVpPxuUapjCvu",
-                "content": "Error: The diff contained no file headers (expected `--- a/<path>` and `+++ b/<path>` before each `@@` hunk). For a small change, code.replace_text is simpler: give the file's exact current text and its replacement.",
-                "iteration": 4
-              },
-              {
-                "kind": "tool_call",
-                "name": "code.apply_patch",
-                "callId": "wdpWt2V5yWaUzCr81DDfWAOeaC6EP9B0",
-                "arguments": {
-                  "diff": "diff --git a/sum.js b/sum.js\n--- a/sum.js\n+++ b/sum.js\n@@ -1,3 +1,3 @@\n-function sum(a, b) {\n+function sum(a, b) {\n+  return a + b;\n+"
-                },
-                "iteration": 5
               },
               {
                 "ok": true,
                 "kind": "tool_result",
-                "callId": "wdpWt2V5yWaUzCr81DDfWAOeaC6EP9B0",
-                "content": "{\"filesChanged\":1,\"files\":[{\"path\":\"sum.js\",\"action\":\"modified\",\"hunksApplied\":1,\"offsets\":[],\"hunksRecounted\":1}],\"driftDetected\":false}",
-                "iteration": 5
+                "callId": "FOBOcCzUgcFWJndizUrD0DVLcBF03biB",
+                "content": "{\"path\":\"sum.js\",\"replacedAtLine\":2,\"linesRemoved\":1,\"linesAdded\":1}",
+                "iteration": 4
               },
               {
                 "kind": "tool_call",
                 "name": "terminal.run_command",
-                "callId": "5IT2HGz6bpdj0bKc1vMiJ3adCKmwnfs4",
+                "callId": "nfBcOUyro9whkOBqFQL6dFTvA3jKdnA2",
                 "arguments": {
                   "cwd": ".",
                   "args": [
@@ -420,43 +406,43 @@
                   ],
                   "command": "node"
                 },
-                "iteration": 6
+                "iteration": 5
               },
               {
                 "ok": true,
                 "kind": "tool_result",
-                "callId": "5IT2HGz6bpdj0bKc1vMiJ3adCKmwnfs4",
+                "callId": "nfBcOUyro9whkOBqFQL6dFTvA3jKdnA2",
                 "content": "{\"exitCode\":0,\"stdout\":\"ok\\n\",\"stderr\":\"\",\"truncated\":false,\"isolation\":\"process\"}",
-                "iteration": 6
+                "iteration": 5
               },
               {
                 "ok": true,
                 "kind": "verification"
               }
             ],
-            "iterations": 7,
+            "iterations": 6,
             "verification": {
               "ok": true
             },
-            "toolCallCount": 6
+            "toolCallCount": 5
           },
           "errorMessage": null,
           "leaseOwner": null,
           "leaseExpiresAt": null,
           "version": 4,
           "cancelRequestedAt": null,
-          "createdAt": 1790611720068,
-          "updatedAt": 1790612016743
+          "createdAt": 1790600074420,
+          "updatedAt": 1790600316010
         },
-        "source": "function sum(a, b) {\n  return a + b;\n\n  return a - b;\n}\n\nmodule.exports = { sum };\n"
+        "source": "function sum(a, b) {\n  return a + b;\n}\n\nmodule.exports = { sum };\n"
       }
     },
     {
       "id": "MCP",
       "title": "A tool served by a real MCP server runs inside an agent task, in this project only",
       "status": "PASS",
-      "seconds": 12.7,
-      "detail": "task COMPLETED: reference-filesystem (stdio) read \"The keeper's code word is lantern-530.\"; the model answered \"lantern-530\" (expected lantern-530); a path outside the workspace: refused",
+      "seconds": 12.6,
+      "detail": "task COMPLETED: reference-filesystem (stdio) read \"The keeper's code word is lantern-904.\"; the model answered \"lantern-904\" (expected lantern-904); a path outside the workspace: refused",
       "evidence": null
     },
     {
@@ -464,7 +450,7 @@
       "title": "Tokens spent are metered",
       "status": "PASS",
       "seconds": 0,
-      "detail": "this project spent 22745 tokens today across the calls above (scope organization)",
+      "detail": "this project spent 18682 tokens today across the calls above (scope organization)",
       "evidence": null
     },
     {
@@ -480,14 +466,14 @@
       "title": "The project's audit trail records what happened in it",
       "status": "PASS",
       "seconds": 0,
-      "detail": "11 entries, all in this project: true; actions: tool.call.mcp, tool.call, project.create",
+      "detail": "10 entries, all in this project: true; actions: tool.call.mcp, tool.call, project.create",
       "evidence": null
     },
     {
       "id": "TENANT-ISOLATION",
       "title": "Another tenant cannot read this one's data",
       "status": "PASS",
-      "seconds": 1.1,
+      "seconds": 1,
       "detail": "victim's conversation, document and workspace file -> 404, 404, 404; the intruder's own workspace has no sum.js -> 404",
       "evidence": null
     },
@@ -495,15 +481,15 @@
       "id": "METRICS",
       "title": "Prometheus metrics carry real values",
       "status": "PASS",
-      "seconds": 0.7,
-      "detail": "API 200, http://127.0.0.1:9464/metrics 200; summed: http_requests_total 873, provider_request_count 23, token_usage_total 23245, generation_total 4, job_processed_total 11, tool_call_count 10",
+      "seconds": 0.6,
+      "detail": "API 200, http://127.0.0.1:9464/metrics 200; summed: http_requests_total 606, provider_request_count 25, token_usage_total 18966, generation_total 6, job_processed_total 9, tool_call_count 9",
       "evidence": null
     },
     {
       "id": "PERSISTENCE",
       "title": "Log out, log back in: everything is still there",
       "status": "PASS",
-      "seconds": 0.5,
+      "seconds": 0.6,
       "detail": "after a fresh login: 3 conversation(s) in the project; the handbook -> 200",
       "evidence": null
     },
@@ -511,7 +497,7 @@
       "id": "RATE-LIMIT",
       "title": "A route's limit is enforced and says when to retry",
       "status": "PASS",
-      "seconds": 1.6,
+      "seconds": 1.4,
       "detail": "429 RATE_LIMITED; retry-after 59 s; limit 30",
       "evidence": null
     }

@@ -1,42 +1,38 @@
 # npm run verify, 2026-09-28
 
-Stack: the compose stack with the API image built from `51a66a5` (the tree at `f0f3d13` differs only in the test canary and docs).
+Every run below used the Docker Compose stack, with the API image built from the commit named. The runs are listed in order, including those that failed.
 
-## Run 1: every gate
+| Run | API image | Result | What failed, and what was done |
+|---|---|---|---|
+| 1 | `51a66a5` | 17 PASS · 2 FAIL | SECURITY: a test canary shaped like an Anthropic key (joined at runtime in `f0f3d13`; the scanner was not loosened). DOCKER: the sandbox image `node:22-alpine` was missing locally, and Docker Hub answered 429. It was pulled from `mirror.gcr.io` (digest `node@sha256:0a7108bf…`) |
+| 2 | `51a66a5` | SECURITY, DOCKER: 2 PASS | only the two gates that had failed |
+| 3 | `816674a` | 18 PASS · 1 FAIL | AGENT: CODING-AGENT stopped at 12 turns, because the model sent the wrong indentation to `code.replace_text` five times, and that tool never said why. Fixed in DL-25 (`a34ac79`) |
+| 4 | `a34ac79` | **19 PASS · 0 FAIL** | — |
+| 5 (final) | `16d352b` | **19 PASS · 0 FAIL** | — (after DL-26) |
+
+## Final run (`16d352b`)
 
 ```
-BUILD          PASS              all workspaces built (33s)
-TYPECHECK      PASS              0 errors (52s)
-LINT           PASS              0 errors, 5 warnings (34s)
-UNIT           PASS              996 passed, 0 failed, 2 skipped (26 workspaces) (456s)
-INTEGRATION    PASS              273 passed, 0 failed, 0 skipped (backend application) (280s)
-API            PASS              76 routes documented, each requested once; no drift (8s)
-SECURITY       FAIL              npm audit: no high/critical; possible secrets in backend/packages/tools/src/native/terminal-isolation.test.ts; no mock serves production (3s)
+BUILD          PASS              all workspaces built (19s)
+TYPECHECK      PASS              0 errors (46s)
+LINT           PASS              0 errors, 5 warnings (28s)
+UNIT           PASS              1001 passed, 0 failed, 2 skipped (26 workspaces) (425s)
+INTEGRATION    PASS              276 passed, 0 failed, 0 skipped (backend application) (257s)
+API            PASS              76 routes documented, each requested once; no drift (7s)
+SECURITY       PASS              npm audit: no high/critical; secret scan: 594 tracked files clean; no mock serves production (3s)
+E2E            PASS              Playwright: 14 passed (48s)
 DATABASE       PASS              migrations apply to an empty DB, re-apply cleanly, match the schema (5s)
 BOUNDARY       PASS              frontend/backend boundary holds (1s)
-BOOT           PASS              every role boots (41s)
+BOOT           PASS              every role boots (37s)
 REAL RUNTIME   PASS              AUTH-SIGNUP=PASS AUTH-SESSION=PASS PROVIDERS=PASS CHAT-STREAM=PASS CHAT-HISTORY=PASS USAGE=PASS TENANT-ISOLATION=PASS PERSISTENCE=PASS (0s)
 MEDIA          PASS              IMAGE=PASS AUDIO=PASS VIDEO=PASS (0s)
 AGENT          PASS              CODING-AGENT=PASS (0s)
 RAG            PASS              RAG-INGEST=PASS RAG-ANSWER=PASS RAG-REFUSAL=PASS (0s)
 MEMORY         PASS              MEMORY-FORMATION=PASS MEMORY-RECALL=PASS MEMORY-DELETE=PASS (0s)
 MCP            PASS              MCP=PASS (0s)
-DOCKER         FAIL              real-container sandbox suite failed: 1 passed, 3 failed, 0 skipped (9s)
-TERRAFORM      PASS              fmt, init, validate pass (plan/apply need GCP credentials: docs/PRODUCTION_DEPLOYMENT_BLOCKER.md) (15s)
-17 PASS · 2 FAIL · 0 BLOCKED_EXTERNAL
+DOCKER         PASS              Docker 29.3.1; compose valid; sandbox 4 passed, 0 failed, 0 skipped (8s)
+TERRAFORM      PASS              fmt, init, validate pass (plan/apply need GCP credentials: docs/PRODUCTION_DEPLOYMENT_BLOCKER.md) (6s)
+19 PASS · 0 FAIL · 0 BLOCKED_EXTERNAL
 ```
 
-Exit code 1. The two failures:
-
-- **SECURITY**: the secret scan matched a test canary shaped like an Anthropic key in `terminal-isolation.test.ts`. It was not a credential. It is now joined at runtime (`f0f3d13`), and the scanner was not loosened.
-- **DOCKER**: the sandbox suite's image `node:22-alpine` had been removed locally, and Docker Hub answered 429 Too Many Requests. It was pulled from `mirror.gcr.io/library/node:22-alpine` (digest `node@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402`).
-
-## Run 2: the two gates that failed
-
-```
-SECURITY       PASS              npm audit: no high/critical; secret scan: 579 tracked files clean; no mock serves production (2s)
-DOCKER         PASS              Docker 29.3.1; compose valid; sandbox 4 passed, 0 failed, 0 skipped (4s)
-2 PASS · 0 FAIL · 0 BLOCKED_EXTERNAL
-```
-
-The full-system acceptance run by the runtime gates is `acceptance-compose-final.md` (24/24).
+The full-system acceptance that the runtime gates ran is `acceptance-compose-final.md` (24/24). The JSON files hold each run's gates: `verify-run1.json`, `verify-run2-security-docker.json`, `verify-run3-816674a.json`, `verify-run4-a34ac79.json` and `verify-final-16d352b.json`.

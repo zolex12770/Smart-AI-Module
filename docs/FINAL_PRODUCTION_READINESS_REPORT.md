@@ -1,8 +1,8 @@
 # Final production-readiness report
 
-**Date:** 2026-09-28 · **Branch:** `claude/zen-brahmagupta-6l5o4u` · **Code verified at:** `51a66a5`
-(API image and CI). The later commits change a test fixture and documentation only; the report's
-own commit is listed in §2.
+**Date:** 2026-09-28 · **Branch:** `claude/zen-brahmagupta-6l5o4u` · **Code verified at:** `16d352b`
+(the API image for the final runs, and CI run 36444462653). The commits after it change evidence
+and documentation only.
 
 The state vocabulary is the one in [PROJECT_STATUS.md](PROJECT_STATUS.md):
 `NOT_STARTED` → `IN_PROGRESS` → `IMPLEMENTED` → `LOCALLY_VERIFIED` → `E2E_VERIFIED` →
@@ -20,18 +20,23 @@ pgvector, Ollama, the API, a separate worker and the web app.
 - **Media** runs on real generators: image with SDXL via stable-diffusion.cpp, speech with Piper,
   and narrated, subtitled video with ffmpeg.
 
-On the final API image:
+On the final API image (`16d352b`):
 
-- `npm run verify`: **17 PASS, 2 FAIL** on the first run. Both failures were fixed and pass on
-  re-run (§22).
+- `npm run verify`: **19 PASS, 0 FAIL, 0 BLOCKED_EXTERNAL**, exit 0. Earlier runs failed, and
+  each failure was fixed (§22).
 - The full-system acceptance: **24/24**.
-- The attack suite: **11/11**.
-- Failure injection: **5/5**.
-- The browser suite: **11/11**, including video playback in a browser without H.264.
-- CI is green on every code commit.
+- The attack suite: **11/11**, twice.
+- Browser video playback in a Chromium without H.264: PASS.
 
-**Running the platform for real this pass found 13 platform defects that tests had not caught.**
-Each is fixed with a test that fails against the previous code (DL-19 to DL-23):
+On images from earlier in the pass:
+
+- Failure injection: **5/5** (`51a66a5`).
+- The full browser suite: **11/11** (`51a66a5`).
+
+CI is green on every code commit.
+
+**Running the platform for real this pass found 16 platform defects that tests had not caught.**
+Each is fixed with a test that fails against the previous code (DL-19 to DL-26):
 
 - a video that would not play in a browser without H.264;
 - a correct model diff refused by the patch parser;
@@ -39,7 +44,12 @@ Each is fixed with a test that fails against the previous code (DL-19 to DL-23):
 - agent turns never billed when they died mid-stream;
 - a cold model load that could never finish after a restart;
 - liveness failing during a database outage;
-- 500s where 503 and 502 were honest.
+- 500s where 503 and 502 were honest;
+- an empty setting that stopped the boot;
+- an unhelpful edit-tool error that cost a coding run;
+- oversized uploads whose 413 was lost to a TCP reset.
+
+A fresh independent audit of the new code found no P1 (DL-24).
 
 **Not shown:** the coding agent completing a second, unrelated task. It failed in all three runs
 (§9). The platform reported every failure honestly, but qwen2.5:7b on CPU did not complete it.
@@ -49,14 +59,16 @@ Each is fixed with a test that fails against the previous code (DL-19 to DL-23):
 
 | What | Commit |
 |---|---|
-| API image used for every runtime result in this report | `51a66a5` |
+| API image for the final verify, acceptance, attacks and browser video run | `16d352b` |
+| API image for the failure-injection, extra-scenario and full browser runs | `51a66a5` (§24) |
 | Web image | `149bd22` (the frontend is unchanged since) |
-| Last CI-verified code commit | `51a66a5`, CI run 36420864142 |
-| Commits after it | `f0f3d13` (a test canary joined at runtime), then documentation and evidence only |
+| Last CI-verified code commit | `16d352b`, CI run 36444462653 |
 
 Code commits this pass, in order (all CI-green):
 - `ef08c48`, `9651a83`, `567bc93`, `14123b5`, `10abb12`, `81cedf8`: before this report's runs.
 - `149bd22` (DL-19), `77e7e41` (DL-20), `87f1b1b` (DL-21), `70b4229` (DL-22), `51a66a5` (DL-23).
+- `f0f3d13` (a test canary), `816674a` (DL-24), `a34ac79` (DL-25), `9f9dc86` (verify's Terraform
+  gate), `16d352b` (DL-26).
 
 ## 3. Frontend
 
@@ -81,6 +93,9 @@ dev`, port **3000**).
 - **Changes this pass:**
   - Outage handling: liveness never touches the database; an unreachable database answers 503;
     provider failures answer 502 (DL-23).
+  - An oversized upload is drained before its 413 is sent, so the answer is not lost to a TCP
+    reset (DL-26).
+  - A blank setting means unset for every variable (DL-24).
   - Agent partial-turn billing (DL-21).
   - The warm-up's load deadline (DL-22).
 
@@ -135,7 +150,7 @@ file is read-only to it.
 
 | Scenario | Result | Evidence |
 |---|---|---|
-| Acceptance CODING-AGENT (`sum.js`) | **PASS**: COMPLETED in 246 s, independent re-run exit 0, test untouched | `acceptance-compose-final.md` |
+| Acceptance CODING-AGENT (`sum.js`) | **PASS** on the final image: COMPLETED in 301 s, independent re-run exit 0, test untouched. PASS in 4 of this pass's 5 acceptance runs (`81cedf8`, `51a66a5`, `a34ac79`, `16d352b`); the failure on `816674a` led to DL-25 (below) | `acceptance-compose-final.md`, `acceptance-compose-816674a.md` |
 | CODING-BAD-PATCH (a naive fix is wrong) | **PASS** in runs 2 and 3: the verdict (`FAILED`) agrees with an independent run of the test, and the test is untouched | `extra-scenarios-run3.md` |
 | CODING-SECOND (a second, unrelated task: `slugify`) | **FAIL** in all 3 runs | `extra-scenarios-run1-600s-node-budget.md`, `extra-scenarios-run2-partial.log`, `extra-scenarios-run3.md` |
 
@@ -151,6 +166,12 @@ CODING-SECOND is reported as it happened:
 
 In every run, the platform reported `FAILED` with the reason, never `COMPLETED` over a failing
 test.
+
+The acceptance task failed once, on `816674a` (verify run 3). The model had found the fix but sent
+the wrong indentation to `code.replace_text` five times, and the tool answered only "not found".
+It now quotes the file's own text when only the indentation differs (DL-25). On the final image,
+the model's first edit was correct, so the new message was not exercised in a real run; its test
+replays the failing call.
 
 ## 10. Memory
 
@@ -180,7 +201,7 @@ stable-diffusion.cpp (built from source) runs SDXL base 1.0 (q8_0) in the worker
 
 | Check | Result |
 |---|---|
-| Acceptance IMAGE (red apple, 512×512) | PASS, 352.8 s. PNG decoded: luminance stddev 75.9, 420 distinct colours |
+| Acceptance IMAGE (red apple, 512×512) | PASS on the final image, 360.7 s. PNG decoded: luminance stddev 75.9, 420 distinct colours |
 | IMAGE-NEGATIVE | PASS: 5 invalid requests → 400, and no generation was created |
 | IMAGE-REPRODUCIBLE (the idempotence check) | PASS: seed 4242 twice → byte-identical (sha256 `f7c2c1b9…`); seed 777 → a different image |
 | MEDIA-CRASH (sd-cli killed mid-run) | PASS: settled `failed` with no internals in the message, and not charged |
@@ -189,7 +210,8 @@ stable-diffusion.cpp (built from source) runs SDXL base 1.0 (q8_0) in the worker
 ## 13. Audio
 
 Piper (`en_US-lessac-low`) is baked into the API image.
-- **Acceptance AUDIO:** a 16 kHz WAV, 4.09 s, RMS 0.142 (silence would be 0).
+- **Acceptance AUDIO (final image):** synthesised in 3 s. A 16 kHz WAV, 4.02 s, RMS 0.147
+  (silence would be 0).
 - **Browser AUDIO-UI:** the page's `<audio>` loaded and measured it.
 
 ## 14. Video
@@ -201,11 +223,12 @@ The pipeline has four steps:
 3. The render muxes an MP4 with H.264 video, AAC audio and a `mov_text` subtitle track.
 4. The render also produces a WebVTT file and a **WebM (VP9/Opus) rendition** (DL-19).
 
-- **Acceptance VIDEO:** 486.9 s. 2 narrated scenes. `ffprobe` shows `[video:h264, audio:aac,
-  subtitle:mov_text]`, 8.0 s.
+- **Acceptance VIDEO (final image):** 518.4 s. 2 narrated scenes. `ffprobe` shows `[video:h264,
+  audio:aac, subtitle:mov_text]`, 8.0 s.
 - **Browser VIDEO-UI:** the test Chromium has no H.264 support (`canPlayType` returned `""`). It
-  chose and decoded the WebM: 8.0 s, 640 px, with the caption track. Before DL-19 this check
-  failed.
+  chose and decoded the WebM, with the caption track: 8.0 s on `51a66a5`, and 8.4 s on the image
+  where DL-24 reordered how render assets are stored. Before DL-19 this check failed.
+- **Cancel just before the last ffmpeg step:** nothing is stored (DL-24). Tested with real ffmpeg.
 
 ## 15. MCP
 
@@ -218,21 +241,23 @@ confined to the caller's project workspace.
 
 ## 16. Security
 
-- **Attack suite on the final API: 11/11.** Checks:
+- **Attack suite on the final API: 11/11, in two consecutive runs.** Checks:
   - 72 protected routes return 401 without credentials;
   - CSRF;
   - 6 cross-tenant IDOR probes → 404;
   - API-key scope;
   - path traversal;
   - upload validation;
-  - malformed input (413 and 400, no 5xx);
+  - malformed input (413 and 400, no 5xx). On `816674a` this check failed: the 413 for an 8 MiB
+    upload was lost to a TCP reset in about 20% of tries. The upload is now drained before the
+    413 is sent (DL-26), and 40 of 40 raw-socket tries through the compose port received it;
   - chat overrides;
   - enumeration;
   - response headers;
   - RAG prompt injection.
 - **Earlier on compose:** X-Forwarded-For spoofing.
 - **`verify` SECURITY:** `npm audit` has no high or critical findings; the secret scan finds all
-  579 tracked files clean; no mock serves production.
+  594 tracked files clean; no mock serves production.
 - **CI:** gitleaks.
 - **Sandbox:** the real-container sandbox runs with no network, a read-only root, a non-root user
   and one workspace (4/4).
@@ -244,8 +269,8 @@ confined to the caller's project workspace.
 - **Logs:** structured JSON, with request ids across the API, jobs and providers.
 - **Traces:** OpenTelemetry spans, exported to logs; no collector is deployed.
 - **Metrics:** Prometheus, from the API and from the worker's own `METRICS_PORT` listener.
-- **Acceptance METRICS:** both endpoints were scraped, and every counter was non-zero:
-  `http_requests_total` 606, `provider_request_count` 25, `token_usage_total` 18966.
+- **Acceptance METRICS (final image):** both endpoints were scraped, and every counter was
+  non-zero: `http_requests_total` 873, `provider_request_count` 23, `token_usage_total` 23245.
 
 ## 18. Docker
 
@@ -256,7 +281,7 @@ confined to the caller's project workspace.
     The build stage is identical.
 - **Compose stack** (with the `docker-compose.sdcpp.yml` overlay): postgres, ollama, api, worker
   and web. Every runtime script in this report ran against it.
-- **`verify` DOCKER:** the compose file is valid and the sandbox passes 4/4 (on re-run, §22).
+- **`verify` DOCKER:** the compose file is valid and the sandbox passes 4/4.
 
 ## 19. Terraform
 
@@ -290,6 +315,10 @@ Green runs this pass:
 | `87f1b1b` | 36400678818 |
 | `70b4229` | 36414199421 |
 | `51a66a5` | 36420864142 |
+| `15ef9b7` (the tree after `f0f3d13`) | 36427828941 |
+| `816674a` | 36429962808 |
+| `9f9dc86` (after `a34ac79`) | 36436331495 |
+| `16d352b` | 36444462653 |
 
 There is no deployment pipeline (CD); deployment is the runbook.
 
@@ -301,26 +330,32 @@ the exact command it unblocks, and the result each command must produce.
 
 ## 22. Test counts
 
-From `npm run verify` on the final tree (`docs/evidence/2026-09-28/verify.md`):
+From the final `npm run verify` (API image `16d352b`), which exited 0. Every run, including the
+three that failed and what each failure led to, is in `docs/evidence/2026-09-28/verify.md`.
 
 | Gate | Result |
 |---|---|
 | BUILD | PASS |
 | TYPECHECK | PASS, 0 errors |
-| LINT | PASS, 0 errors (5 warnings) |
-| UNIT | PASS, **996 passed, 0 failed, 2 skipped** across 26 workspaces |
-| INTEGRATION | PASS, **273 passed**, 0 failed (backend application) |
+| LINT | PASS, 0 errors (5 warnings, all `no-console` at boot) |
+| UNIT | PASS, **1001 passed, 0 failed, 2 skipped** across 26 workspaces |
+| INTEGRATION | PASS, **276 passed**, 0 failed (backend application) |
 | API | PASS, 5 contract tests, 76 routes each requested once, no drift |
-| SECURITY | FAIL on run 1 (a test canary matched the key pattern; fixed in `f0f3d13`), then **PASS** |
+| SECURITY | PASS: `npm audit` clean at high, 594 tracked files clean, no mock in production |
 | E2E | PASS, Playwright 14 |
 | DATABASE | PASS, 3/3 |
 | BOUNDARY | PASS, 8/8 |
 | BOOT | PASS, 8/8 |
 | REAL RUNTIME, MEDIA, AGENT, RAG, MEMORY, MCP | PASS (the 24/24 acceptance run) |
-| DOCKER | FAIL on run 1 (the sandbox image was missing and Docker Hub answered 429), then **PASS**, 4/4 |
+| DOCKER | PASS, sandbox 4/4 |
 | TERRAFORM | PASS |
 
-**Automated tests: 1274 passed, 0 failed, 2 skipped** (996 unit + 273 integration + 5 contract).
+Earlier runs failed as follows:
+- **Run 1** (`51a66a5`): SECURITY flagged a key-shaped test canary; DOCKER found the sandbox image
+  missing after a Docker Hub 429.
+- **Run 3** (`816674a`): AGENT failed (DL-25).
+
+**Automated tests: 1282 passed, 0 failed, 2 skipped** (1001 unit + 276 integration + 5 contract).
 The 2 skips are the real-model SD image and video suites, which need a model file; CI runs them
 with SD-Turbo.
 
@@ -329,8 +364,8 @@ Per workspace:
 | Workspace | Tests |
 |---|---|
 | web | 124 |
-| tools | 167 |
-| media | 106 |
+| tools | 169 |
+| media | 107 |
 | agent-core | 101 |
 | security | 87 |
 | rag | 65 |
@@ -340,7 +375,7 @@ Per workspace:
 | video-replicate | 31 |
 | model-router | 30 |
 | jobs | 23 |
-| llm-local | 19 |
+| llm-local | 21 |
 | quota | 16 |
 | llm-openai | 16 |
 | llm-google | 15 |
@@ -364,8 +399,9 @@ Per workspace:
   web app with real models): the results are in
   [evidence/2026-09-28/browser-compose-final.md](evidence/2026-09-28/browser-compose-final.md).
 
-**Browser acceptance on the final stack: 11/11 PASS.** Every screen was checked for console errors
-and failed requests.
+**Browser acceptance, full suite: 11/11 PASS** on the `51a66a5` image. Every screen was checked for
+console errors and failed requests. VIDEO-UI was run again on the final image: PASS
+(`browser-video-final.md`).
 
 | Check | Observed |
 |---|---|
@@ -387,16 +423,19 @@ All in [evidence/2026-09-28/](evidence/2026-09-28/):
 
 | Run | Result | File |
 |---|---|---|
-| Full-system acceptance, final image | **24/24** | `acceptance-compose-final.md` |
-| Attacks, final image | **11/11** | `attacks-compose-final.md` |
-| Failure injection | run 1: 1/5 (three platform defects, two script defects); run 2: **5/5** | `failure-injection-run1.md`, `failure-injection-run2.md` |
-| Extra scenarios | run 3: 3 PASS, 1 FAIL (CODING-SECOND, §9) | `extra-scenarios-run*.md` |
+| Full-system acceptance, final image (`16d352b`) | **24/24** | `acceptance-compose-final.md` |
+| Full-system acceptance, earlier images | `51a66a5` 24/24; `816674a` 23/24 (CODING-AGENT, DL-25) | `acceptance-compose-51a66a5.md`, `acceptance-compose-816674a.md` |
+| Attacks, final image | **11/11**, run twice | `attacks-compose-final.md` |
+| Attacks, earlier images | `51a66a5` 11/11; `816674a` 10/11 (the lost 413, DL-26) | `attacks-compose-51a66a5.md`, `attacks-compose-816674a-413-race.md` |
+| Failure injection (`51a66a5`) | run 1: 1/5 (three platform defects, two script defects); run 2: **5/5** | `failure-injection-run1.md`, `failure-injection-run2.md` |
+| Extra scenarios (`70b4229`) | run 3: 3 PASS, 1 FAIL (CODING-SECOND, §9) | `extra-scenarios-run*.md` |
 | Browser, VIDEO-UI after DL-19 | PASS (WebM decoded) | `browser-video-webm.md` |
-| Browser, full suite, final stack | **11/11** | `browser-compose-final.md` |
+| Browser, full suite (`51a66a5`) | **11/11** | `browser-compose-final.md` |
+| Browser, VIDEO-UI on the final image | PASS | `browser-video-final.md` |
 | `npm run verify` | §22 | `verify.md` |
 | Latency | measured, below | `latency-compose-final.md` |
 
-**Latency on the final stack** (4 CPU cores, 16 GB, no GPU; observations, not targets):
+**Latency** (the `51a66a5` stack; 4 CPU cores, 16 GB, no GPU; observations, not targets):
 
 | Measurement (ms) | n | p50 | p95 | max |
 |---|---|---|---|---|
@@ -407,16 +446,16 @@ All in [evidence/2026-09-28/](evidence/2026-09-28/):
 | chat: time to first token | 3 | 3370 | 3911 | 3911 |
 | chat: interval between tokens | 154 | 224 | 306 | 391 |
 
-Durations from the acceptance run:
+Durations from the final acceptance run:
 
 | Operation | Duration |
 |---|---|
-| Image (SDXL, 512×512) | 352.8 s |
-| Speech (Piper) | 6.1 s for 4.09 s of audio |
-| Video (8 s, 2 narrated scenes) | 486.9 s |
-| Coding agent | 246 s |
-| RAG answer | 18 s |
-| Memory formed after the turn | 29.6 s |
+| Chat, first token | 755 ms |
+| Image (SDXL, 512×512) | 360.7 s |
+| Speech (Piper) | 3 s for 4.02 s of audio |
+| Video (8 s, 2 narrated scenes) | 518.4 s |
+| Coding agent | 301 s |
+| RAG answer | 12.8 s |
 
 ## 25. Blockers
 
@@ -441,6 +480,10 @@ Only external ones remain:
 - **Cold model load:** the fix is covered by a unit test. The runtime restart after it found the
   model already in the page cache (warmed in 1.4 s), so a cold load after the fix was not observed
   on this machine.
+- **Not every runtime run was repeated on the final image.** Failure injection, the full browser
+  suite and the latency run are from the `51a66a5` image. The extra scenarios are from `70b4229`.
+  What changed after those images (DL-24 to DL-26) was re-verified: by `verify` (19/19, with the
+  24/24 acceptance), the attack suite, and browser VIDEO-UI on the final image.
 - **One API instance:** the agent's live event bus is in-process (ADR-159).
 - **Sandbox on compose and Cloud Run:** agent commands run under process isolation; the Docker
   sandbox needs a Docker socket.

@@ -13,12 +13,12 @@ ffmpeg. Nothing answers with fake output: mock providers exist only for tests, o
 it says so.
 
 **Status (2026-09-28):** [docs/FINAL_PRODUCTION_READINESS_REPORT.md](docs/FINAL_PRODUCTION_READINESS_REPORT.md)
-has the verified status and its evidence. On the final Docker Compose stack:
+has the verified status and its evidence. On the Docker Compose stack with real models:
 
-- the full-system acceptance: 24/24;
-- the browser suite: 11/11;
+- `npm run verify`: 19/19 gates, including the full-system acceptance (24/24);
 - the attack suite: 11/11;
-- failure injection: 5/5.
+- failure injection: 5/5;
+- the browser suite: 11/11.
 
 The coding agent completed its acceptance task but did not complete a second, unrelated task
 with the local 7B model; the report says why. It has not been deployed to a cloud: `terraform
@@ -88,8 +88,8 @@ npm run verify        # every gate, PASS / FAIL / BLOCKED_EXTERNAL; non-zero on 
 
 `npm run verify` runs build, typecheck, lint, unit, integration, the API contract, security,
 Playwright, database, boundary, boot, the real-runtime gates (against a running stack at
-`ACCEPT_API_URL`), Docker and Terraform. On the final tree the automated tests stand at 1274
-passed, 0 failed, 2 skipped. The runtime scripts in `scripts/acceptance/` (browser, attacks,
+`ACCEPT_API_URL`), Docker and Terraform. On the final tree the automated tests stand at 1282
+passed, 0 failed, 2 skipped, and every gate passes (19/19). The runtime scripts in `scripts/acceptance/` (browser, attacks,
 failure injection, extra scenarios, latency) run against a running stack.
 
 [docs/TESTING.md](docs/TESTING.md) describes every layer, and what the acceptance script checks

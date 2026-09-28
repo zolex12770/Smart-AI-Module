@@ -64,6 +64,11 @@ regression test that fails without it.
 | 35 | After a restart, the warm-up abandoned a cold model load; Ollama cancelled it, and the model never became ready | The warm-up has its own load deadline, `LLM_LOAD_TIMEOUT_MS` (DL-22) |
 | 36 | With Postgres stopped, liveness answered 500 to a caller with a session cookie | Liveness never looks up a credential (DL-23) |
 | 37 | A database outage answered 500; RAG answered 500 with Ollama stopped | 503 `DATABASE_UNAVAILABLE`; the embedding failure is a 502 `ProviderError` (DL-23) |
+| 38 | An empty numeric setting (as the compose comment invited) was read as 0 and stopped the boot | Blank means unset for every setting (DL-24) |
+| 39 | A turn answering only with a tool call could not be charged when cut off | The provider signals life on the first tool-call fragment (DL-24) |
+| 40 | A cancel before the WebM step orphaned the stored MP4 and captions | Assets are stored after the last ffmpeg step (DL-24) |
+| 41 | `code.replace_text` answered "not found" five times to an indentation-only mismatch, and the coding run failed | It quotes the file's own text and line (DL-25) |
+| 42 | About 20% of oversized uploads lost their 413 to a TCP reset | The upload is drained before the 413 is sent (DL-26) |
 
 The acceptance script had its own defects, fixed the same way. It asked for chat history without
 sending it, although the API takes history from the client as OpenAI's does. It also read metric
@@ -79,7 +84,7 @@ evidence says why.
 {
   "date": "2026-09-28",
   "branch": "claude/zen-brahmagupta-6l5o4u",
-  "verified_code_commit": "51a66a5",
+  "verified_code_commit": "16d352b",
   "states": [
     "NOT_STARTED",
     "IN_PROGRESS",
@@ -114,12 +119,12 @@ evidence says why.
     {
       "id": "gate.unit",
       "state": "LOCALLY_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/verify.md UNIT 996 passed, 2 skipped; CI 36420864142"
+      "evidence": "docs/evidence/2026-09-28/verify.md UNIT 1001 passed, 2 skipped (final run); CI 36444462653"
     },
     {
       "id": "gate.integration",
       "state": "LOCALLY_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/verify.md INTEGRATION 273 passed"
+      "evidence": "docs/evidence/2026-09-28/verify.md INTEGRATION 276 passed (final run)"
     },
     {
       "id": "gate.api_contract",
@@ -129,7 +134,7 @@ evidence says why.
     {
       "id": "gate.security",
       "state": "E2E_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/verify.md SECURITY (run 2 PASS); docs/evidence/2026-09-28/attacks-compose-final.md 11/11"
+      "evidence": "docs/evidence/2026-09-28/verify.md SECURITY PASS (final run); docs/evidence/2026-09-28/attacks-compose-final.md 11/11 twice"
     },
     {
       "id": "gate.e2e_playwright",
@@ -169,7 +174,7 @@ evidence says why.
     {
       "id": "real.coding_agent.first_task",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md CODING-AGENT, COMPLETED 246 s"
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md CODING-AGENT, COMPLETED 301 s (4 of 5 acceptance runs this pass; the failure led to DL-25)"
     },
     {
       "id": "real.coding_agent.bad_patch",
@@ -249,7 +254,7 @@ evidence says why.
     {
       "id": "docker.sandbox",
       "state": "E2E_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/verify.md DOCKER run 2, sandbox 4/4"
+      "evidence": "docs/evidence/2026-09-28/verify.md DOCKER, sandbox 4/4 (final run)"
     },
     {
       "id": "terraform.validate",
@@ -269,12 +274,17 @@ evidence says why.
     {
       "id": "ci",
       "state": "E2E_VERIFIED",
-      "evidence": "ci.yml five jobs green: 36420864142 (51a66a5)"
+      "evidence": "ci.yml five jobs green: 36444462653 (16d352b)"
     },
     {
       "id": "audit.independent",
       "state": "E2E_VERIFIED",
-      "evidence": "docs/DECISION_LOG.md DL-18; findings fixed in 81cedf8"
+      "evidence": "DL-18 (findings fixed in 81cedf8); DL-24 (audit of DL-19..23, findings fixed in 816674a)"
+    },
+    {
+      "id": "real.oversized_upload_413",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "DL-26: 40/40 raw-socket 8 MiB uploads answered 413 through the compose port; oversized-body.test.ts"
     }
   ]
 }
