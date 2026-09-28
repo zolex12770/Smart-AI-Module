@@ -174,9 +174,10 @@ describe("a finished chat turn can form a memory", () => {
     let calls = 0;
     ctx.quota = {
       ...ctx.quota,
-      // The chat turn's own check passes; the extraction's is refused.
+      // The chat turn's own checks pass — a lower bound before anything is written, then the
+      // precise one (DL-10) — and the extraction's, the third, is refused.
       checkLlmTokens: async (projectId: string, tokens: number) =>
-        ++calls > 1 ? { allowed: false, reason: "Daily token limit reached." } : realCheck(projectId, tokens),
+        ++calls > 2 ? { allowed: false, reason: "Daily token limit reached." } : realCheck(projectId, tokens),
     } as typeof ctx.quota;
 
     expect((await sendChat("I always use TypeScript.")).statusCode).toBe(200);

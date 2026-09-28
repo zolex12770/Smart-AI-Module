@@ -166,6 +166,21 @@ describe("files (RAG ingestion) + memory routes", () => {
       expect(asset.headers["content-disposition"]).toContain("attachment");
       expect(asset.headers["content-disposition"]).not.toContain("handbook");
     });
+
+    it("a removed document is no longer served, and its bytes are gone from the store", async () => {
+      // Audit finding 8: DELETE only soft-deleted the row, and the serve-gate looked at `status`
+      // alone — a "Removed" document stayed downloadable, forever, by its asset id.
+      const { document } = (await upload(app, auth.headers, "private.txt", "remove me", "text/plain")).json();
+      const assetId = document.assetId as string;
+      const stored = (await ctx.assets.get(auth.projectId, assetId))!;
+      expect((await app.inject({ headers: auth.headers, method: "GET", url: `/api/v1/assets/${assetId}` })).statusCode).toBe(200);
+
+      const removed = await app.inject({ headers: auth.headers, method: "DELETE", url: `/api/v1/files/${document.id}` });
+      expect(removed.statusCode).toBe(200);
+
+      expect((await app.inject({ headers: auth.headers, method: "GET", url: `/api/v1/assets/${assetId}` })).statusCode).toBe(404);
+      await expect(ctx.assetStore.read(stored)).rejects.toThrow();
+    });
   });
 
   describe("malware scanning of uploads (ADR-042, docs/13 §12) — status-based quarantine + serve-gate", () => {

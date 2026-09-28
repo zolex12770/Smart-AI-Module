@@ -145,3 +145,127 @@ compares the schema's keys against `.env.example` and `backend/.env.example`.
 
 **Tests:** `backend/src/local-runtime.test.ts`: a fake ffmpeg that takes 6 s is found, and the
 warm-up tests.
+
+## DL-7: Members join by invitation, and the last admin cannot be demoted
+
+**Found by:** audit findings 9 and 10.
+
+**Problem:**
+
+- `POST /projects/:id/members` attached **any** account on the deployment, immediately, by
+  email.
+- For an unknown address it answered `404 No account exists for <email>`. Every self-signed-up
+  user administers their own project, so anyone could probe which addresses are registered
+  (defeating the login's enumeration resistance, ADR-125) and put a stranger on their project.
+- The same route changed a member's role with no last-admin check. The remove route has one, so
+  an admin could lock a project out of administration by re-adding themselves as `viewer`.
+
+**Decision:**
+
+- **Invitations.** An address that is not a current member gets an invitation
+  (`project_invitations`, migration 0005, 14-day expiry). The answer is `202 {status:"invited"}`
+  whether or not an account has that address.
+- The invitee lists their invitations (`GET /api/v1/invitations`) and accepts or declines them
+  (`POST /api/v1/invitations/:id/accept|decline`). Both routes are session-only: an API key is
+  bound to one project and must not join others. Anything else answers 404: another account's
+  invitation, an expired one, one already answered, or a deleted project.
+- Admins see and revoke open invitations (`GET` / `DELETE /projects/:id/invitations`).
+- For a current member's address, the route changes the role (200). The admin already sees the
+  member list, so nothing is disclosed.
+- A role change that would leave no admin is refused (400), the same as removal.
+- Settings shows the invitation flow: "Invite", the pending list with Revoke, and an
+  "Invitations" card with Accept/Decline. Accepting switches to the new project.
+
+**Remaining limitation:** there is no email verification (listed as not implemented). An
+invitation goes to whoever signs in with that address, which is the same trust the old route
+placed in it.
+
+**Tests:**
+
+- `backend/src/routes/v1/project-members.test.ts`: 6 new tests. The last-admin test fails with
+  the guard removed (checked by rebuilding the package under the mutation).
+- `frontend/app/settings/invitations.test.tsx`.
+- The viewer fixtures in the contract, platform-authority and audio tests now join through
+  invite + accept (`joinProjectAs`), the product's only path.
+
+## DL-8: A removed document is gone, not hidden
+
+**Found by:** audit finding 8.
+
+**Problem:** `DELETE /files/:id` soft-deleted the row and dropped its chunks. The serve-gate
+looked only at `status`, so the file stayed downloadable by its asset id, and its bytes were
+never deleted.
+
+**Decision:**
+
+- The gate refuses a soft-deleted document (404).
+- DELETE removes the stored bytes before the soft delete. If that fails, the document is still
+  listed and a retried DELETE finishes the job.
+- The asset *row* stays, because the soft-deleted document references it.
+
+**Tests:** `rag.test.ts` "a removed document is no longer served, and its bytes are gone from
+the store". It fails against the previous route and gate.
+
+**A mistake worth recording:** the first version logged a failed byte deletion and returned
+success. It used `assetStore.delete`, which also deletes the asset row, and the documents FK
+refused that. The test passed only because the `.catch` swallowed the error. It now uses
+`deleteByPath` and lets failures surface.
+
+## DL-9: Deleting a project stops its work
+
+**Found by:** audit finding 11.
+
+**Problem:** `DELETE /projects/:id` only stamped `deletedAt`. After that:
+
+- queued image, speech and video jobs still ran against paid providers;
+- a running agent task kept calling the model;
+- the agent's workspace stayed on disk, where nothing could reach it.
+
+Account deletion already cleaned up all three.
+
+**Decision:** after the soft delete, the route cancels the project's queued jobs, cancels its
+non-terminal agent tasks (a new scoped `listNonTerminalForProject`), and removes its workspace.
+The response reports what was stopped, plus a `notStopped` list. A failure is logged at error
+and named in that list. It is not folded into a plain success.
+
+**Tests:** `backend/src/routes/v1/project-delete.test.ts`. It failed against the previous route:
+the response reported nothing, the job stayed queued and the task stayed open.
+
+## DL-10: Every turn a provider started is charged, and quota refuses before any write
+
+**Found by:** audit findings 12, 13 and 25.
+
+**Problems:**
+
+- **Finding 12.** Chat usage was written only on the provider's `done` event. A client that
+  disconnected just before the end, or a provider that failed partway, consumed the prompt and
+  every streamed token, and none of it reached the ledger or the quota. ADR-151 had decided that
+  such a turn records *no* row ("inventing one would put a fabricated token count in the
+  ledger"). That rule made stopping just before the end a way to chat for free.
+- **Finding 13.** Memory extraction charged itself *last*, after a parse and a store that could
+  throw.
+- **Finding 25.** The conversation and the user's message were written *before* the quota check.
+  So an over-quota project collected an orphan conversation on every retry.
+
+**Decision:**
+
+- The router reports its **commit**: the provider that produced the first event, after which it
+  no longer fails over (`StreamChatOptions.onCommit`).
+- A turn that committed and did not finish is charged an **estimate**:
+  - the prompt as sent, plus the text and tool calls streamed;
+  - under `llm:message-partial:<requestId>`, so it can never double a `done` charge;
+  - `estimatedCostUsd` computed from those estimates.
+  - This supersedes ADR-151 on this point. The other halves of ADR-151 stand: the partial answer
+    is stored, and the span says ERROR.
+- The extraction's usage row is written as soon as its call completes, before parse and store.
+- A lower-bound quota check (the newest message plus the output cap) runs before anything is
+  written. The precise check after windowing and memory injection is unchanged.
+
+**Tests:**
+
+- `backend/src/routes/v1/chat-billing.test.ts`: 4 tests, all failing against the previous route.
+  One of them cancels over a real socket, because a client disconnect is what the route listens
+  for and `inject` cannot produce one.
+- `chat-midstream-failure.test.ts` "does not record the failed turn as a completed one" now
+  asserts the new rule: there is no completed-message charge, and there is exactly one partial
+  charge.

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
-import type { PgliteDb } from "@ai-platform/database";
+import { usageRecords, type PgliteDb } from "@ai-platform/database";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import type { ChatStreamEvent, LLMProvider, ProviderCapabilities } from "@ai-platform/shared";
 import { buildTestApp, closeTestApp } from "../../test-app.js";
@@ -84,9 +84,13 @@ describe("a provider that fails partway through a chat stream", () => {
 
   it("does not record the failed turn as a completed one", async () => {
     await ask();
-    // No usage row: nothing completed, so there is no terminal `done` event to bill from, and
-    // inventing one would put a fabricated token count in the ledger.
-    const rows = await ctx.usage.sumLlmTokensSince(auth.projectId, new Date(0));
-    expect(rows).toBe(0);
+    // Not a COMPLETED turn: there is no `done` event and so no `llm:message:<id>` charge, the
+    // key a finished answer is billed under. What the provider did consume — the prompt and the
+    // half it streamed — is still charged, as an estimate under its own key (DL-10, superseding
+    // ADR-151's "no row at all", which let a failed or abandoned turn cost nothing).
+    const rows = await db.select().from(usageRecords);
+    expect(rows.filter((r) => r.idempotencyKey?.startsWith("llm:message:"))).toHaveLength(0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].idempotencyKey).toMatch(/^llm:message-partial:/);
   });
 });

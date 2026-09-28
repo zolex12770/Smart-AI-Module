@@ -4,10 +4,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import type { PgliteDb } from "@ai-platform/database";
-import { generateCsrfToken } from "@ai-platform/security";
-import { buildTestApp, closeTestApp, TEST_PASSWORD } from "../../test-app.js";
+import { buildTestApp, closeTestApp, joinProjectAs } from "../../test-app.js";
 import type { AppContext } from "../../context.js";
-import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from "../../plugins/auth.js";
 import { PLATFORM_ROUTE_PERMISSIONS } from "./platform.js";
 
 /**
@@ -94,24 +92,9 @@ describe("the platform authority table", () => {
   });
 
   it("refuses a viewer on the routes the table marks project:write", async () => {
-    const email = `viewer-${Date.now()}@example.test`;
-    await ctx.auth.signup({ email, password: TEST_PASSWORD, displayName: "Viewer", organizationName: "Viewer Org" });
-    // Through the real route, with the project admin's own session — the same door an operator
-    // uses, so this cannot pass against a service method the product cannot reach (ADR-154).
-    const added = await app.inject({
-      method: "POST",
-      url: `/api/v1/projects/${auth.projectId}/members`,
-      headers: auth.headers,
-      payload: { email, role: "viewer" },
-    });
-    expect(added.statusCode).toBe(201);
-    const session = await ctx.auth.login(email, TEST_PASSWORD);
-    const csrf = generateCsrfToken();
-    const viewerHeaders = {
-      cookie: `${SESSION_COOKIE}=${session.token}; ${CSRF_COOKIE}=${csrf}`,
-      [CSRF_HEADER]: csrf,
-      "x-project-id": auth.projectId,
-    };
+    // A real viewer: invited through the real members route with the admin's own session, and
+    // accepting through their own — the only door into a project (ADR-154, DL-7).
+    const viewerHeaders = (await joinProjectAs(app, ctx, auth.headers, auth.projectId, "viewer")).headers;
 
     const writeRoutes = Object.entries(PLATFORM_ROUTE_PERMISSIONS)
       .filter(([, permission]) => permission === "project:write")

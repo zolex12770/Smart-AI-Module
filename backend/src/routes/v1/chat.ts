@@ -105,6 +105,18 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       }
       const chatRequest = { ...parsed.data, maxOutputTokens: parsed.data.maxOutputTokens ?? ctx.chatMaxOutputTokens };
 
+      // Audit finding 25: the conversation and the user's message were written BEFORE the quota
+      // check, so an over-quota project collected an orphan conversation on every retry. This is
+      // a lower bound on what the turn costs — the newest message and the output it may produce;
+      // the history can only add — so it refuses before anything is written without refusing a
+      // turn the precise check below would allow.
+      const newestMessage = chatRequest.messages[chatRequest.messages.length - 1];
+      const minimumTokens = estimatePromptTokens(newestMessage.content) + chatRequest.maxOutputTokens;
+      const earlyQuota = await ctx.quota.checkLlmTokens(projectId, minimumTokens);
+      if (!earlyQuota.allowed) {
+        throw new QuotaExceededError(earlyQuota.reason ?? "Token quota exceeded.");
+      }
+
       // An existing conversation is fetched *within* the project; a new one is created in it
       // and attributed to the authenticated principal, never to a hardcoded owner (ADR-049).
       const conversation = chatRequest.conversationId
@@ -289,8 +301,8 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       // Input AND the output this turn may produce: the provider is held to `maxOutputTokens`,
       // so that is the most it can add, and a check on the prompt alone let one request spend
       // far past the remaining allowance.
-      const estimatedTokens =
-        estimatePromptTokens(promptMessages.map((m) => m.content).join(" ")) + chatRequest.maxOutputTokens;
+      const promptTokens = estimatePromptTokens(promptMessages.map((m) => m.content).join(" "));
+      const estimatedTokens = promptTokens + chatRequest.maxOutputTokens;
       // Quota is per project (ADR-049): one project's spend must never exhaust another's
       // allowance, so the scope goes into the check itself rather than being a global counter.
       const quotaCheck = await ctx.quota.checkLlmTokens(projectId, estimatedTokens);
@@ -408,11 +420,57 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
             /** Set once the turn finished, so a disconnect *after* a completed answer is not
              * also logged as a cancellation of it. */
             let completed = false;
+            /** The provider that started answering, once one has (the router's commit). */
+            let committed: { provider: string; model: string } | null = null;
+            let partialRecorded = false;
+            /**
+             * A turn that never reached `done` still cost something — audit finding 12, DL-10.
+             *
+             * Usage was written on `done` only. A client that disconnected a moment before the
+             * end, or a provider that failed halfway, had consumed the whole prompt and every
+             * token already streamed, and none of it reached the ledger or the quota — so
+             * stopping just before the end was a way to chat for free. The provider reports no
+             * usage for a stream it did not finish, so this charges ESTIMATES (the prompt as sent
+             * and the text streamed), under a key of its own so it can never double a `done`
+             * charge. Only after a commit: a call that produced nothing was not paid for.
+             */
+            const recordPartialUsage = async (reason: "cancelled" | "provider_error") => {
+              if (!committed || completed || partialRecorded) return;
+              partialRecorded = true;
+              const usage = {
+                inputTokens: promptTokens,
+                outputTokens: estimatePromptTokens(streamedText + (streamedToolCalls.length ? JSON.stringify(streamedToolCalls) : "")),
+              };
+              try {
+                await ctx.usage.create({
+                  id: uuid(),
+                  projectId,
+                  userId: authCtx.user.id,
+                  kind: "llm",
+                  provider: committed.provider,
+                  model: committed.model,
+                  inputTokens: usage.inputTokens,
+                  outputTokens: usage.outputTokens,
+                  units: null,
+                  estimatedCostUsd: estimateLlmCostUsd(committed.provider, committed.model, usage),
+                  requestId: request.id,
+                  idempotencyKey: `llm:message-partial:${request.id}`,
+                });
+              } catch (err) {
+                // Nobody is waiting on this answer any more (cancelled) or they are being told the
+                // turn failed (provider_error); a ledger write that fails is an operator's problem,
+                // logged at error so it is seen, not a reason to change what the client is told.
+                request.log.error({ err, request_id: request.id, reason }, "could not record a partial turn's usage");
+              }
+            };
             try {
               for await (const event of ctx.router.streamChat(
                 { ...chatRequest, messages: promptMessages, conversationId: conversation.id },
                 {
                   signal: abort.signal,
+                  onCommit: (commit) => {
+                    committed = commit;
+                  },
                   onFallback: (fallback) => {
                     fellBackFrom.push(fallback.provider);
                     request.log.warn(
@@ -435,10 +493,11 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 // call instead of quietly draining it into a discarded write.
                 if (abort.signal.aborted) break;
 
+                // Counted before anything can go wrong with it, so a failure below still charges it.
+                if (event.type === "token") streamedText += event.delta;
                 if (event.type === "tool_call") {
                   streamedToolCalls.push(event.call);
                 }
-                if (event.type === "token") streamedText += event.delta;
 
                 /**
                  * A mid-stream provider failure is a FAILURE — docs/26_DECISIONS.md ADR-151.
@@ -471,6 +530,7 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                     },
                     "provider failed partway through the stream"
                   );
+                  await recordPartialUsage("provider_error");
                   if (streamedText.length > 0) {
                     await ctx.messages.add({
                       conversationId: conversation.id,
@@ -536,6 +596,8 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                   // turn conflicts on the unique index instead of double-charging.
                   idempotencyKey: `llm:message:${assistantMessage.id}`,
                 });
+                // Charged in full: nothing after this may add a partial charge for the same turn.
+                partialRecorded = true;
 
                 /**
                  * Learning something from the exchange — docs/26_DECISIONS.md ADR-141.
@@ -602,14 +664,20 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
               }
               // Reached by the `break` above; the router can also throw its own cancellation
               // error, which the catch below routes to exactly the same place.
-              if (abort.signal.aborted && !completed) logCancelled();
+              if (abort.signal.aborted && !completed) {
+                logCancelled();
+                await recordPartialUsage("cancelled");
+              }
             } catch (err) {
               // A stream the client itself abandoned is not a provider failure. Recording it as
               // one would make every "user pressed stop" show up as an ERROR span and page
               // somebody; it is logged as the cancellation it is, and no error event is sent
               // because there is nobody left on the socket to read it.
               if (abort.signal.aborted) {
-                if (!completed) logCancelled();
+                if (!completed) {
+                  logCancelled();
+                  await recordPartialUsage("cancelled");
+                }
                 return;
               }
               // Handled here (an SSE error event is sent to the client, not re-thrown) — but the
@@ -621,6 +689,7 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 { request_id: request.id, project_id: projectId, err, latency_ms: Date.now() - startedAt, status: "error" },
                 "chat stream failed"
               );
+              await recordPartialUsage("provider_error");
               send({ type: "error", message: "The model provider failed to respond. Please try again." });
             }
           }
@@ -701,6 +770,25 @@ async function extractMemories(
       }
     }
 
+    // Charged as soon as the call is over, BEFORE the reply is parsed or stored — audit finding
+    // 13. It ran last, so a reply that failed to parse, or a store that threw, skipped it and
+    // the extraction's real tokens were never counted against anything.
+    await ctx.usage.create({
+      id: uuid(),
+      projectId: input.projectId,
+      userId: input.userId,
+      kind: "llm",
+      provider,
+      model,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      units: null,
+      estimatedCostUsd: estimateLlmCostUsd(provider, model, usage),
+      requestId: input.requestId,
+      // One extraction per request: a retry conflicts rather than charging twice.
+      idempotencyKey: `llm:memory-extraction:${input.requestId}`,
+    });
+
     // Only what the USER wrote is a source (the prompt excludes the assistant's words), so an
     // identifier must appear there to be remembered.
     const { kept: facts, dropped } = dropUngroundedFacts(parseExtractedFacts(text), input.userMessage.content);
@@ -718,22 +806,6 @@ async function extractMemories(
         facts,
       });
     }
-
-    await ctx.usage.create({
-      id: uuid(),
-      projectId: input.projectId,
-      userId: input.userId,
-      kind: "llm",
-      provider,
-      model,
-      inputTokens: usage.inputTokens,
-      outputTokens: usage.outputTokens,
-      units: null,
-      estimatedCostUsd: estimateLlmCostUsd(provider, model, usage),
-      requestId: input.requestId,
-      // One extraction per request: a retry conflicts rather than charging twice.
-      idempotencyKey: `llm:memory-extraction:${input.requestId}`,
-    });
   } catch (error) {
     input.logger.warn(
       { err: error instanceof Error ? error.message : String(error) },

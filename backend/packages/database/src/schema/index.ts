@@ -126,6 +126,37 @@ export const projectMembers = pgTable(
 );
 
 /**
+ * A pending offer of project membership — audit finding 9, docs/DECISION_LOG.md.
+ *
+ * Adding a member used to attach any account on the deployment, immediately, by email, and
+ * answered "no account exists" otherwise: an account-enumeration oracle, and a way to put a
+ * stranger's name on your project. Now an admin invites an EMAIL (whether or not an account has
+ * it, with one answer either way) and nothing changes until that account accepts.
+ */
+export const projectInvitations = pgTable(
+  "project_invitations",
+  {
+    id: text("id").primaryKey(),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    /** Lower-cased, like `users.email`. Not a foreign key: no account need exist yet. */
+    email: text("email").notNull(),
+    role: text("role", { enum: ["admin", "editor", "viewer"] }).notNull(),
+    invitedByUserId: text("invited_by_user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    /** Set once, when the invitation is accepted, declined or revoked; pending while null. */
+    respondedAt: timestamp("responded_at", { withTimezone: true }),
+    outcome: text("outcome", { enum: ["accepted", "declined", "revoked"] }),
+  },
+  (t) => [
+    index("project_invitations_email_idx").on(t.email),
+    index("project_invitations_project_idx").on(t.projectId),
+  ]
+);
+
+/**
  * Sessions store only a SHA-256 of the token. A database dump therefore cannot be replayed
  * as a set of live sessions — the same reasoning that applies to password hashes.
  */

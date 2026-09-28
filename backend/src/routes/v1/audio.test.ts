@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import type { PgliteDb } from "@ai-platform/database";
 import { QuotaManager } from "@ai-platform/quota";
 import { PgUsageRecordRepository } from "@ai-platform/database";
-import { buildTestApp, closeTestApp, TEST_PASSWORD } from "../../test-app.js";
+import { buildTestApp, closeTestApp, joinProjectAs, TEST_PASSWORD } from "../../test-app.js";
 import { generateCsrfToken } from "@ai-platform/security";
 import type { AppContext } from "../../context.js";
 import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from "../../plugins/auth.js";
@@ -79,22 +79,9 @@ describe("audio generation routes", () => {
   });
 
   it("refuses a viewer, who may read the project but not spend in it", async () => {
-    const email = `viewer-audio-${Date.now()}@example.test`;
-    await ctx.auth.signup({ email, password: TEST_PASSWORD, displayName: "Viewer", organizationName: "Viewer Org" });
-    const invited = await app.inject({
-      method: "POST",
-      url: `/api/v1/projects/${auth.projectId}/members`,
-      headers: auth.headers,
-      payload: { email, role: "viewer" },
-    });
-    expect(invited.statusCode).toBe(201);
-    const session = await ctx.auth.login(email, TEST_PASSWORD);
-    const csrf = generateCsrfToken();
-    const viewerHeaders = {
-      cookie: `${SESSION_COOKIE}=${session.token}; ${CSRF_COOKIE}=${csrf}`,
-      [CSRF_HEADER]: csrf,
-      "x-project-id": auth.projectId,
-    };
+    // A real viewer: invited through the real members route with the admin's own session, and
+    // accepting through their own — the only door into a project (ADR-154, DL-7).
+    const viewerHeaders = (await joinProjectAs(app, ctx, auth.headers, auth.projectId, "viewer")).headers;
 
     const res = await post({ text: "A viewer should not be able to spend." }, viewerHeaders);
     expect(res.statusCode).toBe(403);

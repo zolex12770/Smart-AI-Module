@@ -361,3 +361,42 @@ export async function runVideoPlan(ctx: AppContext, projectId: string, videoProj
     { projectId, videoProjectId }
   );
 }
+
+/**
+ * A second, real account made a member of `projectId` the only way the product allows: the
+ * admin invites through `POST .../members`, the invitee accepts through its own session
+ * (docs/DECISION_LOG.md DL-7). Returns the invitee's session headers, scoped to that project.
+ */
+export async function joinProjectAs(
+  app: FastifyInstance,
+  ctx: AppContext,
+  adminHeaders: Record<string, string>,
+  projectId: string,
+  role: "viewer" | "editor" | "admin",
+  label = role
+): Promise<{ email: string; userId: string; headers: Record<string, string> }> {
+  const email = `${label}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}@example.test`;
+  const created = await ctx.auth.signup({ email, password: TEST_PASSWORD, displayName: label, organizationName: `${label} Org` });
+  const invited = await app.inject({
+    method: "POST",
+    url: `/api/v1/projects/${projectId}/members`,
+    headers: adminHeaders,
+    payload: { email, role },
+  });
+  if (invited.statusCode !== 202) throw new Error(`invite answered ${invited.statusCode}: ${invited.body}`);
+  const session = await ctx.auth.login(email, TEST_PASSWORD);
+  const csrf = generateCsrfToken();
+  const headers = {
+    cookie: `${SESSION_COOKIE}=${session.token}; ${CSRF_COOKIE}=${csrf}`,
+    [CSRF_HEADER]: csrf,
+    "x-project-id": projectId,
+  };
+  const listed = await app.inject({ method: "GET", url: "/api/v1/invitations", headers });
+  const invitation = (listed.json() as { invitations: Array<{ id: string; projectId: string }> }).invitations.find(
+    (i) => i.projectId === projectId
+  );
+  if (!invitation) throw new Error(`no invitation to ${projectId} listed for ${email}: ${listed.body}`);
+  const accepted = await app.inject({ method: "POST", url: `/api/v1/invitations/${invitation.id}/accept`, headers });
+  if (accepted.statusCode !== 200) throw new Error(`accept answered ${accepted.statusCode}: ${accepted.body}`);
+  return { email, userId: created.user.id, headers };
+}

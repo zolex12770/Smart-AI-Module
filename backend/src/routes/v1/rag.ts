@@ -260,9 +260,18 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
     const authCtx = await requireProject(request, ctx.auth, "files:write");
     const projectId = scopeOf(authCtx);
     await ctx.documentChunks.deleteByDocument(request.params.id, projectId);
+    const document = await ctx.documents.get(projectId, request.params.id);
+    // Unknown id, wrong project, or already deleted — one answer for all three, so this cannot
+    // become an existence oracle over another project's document ids.
+    if (!document) throw new NotFoundError(`Document "${request.params.id}" not found.`);
+    // "Removed" means the file is gone, not hidden (audit finding 8). Only the BYTES go: the
+    // asset row stays, because the soft-deleted document still references it and the serve-gate
+    // reads that document to answer 404. Bytes before the row, like chunks before the parent
+    // above: if this throws, the document is still listed and a retried DELETE finishes the job;
+    // the other order would leave the bytes behind a document that answers 404 forever.
+    const asset = document.assetId ? await ctx.assets.get(projectId, document.assetId) : undefined;
+    if (asset) await ctx.assetStore.deleteByPath(asset.storagePath);
     const deleted = await ctx.documents.softDelete(projectId, request.params.id);
-    // False means wrong project, unknown id, or already deleted — one answer for all three,
-    // so this cannot become an existence oracle over another project's document ids.
     if (!deleted) throw new NotFoundError(`Document "${request.params.id}" not found.`);
     return { ok: true };
   });

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ProjectSummary, SessionUser } from "@ai-platform/shared";
+import type { ProjectSummary, SessionUser } from "./auth-client";
 
 /**
  * Found by the real-browser acceptance (scripts/acceptance/browser.mjs, LOGOUT-LOGIN): after

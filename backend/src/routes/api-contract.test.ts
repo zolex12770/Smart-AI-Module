@@ -5,10 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance, LightMyRequestResponse } from "fastify";
 import type { PgliteDb } from "@ai-platform/database";
 import { PROJECT_ROLE_PERMISSIONS, type Permission } from "@ai-platform/shared";
-import { generateCsrfToken } from "@ai-platform/security";
-import { TEST_PASSWORD, buildTestApp, closeTestApp } from "../test-app.js";
+import { buildTestApp, closeTestApp, joinProjectAs } from "../test-app.js";
 import type { AppContext } from "../context.js";
-import { CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE } from "../plugins/auth.js";
 
 /**
  * docs/API.md, checked against the server — docs/26_DECISIONS.md ADR-112.
@@ -108,23 +106,9 @@ describe("docs/API.md against the running server", () => {
   beforeAll(async () => {
     ({ app, db, ctx, auth } = await buildTestApp());
 
-    // A real viewer, invited through the real members route.
-    const email = `viewer-${Date.now()}@example.test`;
-    await ctx.auth.signup({ email, password: TEST_PASSWORD, displayName: "Viewer", organizationName: "Viewer Org" });
-    const invited = await app.inject({
-      method: "POST",
-      url: `/api/v1/projects/${auth.projectId}/members`,
-      headers: auth.headers,
-      payload: { email, role: "viewer" },
-    });
-    expect(invited.statusCode).toBe(201);
-    const session = await ctx.auth.login(email, TEST_PASSWORD);
-    const csrf = generateCsrfToken();
-    viewerHeaders = {
-      cookie: `${SESSION_COOKIE}=${session.token}; ${CSRF_COOKIE}=${csrf}`,
-      [CSRF_HEADER]: csrf,
-      "x-project-id": auth.projectId,
-    };
+    // A real viewer: invited through the real members route with the admin's own session, and
+    // accepting through their own — the only door into a project (ADR-154, DL-7).
+    viewerHeaders = (await joinProjectAs(app, ctx, auth.headers, auth.projectId, "viewer")).headers;
   });
 
   afterAll(async () => {

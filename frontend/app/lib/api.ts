@@ -461,11 +461,48 @@ export interface ProjectMember {
 export const listProjectMembers = (projectId: string) =>
   request<{ members: ProjectMember[] }>(`/api/v1/projects/${projectId}/members`);
 
+/**
+ * Add someone — docs/DECISION_LOG.md DL-7. A current member's role changes at once ("updated");
+ * anyone else is sent an invitation ("invited"), whether or not an account has that address yet,
+ * and joins only when they accept it.
+ */
 export const addProjectMember = (projectId: string, email: string, role: ProjectMember["role"]) =>
-  request<{ userId: string }>(`/api/v1/projects/${projectId}/members`, {
+  request<
+    | { status: "updated"; userId: string; role: ProjectMember["role"] }
+    | { status: "invited"; email: string; role: ProjectMember["role"]; expiresAt: string }
+  >(`/api/v1/projects/${projectId}/members`, {
     method: "POST",
     body: JSON.stringify({ email, role }),
   });
+
+export interface ProjectInvitation {
+  id: string;
+  email: string;
+  role: ProjectMember["role"];
+  createdAt: string;
+  expiresAt: string;
+}
+
+export const listProjectInvitations = (projectId: string) =>
+  request<{ invitations: ProjectInvitation[] }>(`/api/v1/projects/${projectId}/invitations`);
+
+export const revokeProjectInvitation = (projectId: string, invitationId: string) =>
+  request<{ ok: true }>(`/api/v1/projects/${projectId}/invitations/${invitationId}`, { method: "DELETE" });
+
+/** An invitation addressed to the signed-in account. */
+export interface MyInvitation {
+  id: string;
+  projectId: string;
+  projectName: string;
+  role: ProjectMember["role"];
+  invitedBy: string | null;
+  expiresAt: string;
+}
+
+export const listMyInvitations = () => request<{ invitations: MyInvitation[] }>("/api/v1/invitations");
+
+export const answerInvitation = (invitationId: string, answer: "accept" | "decline") =>
+  request<{ ok: true; projectId?: string }>(`/api/v1/invitations/${invitationId}/${answer}`, { method: "POST" });
 
 export const removeProjectMember = (projectId: string, userId: string) =>
   request<{ ok: true }>(`/api/v1/projects/${projectId}/members/${userId}`, { method: "DELETE" });

@@ -5,7 +5,7 @@ Regenerate with `npm run docs:api`; CI fails if this file differs from what the 
 produces, and `backend/src/routes/api-contract.test.ts` sends a real request for every row
 below to check that the documented access and rate limit are the ones the server applies.
 
-**70 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
+**74 routes.** Base URL is the backend origin (`NEXT_PUBLIC_API_URL` for the frontend).
 
 ## Conventions
 
@@ -153,6 +153,13 @@ and nothing is ever substituted with a fake result (ADR-050).
 | `GET` | `/api/v1/images/:id` | session or API key · `project:read` | global (300 / 1 minute) |
 | `POST` | `/api/v1/images/:id/cancel` | session or API key · `media:generate` | global (300 / 1 minute) |
 
+## `/api/v1/invitations`
+
+| Method | Path | Auth / permission | Rate limit |
+|---|---|---|---|
+| `GET` | `/api/v1/invitations` | session only · authentication only | global (300 / 1 minute) |
+| `POST` | `/api/v1/invitations/:invitationId/:answer` | session only · authentication only | global (300 / 1 minute) |
+
 ## `/api/v1/jobs`
 
 | Method | Path | Auth / permission | Rate limit |
@@ -190,6 +197,8 @@ and nothing is ever substituted with a fake result (ADR-050).
 | `GET` | `/api/v1/projects` | session or API key · authentication only | global (300 / 1 minute) |
 | `POST` | `/api/v1/projects` | session or API key · authentication only | 20 / 10 minutes per user |
 | `DELETE` | `/api/v1/projects/:projectId` | session or API key · `project:admin` | global (300 / 1 minute) |
+| `GET` | `/api/v1/projects/:projectId/invitations` | session or API key · `project:admin` | global (300 / 1 minute) |
+| `DELETE` | `/api/v1/projects/:projectId/invitations/:invitationId` | session or API key · `project:admin` | global (300 / 1 minute) |
 | `GET` | `/api/v1/projects/:projectId/members` | session or API key · `project:read` | global (300 / 1 minute) |
 | `POST` | `/api/v1/projects/:projectId/members` | session or API key · `project:admin` | global (300 / 1 minute) |
 | `DELETE` | `/api/v1/projects/:projectId/members/:userId` | session or API key · `project:admin` | global (300 / 1 minute) |

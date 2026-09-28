@@ -4,7 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   addProjectMember,
+  answerInvitation,
   changePassword,
+  listMyInvitations,
+  listProjectInvitations,
+  revokeProjectInvitation,
+  type MyInvitation,
+  type ProjectInvitation,
   createApiKey,
   listAudit,
   listProjectMembers,
@@ -81,6 +87,8 @@ function SettingsView() {
 
       <SessionsCard />
 
+      <InvitationsCard refresh={refresh} selectProject={selectProject} />
+
       <ProjectsCard
         projects={projects}
         projectId={projectId}
@@ -130,6 +138,8 @@ function SettingsView() {
  */
 function MembersCard({ projectId }: { projectId: string }) {
   const [members, setMembers] = useState<ProjectMember[] | null>(null);
+  const [invitations, setInvitations] = useState<ProjectInvitation[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<ProjectMember["role"]>("editor");
   const [busy, setBusy] = useState(false);
@@ -142,6 +152,11 @@ function MembersCard({ projectId }: { projectId: string }) {
         setError(null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    // Open invitations are an admin's to see; a member's request is refused, and that is not an
+    // error worth showing them — they simply have none to manage.
+    listProjectInvitations(projectId)
+      .then((r) => setInvitations(r.invitations))
+      .catch(() => setInvitations([]));
   }, [projectId]);
 
   useEffect(refresh, [refresh]);
@@ -150,9 +165,28 @@ function MembersCard({ projectId }: { projectId: string }) {
     e.preventDefault();
     setBusy(true);
     setError(null);
+    setNotice(null);
     try {
-      await addProjectMember(projectId, email.trim(), role);
+      const result = await addProjectMember(projectId, email.trim(), role);
+      setNotice(
+        result.status === "invited"
+          ? `Invitation sent to ${result.email} as ${result.role}. They join when they accept it from their Settings.`
+          : `Role changed to ${result.role}.`
+      );
       setEmail("");
+      refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revoke(invitationId: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await revokeProjectInvitation(projectId, invitationId);
       refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -182,6 +216,7 @@ function MembersCard({ projectId }: { projectId: string }) {
         an admin can also manage members and API keys.
       </p>
       {error && <p className="error-text">{error}</p>}
+      {notice && <p className="page-subtitle" role="status">{notice}</p>}
       {members === null && !error && <p className="empty-state">Loading…</p>}
       {members?.length === 0 && <p className="empty-state">No members yet.</p>}
       {members?.map((m) => (
@@ -199,6 +234,19 @@ function MembersCard({ projectId }: { projectId: string }) {
           </Can>
         </div>
       ))}
+      {invitations.map((i) => (
+        <div key={i.id} className="card-row" style={{ marginTop: 8 }}>
+          <div>
+            <strong>{i.email}</strong>
+            <div className="page-subtitle">
+              invited as {i.role} — waiting for them to accept (until {new Date(i.expiresAt).toLocaleDateString()})
+            </div>
+          </div>
+          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void revoke(i.id)}>
+            Revoke
+          </button>
+        </div>
+      ))}
       <Can
         permission="project:admin"
         fallback={
@@ -210,7 +258,7 @@ function MembersCard({ projectId }: { projectId: string }) {
         <form onSubmit={add} style={{ marginTop: 12 }}>
           <div className="form-row">
             <label style={{ flex: 1, minWidth: 220 }}>
-              Add by email (the account must already exist)
+              Invite by email
               <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </label>
             <label style={{ minWidth: 140 }}>
@@ -223,10 +271,83 @@ function MembersCard({ projectId }: { projectId: string }) {
             </label>
           </div>
           <button type="submit" className="btn" disabled={busy || !email.trim()}>
-            {busy ? "Saving…" : "Add member"}
+            {busy ? "Saving…" : "Invite"}
           </button>
         </form>
       </Can>
+    </div>
+  );
+}
+
+/**
+ * Invitations addressed to this account — docs/DECISION_LOG.md DL-7. Nobody is put into a
+ * project without saying yes here; accepting makes the project appear in the switcher.
+ */
+function InvitationsCard({
+  refresh,
+  selectProject,
+}: {
+  refresh: () => Promise<void>;
+  selectProject: (projectId: string) => void;
+}) {
+  const [invitations, setInvitations] = useState<MyInvitation[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    listMyInvitations()
+      .then((r) => {
+        setInvitations(r.invitations);
+        setError(null);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+  }, []);
+
+  useEffect(load, [load]);
+
+  async function respond(invitation: MyInvitation, answer: "accept" | "decline") {
+    setBusy(true);
+    setError(null);
+    try {
+      await answerInvitation(invitation.id, answer);
+      if (answer === "accept") {
+        await refresh();
+        selectProject(invitation.projectId);
+      }
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Nothing to answer is the normal state; the card appears only when there is something to do.
+  if (!error && (invitations === null || invitations.length === 0)) return null;
+
+  return (
+    <div className="card">
+      <strong>Invitations</strong>
+      {error && <p className="error-text">{error}</p>}
+      {invitations?.map((i) => (
+        <div key={i.id} className="card-row" style={{ marginTop: 8 }}>
+          <div>
+            <strong>{i.projectName}</strong>
+            <div className="page-subtitle">
+              as {i.role}
+              {i.invitedBy ? `, from ${i.invitedBy}` : ""}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button type="button" className="btn" disabled={busy} onClick={() => void respond(i, "accept")}>
+              Accept
+            </button>
+            <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void respond(i, "decline")}>
+              Decline
+            </button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

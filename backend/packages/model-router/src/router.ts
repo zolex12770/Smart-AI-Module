@@ -75,6 +75,12 @@ export interface StreamChatOptions {
   onRetry?: (retry: ProviderRetry) => void;
   /** Called once per completed provider call, whatever its outcome (ADR-132). */
   onCall?: (call: ProviderCallOutcome) => void;
+  /**
+   * Called when a provider produces its first event — the point after which the router no longer
+   * fails over, and the provider is the one being paid. A caller that must charge for a stream
+   * that never reaches `done` (cancelled, or cut off) needs to know who that was (DL-10).
+   */
+  onCommit?: (commit: { provider: string; model: string }) => void;
   /** Hard requirements/preferences for provider selection. */
   criteria?: SelectionCriteria;
   signal?: AbortSignal;
@@ -158,6 +164,7 @@ export class ModelRouter {
     const report = (f: ProviderFallback) => (callOptions.onFallback ?? this.options.onFallback)?.(f);
     const reportRetry = (r: ProviderRetry) => (callOptions.onRetry ?? this.options.onRetry)?.(r);
     const reportCall = (c: ProviderCallOutcome) => (callOptions.onCall ?? this.options.onCall)?.(c);
+    const reportCommit = (c: { provider: string; model: string }) => callOptions.onCommit?.(c);
     const signal = callOptions.signal ?? this.options.signal;
 
     // An explicitly named provider is never substituted: silently swapping it would violate
@@ -165,7 +172,7 @@ export class ModelRouter {
     if (request.provider) {
       const provider = this.registry.get(request.provider);
       if (!provider) throw new ProviderError(`Unknown provider "${request.provider}".`);
-      yield* this.streamWithRetry(provider, request, reportRetry, reportCall, signal);
+      yield* this.streamWithRetry(provider, request, reportRetry, reportCall, signal, reportCommit);
       return;
     }
 
@@ -239,7 +246,7 @@ export class ModelRouter {
         continue;
       }
 
-      const iterator = this.streamWithRetry(provider, request, reportRetry, reportCall, signal)[Symbol.asyncIterator]();
+      const iterator = this.streamWithRetry(provider, request, reportRetry, reportCall, signal, reportCommit)[Symbol.asyncIterator]();
       let first: IteratorResult<ChatStreamEvent>;
       try {
         // Abortable here too, not only in the inner loop (ADR-146): this is the pull the CALLER
@@ -326,7 +333,8 @@ export class ModelRouter {
     request: ChatRequest,
     reportRetry: (r: ProviderRetry) => void,
     reportCall: (c: ProviderCallOutcome) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    reportCommit: (c: { provider: string; model: string }) => void = () => undefined
   ): AsyncGenerator<ChatStreamEvent, void, unknown> {
     for (let attempt = 1; attempt <= this.retryPolicy.maxAttempts; attempt++) {
       // Per ATTEMPT, so a retried call is two measurements rather than one long one — which is
@@ -360,6 +368,7 @@ export class ModelRouter {
         continue;
       }
       if (first.done) return;
+      reportCommit({ provider: provider.name, model: provider.model });
       let settled = false;
       // Whether the provider actually FINISHED, which is not the same as whether it reported
       // token counts: a `done` event may carry no usage, and treating that as an abandoned

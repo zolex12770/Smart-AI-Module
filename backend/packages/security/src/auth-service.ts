@@ -5,6 +5,7 @@ import {
   auditLog,
   organizationMembers,
   organizations,
+  projectInvitations,
   projectMembers,
   projects,
   sessions,
@@ -30,6 +31,9 @@ import {
 import { v4 as uuid } from "uuid";
 import { createDecoyHash, hashPassword, needsRehash, verifyPassword, type ScryptParams } from "./password.js";
 import { generateApiKey, generateSessionToken, hashToken } from "./tokens.js";
+
+/** How long a project invitation stays open. */
+const INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 export interface AuthServiceOptions {
   /** Session lifetime. Sliding: `lastUsedAt` advances on use, `expiresAt` does not. */
@@ -964,10 +968,22 @@ export class AuthService {
     return true;
   }
 
+  /**
+   * Put an existing account into this project, or change the role of one already in it.
+   *
+   * INTERNAL. No route calls this for an account that is not yet a member: the route invites
+   * (`inviteProjectMember`) and membership begins when the invitee accepts. It stays as the
+   * primitive acceptance and a role change both use, and tests use it to build fixtures.
+   *
+   * A role change is refused when it would demote the project's last administrator — the same
+   * guard `removeProjectMember` applies (audit finding 10: an admin could POST their own email
+   * with `viewer` and lock the project out of administration for good).
+   */
   async addProjectMember(ctx: AuthContext, email: string, role: ProjectRole): Promise<{ userId: string }> {
     if (!ctx.projectId) throw new ValidationError("A project must be selected.");
     const target = await this.db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
     if (!target[0]) throw new NotFoundError(`No account exists for ${email}.`);
+    await this.assertNotDemotingLastAdmin(ctx.projectId, target[0].id, role);
     const now = this.now();
     await this.db
       .insert(projectMembers)
@@ -987,6 +1003,219 @@ export class AuthService {
       detail: { role },
     });
     return { userId: target[0].id };
+  }
+
+  private async assertNotDemotingLastAdmin(projectId: string, userId: string, role: ProjectRole): Promise<void> {
+    if (role === "admin") return;
+    const admins = await this.db
+      .select({ userId: projectMembers.userId })
+      .from(projectMembers)
+      .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.role, "admin")));
+    if (admins.length === 1 && admins[0].userId === userId) {
+      throw new ValidationError(
+        "This is the project's last administrator. Make another member an admin before changing this one's role, or the project cannot be administered again."
+      );
+    }
+  }
+
+  /**
+   * Add someone to this project — audit finding 9, docs/DECISION_LOG.md DL-7.
+   *
+   * An email that belongs to a CURRENT member changes that member's role (the admin can already
+   * see the member list, so nothing is disclosed). Any other email gets an invitation, and the
+   * answer is the same whether or not an account has that address: the caller learns nothing
+   * about who is registered, and nobody is added to a project without saying yes.
+   */
+  async inviteProjectMember(
+    ctx: AuthContext,
+    email: string,
+    role: ProjectRole
+  ): Promise<{ kind: "member-updated"; userId: string } | { kind: "invited"; invitationId: string; expiresAt: Date }> {
+    if (!ctx.projectId) throw new ValidationError("A project must be selected.");
+    const normalized = email.trim().toLowerCase();
+    const [existing] = await this.db
+      .select({ userId: projectMembers.userId })
+      .from(projectMembers)
+      .innerJoin(users, eq(users.id, projectMembers.userId))
+      .where(and(eq(projectMembers.projectId, ctx.projectId), eq(users.email, normalized)))
+      .limit(1);
+    if (existing) {
+      const { userId } = await this.addProjectMember(ctx, normalized, role);
+      return { kind: "member-updated", userId };
+    }
+
+    const now = this.now();
+    const expiresAt = new Date(now.getTime() + INVITATION_TTL_MS);
+    // One pending invitation per project and address: inviting again refreshes it (a new role, a
+    // new expiry) rather than stacking offers the invitee would have to decline one by one.
+    const [pending] = await this.db
+      .select({ id: projectInvitations.id })
+      .from(projectInvitations)
+      .where(
+        and(
+          eq(projectInvitations.projectId, ctx.projectId),
+          eq(projectInvitations.email, normalized),
+          isNull(projectInvitations.respondedAt)
+        )
+      )
+      .limit(1);
+    let invitationId: string;
+    if (pending) {
+      invitationId = pending.id;
+      await this.db
+        .update(projectInvitations)
+        .set({ role, invitedByUserId: ctx.user.id, createdAt: now, expiresAt })
+        .where(eq(projectInvitations.id, pending.id));
+    } else {
+      invitationId = uuid();
+      await this.db.insert(projectInvitations).values({
+        id: invitationId,
+        projectId: ctx.projectId,
+        email: normalized,
+        role,
+        invitedByUserId: ctx.user.id,
+        createdAt: now,
+        expiresAt,
+      });
+    }
+    await this.recordAudit({
+      userId: ctx.user.id,
+      projectId: ctx.projectId,
+      action: "project.member.invite",
+      outcome: "success",
+      method: ctx.method,
+      resourceType: "invitation",
+      resourceId: invitationId,
+      detail: { role },
+    });
+    return { kind: "invited", invitationId, expiresAt };
+  }
+
+  /** This project's invitations that are still open, for its admins to see and revoke. */
+  async listProjectInvitations(
+    ctx: AuthContext
+  ): Promise<Array<{ id: string; email: string; role: ProjectRole; createdAt: Date; expiresAt: Date }>> {
+    if (!ctx.projectId) throw new ValidationError("A project must be selected.");
+    const rows = await this.db
+      .select({
+        id: projectInvitations.id,
+        email: projectInvitations.email,
+        role: projectInvitations.role,
+        createdAt: projectInvitations.createdAt,
+        expiresAt: projectInvitations.expiresAt,
+      })
+      .from(projectInvitations)
+      .where(
+        and(
+          eq(projectInvitations.projectId, ctx.projectId),
+          isNull(projectInvitations.respondedAt),
+          gt(projectInvitations.expiresAt, this.now())
+        )
+      )
+      .orderBy(desc(projectInvitations.createdAt));
+    return rows.map((r) => ({ ...r, role: r.role as ProjectRole }));
+  }
+
+  async revokeProjectInvitation(ctx: AuthContext, invitationId: string): Promise<boolean> {
+    if (!ctx.projectId) throw new ValidationError("A project must be selected.");
+    const revoked = await this.db
+      .update(projectInvitations)
+      .set({ respondedAt: this.now(), outcome: "revoked" })
+      .where(
+        and(
+          eq(projectInvitations.id, invitationId),
+          eq(projectInvitations.projectId, ctx.projectId),
+          isNull(projectInvitations.respondedAt)
+        )
+      )
+      .returning({ id: projectInvitations.id });
+    return revoked.length > 0;
+  }
+
+  /** The signed-in account's open invitations: addressed to its email, unexpired, live project. */
+  async listMyInvitations(user: AuthenticatedUser): Promise<
+    Array<{ id: string; projectId: string; projectName: string; role: ProjectRole; invitedBy: string | null; expiresAt: Date }>
+  > {
+    const rows = await this.db
+      .select({
+        id: projectInvitations.id,
+        projectId: projectInvitations.projectId,
+        projectName: projects.name,
+        role: projectInvitations.role,
+        invitedBy: users.displayName,
+        expiresAt: projectInvitations.expiresAt,
+      })
+      .from(projectInvitations)
+      .innerJoin(projects, eq(projects.id, projectInvitations.projectId))
+      .leftJoin(users, eq(users.id, projectInvitations.invitedByUserId))
+      .where(
+        and(
+          eq(projectInvitations.email, user.email.toLowerCase()),
+          isNull(projectInvitations.respondedAt),
+          gt(projectInvitations.expiresAt, this.now()),
+          isNull(projects.deletedAt)
+        )
+      )
+      .orderBy(desc(projectInvitations.createdAt));
+    return rows.map((r) => ({ ...r, role: r.role as ProjectRole }));
+  }
+
+  /**
+   * Accept or decline an invitation addressed to this account. Anything else — another
+   * account's invitation, an expired or answered one, a deleted project — is the same `false`,
+   * so the route answers 404 and ids cannot be probed.
+   */
+  async respondToInvitation(
+    user: AuthenticatedUser,
+    invitationId: string,
+    accept: boolean
+  ): Promise<{ projectId: string; role: ProjectRole } | false> {
+    const [invitation] = await this.db
+      .select({
+        id: projectInvitations.id,
+        projectId: projectInvitations.projectId,
+        role: projectInvitations.role,
+      })
+      .from(projectInvitations)
+      .innerJoin(projects, eq(projects.id, projectInvitations.projectId))
+      .where(
+        and(
+          eq(projectInvitations.id, invitationId),
+          eq(projectInvitations.email, user.email.toLowerCase()),
+          isNull(projectInvitations.respondedAt),
+          gt(projectInvitations.expiresAt, this.now()),
+          isNull(projects.deletedAt)
+        )
+      )
+      .limit(1);
+    if (!invitation) return false;
+    const role = invitation.role as ProjectRole;
+    const now = this.now();
+    // Claim it first: of two concurrent answers, exactly one sees the row still open.
+    const claimed = await this.db
+      .update(projectInvitations)
+      .set({ respondedAt: now, outcome: accept ? "accepted" : "declined" })
+      .where(and(eq(projectInvitations.id, invitation.id), isNull(projectInvitations.respondedAt)))
+      .returning({ id: projectInvitations.id });
+    if (claimed.length === 0) return false;
+    if (accept) {
+      // An existing membership keeps its role: accepting an invitation never demotes anyone.
+      await this.db
+        .insert(projectMembers)
+        .values({ id: uuid(), projectId: invitation.projectId, userId: user.id, role, createdAt: now })
+        .onConflictDoNothing({ target: [projectMembers.projectId, projectMembers.userId] });
+    }
+    await this.recordAudit({
+      userId: user.id,
+      projectId: invitation.projectId,
+      action: accept ? "project.invitation.accept" : "project.invitation.decline",
+      outcome: "success",
+      method: "session",
+      resourceType: "invitation",
+      resourceId: invitation.id,
+      detail: { role },
+    });
+    return { projectId: invitation.projectId, role };
   }
 
   // --- api keys --------------------------------------------------------------------------

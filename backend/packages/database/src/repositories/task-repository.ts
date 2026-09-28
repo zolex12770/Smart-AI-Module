@@ -64,6 +64,8 @@ export interface TaskRepository {
   updateState(id: string, state: TaskState, patch?: UpdateTaskStatePatch): Promise<boolean>;
   /** Tasks not in a terminal state — scanned on boot for crash recovery (docs/11 §4.2). */
   listNonTerminal(): Promise<TaskRecord[]>;
+  /** One project's tasks that have not finished — what deleting the project must stop. */
+  listNonTerminalForProject(projectId: string): Promise<TaskRecord[]>;
   /** Most recent first — backs the `/tasks` history screen (docs/16_FRONTEND_ARCHITECTURE.md). */
   list(projectId: string, options?: { limit?: number; offset?: number }): Promise<TaskRecord[]>;
   /**
@@ -152,6 +154,14 @@ export class PgTaskRepository implements TaskRepository {
     // dropping most of them — the previous implementation did exactly that, which turned
     // boot-time crash recovery into a full table scan that grew without bound.
     const rows = await this.db.select().from(tasks).where(notInArray(tasks.state, TERMINAL_STATES));
+    return rows.map(toTask);
+  }
+
+  async listNonTerminalForProject(projectId: string): Promise<TaskRecord[]> {
+    const rows = await this.db
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.projectId, projectId), notInArray(tasks.state, TERMINAL_STATES)));
     return rows.map(toTask);
   }
 

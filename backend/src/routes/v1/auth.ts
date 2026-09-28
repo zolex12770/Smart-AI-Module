@@ -255,6 +255,48 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     return { members: await ctx.auth.listProjectMembers(authCtx) };
   });
 
+  /** Open invitations to this project — visible to its admins, who can revoke them. */
+  app.get<{ Params: { projectId: string } }>("/api/v1/projects/:projectId/invitations", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "project:admin");
+    return { invitations: await ctx.auth.listProjectInvitations(authCtx) };
+  });
+
+  app.delete<{ Params: { projectId: string; invitationId: string } }>(
+    "/api/v1/projects/:projectId/invitations/:invitationId",
+    async (request) => {
+      const authCtx = await requireProject(request, ctx.auth, "project:admin");
+      const revoked = await ctx.auth.revokeProjectInvitation(authCtx, request.params.invitationId);
+      if (!revoked) throw new NotFoundError(`No open invitation "${request.params.invitationId}" in this project.`);
+      return { ok: true };
+    }
+  );
+
+  /**
+   * The signed-in account's own invitations, and its answer to one — DL-7. Account-level, so a
+   * session only: an API key is bound to a project and must not be able to join others.
+   */
+  app.get("/api/v1/invitations", async (request) => {
+    const user = requireUser(request);
+    requireSessionCredential(request, "Listing your invitations");
+    return { invitations: await ctx.auth.listMyInvitations(user) };
+  });
+
+  app.post<{ Params: { invitationId: string; answer: string } }>(
+    "/api/v1/invitations/:invitationId/:answer",
+    async (request) => {
+      const user = requireUser(request);
+      requireSessionCredential(request, "Answering an invitation");
+      const { answer } = request.params;
+      if (answer !== "accept" && answer !== "decline") {
+        throw new NotFoundError(`Unknown action "${answer}".`);
+      }
+      const result = await ctx.auth.respondToInvitation(user, request.params.invitationId, answer === "accept");
+      // Another account's, expired, answered, or unknown: one answer for all of them.
+      if (!result) throw new NotFoundError(`No open invitation "${request.params.invitationId}".`);
+      return answer === "accept" ? { ok: true, projectId: result.projectId, role: result.role } : { ok: true };
+    }
+  );
+
   /**
    * Deleting a project — ADR-159. `projects.deleted_at` was documented in the schema and had no
    * writer anywhere, so the soft delete did not exist and the per-organization cap could never
@@ -264,15 +306,58 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     const authCtx = await requireProject(request, ctx.auth, "project:admin");
     const deleted = await ctx.auth.deleteProject(authCtx, { ipAddress: request.ip, requestId: request.id });
     if (!deleted) throw new NotFoundError(`Project "${request.params.projectId}" not found.`);
-    return { ok: true };
+    const projectId = authCtx.projectId!;
+
+    /*
+     * Stop the project's work — audit finding 11 (DL-9). Only `deletedAt` was written, so queued
+     * image, speech and video jobs still ran against paid providers, a running agent kept calling
+     * the model, and the workspace stayed on disk. Account deletion already did all three.
+     *
+     * The project is deleted either way; what could not be stopped is REPORTED in the answer
+     * (and logged), never folded into a plain success, so an operator can finish it by hand.
+     */
+    const notStopped: string[] = [];
+    let queuedJobs = 0;
+    try {
+      queuedJobs = await ctx.jobQueue.cancelPendingForProject(projectId);
+    } catch (err) {
+      notStopped.push("queued jobs");
+      request.log.error({ err, project_id: projectId }, "project deleted, but its queued jobs could not be cancelled");
+    }
+    let tasks = 0;
+    try {
+      for (const task of await ctx.tasks.listNonTerminalForProject(projectId)) {
+        await ctx.engine.cancel(task.id, `project deletion by ${authCtx.user.id}`);
+        tasks++;
+      }
+    } catch (err) {
+      notStopped.push("agent tasks");
+      request.log.error({ err, project_id: projectId }, "project deleted, but an agent task could not be cancelled");
+    }
+    let workspaceRemoved = false;
+    try {
+      await removeProjectWorkspace(ctx.sandboxRoot, projectId);
+      workspaceRemoved = true;
+    } catch (err) {
+      notStopped.push("agent workspace");
+      request.log.error({ err, project_id: projectId }, "project deleted, but its workspace could not be removed");
+    }
+    return { ok: true, stopped: { queuedJobs, tasks, workspaceRemoved }, notStopped };
   });
 
   app.post("/api/v1/projects/:projectId/members", async (request, reply) => {
     const authCtx = await requireProject(request, ctx.auth, "project:admin");
     const parsed = addProjectMemberRequestSchema.safeParse(request.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
-    const result = await ctx.auth.addProjectMember(authCtx, parsed.data.email, parsed.data.role);
-    reply.status(201).send(result);
+    // Audit finding 9: this used to attach any account on the deployment at once and answer
+    // 404 "no account exists" otherwise. A non-member's address now gets an invitation, and the
+    // answer is identical whether or not an account has it (DL-7).
+    const result = await ctx.auth.inviteProjectMember(authCtx, parsed.data.email, parsed.data.role);
+    if (result.kind === "member-updated") {
+      reply.status(200).send({ status: "updated", userId: result.userId, role: parsed.data.role });
+      return;
+    }
+    reply.status(202).send({ status: "invited", email: parsed.data.email, role: parsed.data.role, expiresAt: result.expiresAt });
   });
 
   app.delete<{ Params: { projectId: string; userId: string } }>(

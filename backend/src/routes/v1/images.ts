@@ -150,7 +150,9 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
 
     if (asset.kind === "document") {
       const document = await ctx.documents.findByAssetId(projectId, asset.id);
-      if (!document || document.status === "scanning" || document.status === "rejected") {
+      // A removed document is not served either (audit finding 8): its row is only soft-deleted,
+      // which is why `findByAssetId` still returns it, and the gate must look at that too.
+      if (!document || document.deletedAt || document.status === "scanning" || document.status === "rejected") {
         throw new NotFoundError(`Asset "${request.params.id}" not found.`);
       }
     }
