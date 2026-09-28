@@ -50,6 +50,24 @@ describe("password change and session management", () => {
 
   const me = (headers: Record<string, string>) => app.inject({ method: "GET", url: "/api/v1/auth/me", headers });
 
+  it("creates an API key from exactly what the Settings screen sends: a name, scoped by x-project-id", async () => {
+    // The schema used to require projectId in the BODY, which the frontend never sends, so every
+    // key created from the product failed with 400 while this suite (which sent it) stayed green.
+    const alice = await signUp("alice@example.com");
+    const projectId = ((await me(alice.headers)).json() as { projects: Array<{ id: string }> }).projects[0]!.id;
+    const headers = { ...alice.headers, "x-project-id": projectId };
+
+    const created = await app.inject({ method: "POST", url: "/api/v1/api-keys", headers, payload: { name: "ci" } });
+    expect(created.statusCode).toBe(201);
+    expect((created.json() as { key: string }).key).toMatch(/^aip_/);
+
+    // A projectId the caller is not a member of is not silently ignored: it is resolved as the
+    // request's scope, and a project that is not yours answers 404 like any other (ADR-049).
+    const other = "00000000-0000-4000-8000-000000000000";
+    const mismatched = await app.inject({ method: "POST", url: "/api/v1/api-keys", headers, payload: { name: "ci", projectId: other } });
+    expect(mismatched.statusCode, mismatched.body).toBe(404);
+  });
+
   it("changes the password, and the new one is what works afterwards", async () => {
     const alice = await signUp("alice@example.com");
 

@@ -181,7 +181,12 @@ export type CreateProjectRequest = z.infer<typeof createProjectRequestSchema>;
 
 export const createApiKeyRequestSchema = z.object({
   name: z.string().min(1).max(120).trim(),
-  projectId: z.string().uuid(),
+  /**
+   * Optional, and only a cross-check. The key is always bound to the project the REQUEST is scoped
+   * to (the credential and `x-project-id`); this field was required while the Settings screen never
+   * sent it, so creating a key from the product always answered 400.
+   */
+  projectId: z.string().uuid().optional(),
   expiresInDays: z.number().int().min(1).max(365).optional(),
 });
 export type CreateApiKeyRequest = z.infer<typeof createApiKeyRequestSchema>;

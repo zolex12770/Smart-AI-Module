@@ -412,6 +412,9 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
     const authCtx = await requireProject(request, ctx.auth, "apikey:manage");
     const parsed = createApiKeyRequestSchema.safeParse(request.body);
     if (!parsed.success) throw new ValidationError(parsed.error.message);
+    if (parsed.data.projectId && parsed.data.projectId !== authCtx.projectId) {
+      throw new ValidationError("projectId must be the project this request is scoped to (x-project-id).");
+    }
     const created = await ctx.auth.createApiKey(authCtx, parsed.data.name, parsed.data.expiresInDays);
     // The plaintext key appears in this response and nowhere else, ever.
     reply.status(201).send({
