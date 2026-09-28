@@ -57,7 +57,7 @@ export default function VideosPage() {
           <h1>Long-form video generation</h1>
           <p className="page-subtitle">
             Scene-decomposition pipeline (docs/07_LONG_RUNNING_JOB_ARCHITECTURE.md Part 2). Final assembly needs
-            ffmpeg installed on the API server, and honestly reports when it isn&apos;t.
+            ffmpeg where the job worker runs, and honestly reports when it isn&apos;t there.
           </p>
           {videoProvider && (
             <p className="page-subtitle">

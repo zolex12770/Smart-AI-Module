@@ -32,7 +32,7 @@ const PUBLIC_PATHS = ["/login", "/signup"];
  */
 export function AppChrome({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { status, user, projects, projectId, selectProject, signOut } = useSession();
+  const { status, user, projects, projectId, selectProject, signOut, signOutError } = useSession();
 
   if (PUBLIC_PATHS.includes(pathname)) {
     return <>{children}</>;
@@ -78,6 +78,11 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
             <button type="button" className="app-nav-signout" onClick={() => void signOut()}>
               Sign out
             </button>
+            {signOutError ? (
+              <span className="error-text" role="alert">
+                {signOutError}
+              </span>
+            ) : null}
           </div>
         ) : null}
       </nav>

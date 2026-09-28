@@ -68,6 +68,8 @@ export interface ConversationRepository {
    * `messages` rows are not orphaned by a cascade. Returns false if nothing matched.
    */
   delete(projectId: string, id: string): Promise<boolean>;
+  /** Sets the title a person reads in the sidebar. False when nothing matched. */
+  rename(projectId: string, id: string, title: string): Promise<boolean>;
 }
 
 export class PgConversationRepository implements ConversationRepository {
@@ -138,6 +140,15 @@ export class PgConversationRepository implements ConversationRepository {
       )
       .returning({ id: conversations.id });
     return updated.length > 0;
+  }
+
+  async rename(projectId: string, id: string, title: string): Promise<boolean> {
+    const renamed = await this.db
+      .update(conversations)
+      .set({ title, updatedAt: new Date() })
+      .where(and(eq(conversations.id, id), eq(conversations.projectId, projectId), isNull(conversations.deletedAt)))
+      .returning({ id: conversations.id });
+    return renamed.length > 0;
   }
 
   async delete(projectId: string, id: string): Promise<boolean> {

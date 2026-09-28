@@ -27,9 +27,9 @@ import { requireProject } from "../../plugins/auth.js";
  * deployment does not have. A client that retries a 503 forever would never succeed.
  */
 export const IMAGE_UNAVAILABLE =
-  "Image generation is not available on this deployment: no image provider is configured. Set IMAGE_BASE_URL and IMAGE_MODEL to enable it. Nothing was queued.";
+  "Image generation is not available on this deployment: no image provider is configured. Set IMAGE_SD_CLI_PATH and IMAGE_SD_MODEL_PATH (stable-diffusion.cpp, local), or IMAGE_BASE_URL and IMAGE_MODEL (an OpenAI-compatible image API), to enable it. Nothing was queued.";
 export const VIDEO_UNAVAILABLE =
-  "Video generation is not available on this deployment: no video provider is configured. Set VIDEO_PROVIDER, VIDEO_API_TOKEN and VIDEO_MODEL_VERSION to enable it. Nothing was queued.";
+  "Video generation is not available on this deployment: no video provider is configured. Configure an image provider and ffmpeg (FFMPEG_PATH) for local image-motion clips, or set VIDEO_PROVIDER, VIDEO_API_TOKEN and VIDEO_MODEL_VERSION for Replicate, to enable it. Nothing was queued.";
 
 /**
  * Narrows the project scope `requireProject` always sets. See the identical helper in

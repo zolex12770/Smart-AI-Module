@@ -269,3 +269,97 @@ the response reported nothing, the job stayed queued and the task stayed open.
 - `chat-midstream-failure.test.ts` "does not record the failed turn as a completed one" now
   asserts the new rule: there is no completed-message charge, and there is exactly one partial
   charge.
+
+## DL-11: Agent charges name the real model, survive a retry, and an unrun check is not "passed"
+
+**Found by:** audit findings 14, 15 and 23.
+
+**Finding 23: agent usage was unpriceable.**
+
+- **Problem:** every agent turn was recorded as provider `reasoning`, model `loop`. No price
+  table knows that pair, so autonomous runs cost $0 in the usage figures.
+- **Decision:** the loop's `usage` event carries the provider and model from the `done` event.
+
+**Finding 14: a reconcile retry lost its charges.**
+
+- **Problem:** a reconcile "retry" restarts the conversation, so its turns count from 1 again.
+  They reused `agent.node:<id>:turn:<n>`, which the interrupted attempt had already recorded, and
+  the ledger's unique index silently dropped the retry's real charges.
+- **Decision:**
+  - A retry increments `reconciledRuns` in the node's output.
+  - The park path carries that count forward, because it replaces `output` wholesale.
+  - Turn and verify keys become `agent.node:<id>:run:<n>:...`.
+  - A run never retried keeps its old keys, so the ADR-054 dedupe is unchanged for it.
+
+**Finding 15: an unrun verification read as passed.**
+
+- **Problem:** a verification that could not run (quota refused, the verifier failed, or an
+  unparseable verdict) returned `ok: true`. The screen then said "Verification passed —
+  verification could not be evaluated".
+- **Decision:**
+  - The verdict carries `inconclusive: true` through the loop, the stored activity, the SSE event
+    and the shared type.
+  - The task screen says "Verification could not be completed".
+  - The answer is still let through. Blocking on a broken check would spend more.
+
+**Tests:**
+
+- 3 in `agent-core/src/autonomous.test.ts`. All fail against the previous engine and loop.
+- 1 in `TaskDetail.test.tsx`.
+
+## DL-12: Sign-out that did not happen says so; video actions report refusals
+
+**Found by:** audit findings 16 and 17.
+
+**Problem:**
+
+- **Sign-out (finding 16).** A failed logout was swallowed, and the screen showed signed-out
+  while the server session stayed valid.
+- **Video actions (finding 17).**
+  - Video Retry and Cancel had no `catch`, so a 429 or 501 was an unhandled rejection that
+    showed nothing.
+  - A single failed poll replaced the whole video screen, for good.
+
+**Decision:**
+
+- Sign-out clears this browser's state only on success or on a 401 (no session to end).
+  Anything else is shown in the nav, and the user stays signed in.
+- On the video screen:
+  - A refused Retry or Cancel is shown.
+  - A failed poll is a banner over the loaded video, cleared by the next successful poll.
+  - Retry is also offered for a cancelled project ("Resume", which the backend already supports
+    through ADR-150) and for one stuck in planning for more than ten minutes ("Plan again").
+
+**Tests:**
+
+- `app-chrome.test.tsx`: refused sign-out and 401 sign-out.
+- `videos/[id]/page.test.tsx`: 3 tests, all failing against the previous page.
+
+## DL-13: Reachable product actions, and text that is true
+
+**Found by:** audit findings 18, 24 and 26.
+
+**Decision (finding 18):**
+
+- Conversations get a title from the opening message (cut at a word).
+  - New routes: `PATCH` and `DELETE /api/v1/conversations/:id` (require `chat:write`).
+  - The chat header has Rename and Delete controls.
+- Settings has Delete on each project the user administers. It reports anything the server
+  could not stop.
+- The Tasks workspace list has View, which shows a file's contents. `readWorkspaceFile` had no
+  caller.
+
+**Text corrections (findings 24 and 26):**
+
+- `IMAGE_UNAVAILABLE` names stable-diffusion.cpp. `VIDEO_UNAVAILABLE` names the local
+  image-motion path.
+- The videos page says ffmpeg is needed where the worker runs.
+- An answer cut off at the output limit (`finishReason: "length"`) is marked as cut off.
+- The frontend's `VideoScene.projectId` is `videoProjectId`, matching the backend.
+
+**Tests:**
+
+- `backend/src/routes/v1/conversations.test.ts`.
+- `ChatView.test.tsx`: rename, delete and truncation.
+- `settings/projects.test.tsx`.
+- The Tasks workspace viewer test.

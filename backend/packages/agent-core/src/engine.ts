@@ -235,6 +235,12 @@ export interface TaskOwner {
   userId: string;
 }
 
+/** How many times a person chose "retry" for this node after an interrupted run (audit finding 14). */
+function reconciledRunsOf(node: { output?: unknown }): number {
+  const value = (node.output as { reconciledRuns?: unknown } | null | undefined)?.reconciledRuns;
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : 0;
+}
+
 /**
  * Implements the state machine + dispatcher from docs/11_AGENT_LOOP.md. See that doc for
  * the full design; see PROJECT_STATUS.md for exactly what's implemented in this increment
@@ -422,6 +428,10 @@ export class AgentEngine {
       } else {
         const { resume: _resume, pendingCall: _pendingCall, pendingCalls: _pendingCalls, ...rest } = (node.output ??
           {}) as Record<string, unknown>;
+        // A retry starts the conversation again, so its turns count from 1 again — and would reuse
+        // the charge keys the interrupted attempt already recorded, which the ledger's unique
+        // index then silently drops (audit finding 14). Each retry is a new run with its own keys.
+        rest.reconciledRuns = reconciledRunsOf(node) + 1;
         await this.updateNode(
           node,
           {
@@ -932,6 +942,10 @@ export class AgentEngine {
        */
       const priorTurns = priorMessages.filter((m) => m.role === "assistant").length;
       let turn = priorTurns;
+      // Distinct per reconcile retry (audit finding 14); unchanged for a run never retried, so
+      // the keys of every run before this change still dedupe exactly as they did.
+      const runs = reconciledRunsOf(node);
+      const chargeKeyBase = runs > 0 ? `agent.node:${node.id}:run:${runs}` : `agent.node:${node.id}`;
 
       /**
        * ADR-046's "refuse before spending", applied per TURN rather than once per node.
@@ -1086,6 +1100,7 @@ export class AgentEngine {
                 taskId: task.id,
                 nodeId: node.id,
                 turn,
+                keyBase: chargeKeyBase,
               });
               return verdict;
             },
@@ -1137,21 +1152,30 @@ export class AgentEngine {
               }
 
               if (event.type === "verification") {
-                activity.push({ kind: "verification", ok: event.ok, ...(event.reason ? { reason: event.reason } : {}) });
+                activity.push({
+                  kind: "verification",
+                  ok: event.ok,
+                  ...(event.reason ? { reason: event.reason } : {}),
+                  ...(event.inconclusive ? { inconclusive: true } : {}),
+                });
                 this.emit(task.id, {
                   type: "verification",
                   taskId: task.id,
                   nodeId: node.id,
                   ok: event.ok,
                   ...(event.reason ? { reason: event.reason } : {}),
+                  ...(event.inconclusive ? { inconclusive: true } : {}),
                 });
               }
 
               if (event.type === "usage" && meter) {
                 void meter
                   .record({
-                    provider: "reasoning",
-                    model: "loop",
+                    // The provider and model that answered this turn (audit finding 23). They were
+                    // recorded as "reasoning"/"loop", which no price table knows, so every
+                    // autonomous run cost $0 in the usage figures.
+                    provider: event.provider,
+                    model: event.model,
                     inputTokens: event.inputTokens,
                     outputTokens: event.outputTokens,
                     taskId: task.id,
@@ -1163,7 +1187,7 @@ export class AgentEngine {
                      * idempotency key silently discarded all but the first, so a ten-iteration
                      * agent run charged the project for one iteration's tokens.
                      */
-                    idempotencyKey: `agent.node:${node.id}:turn:${turn}`,
+                    idempotencyKey: `${chargeKeyBase}:turn:${turn}`,
                   })
                   .catch(() => undefined);
               }
@@ -1201,6 +1225,9 @@ export class AgentEngine {
                * exactly the run an operator opens this screen to understand (ADR-134).
                */
               activity,
+              // Carried through the park: `output` is replaced wholesale here, and losing the
+              // count would give a second retry the first retry's charge keys.
+              ...(runs > 0 ? { reconciledRuns: runs } : {}),
               resume: { transcript: result.transcript },
               pendingCall: { id: paused.call.id, name: paused.call.name, arguments: paused.call.arguments },
               // Every call from that turn that produced no `tool` message (ADR-099): the one a
@@ -1433,8 +1460,8 @@ export class AgentEngine {
     answer: string,
     transcript: ChatMessage[],
     signal: AbortSignal,
-    billing?: { taskId: string; nodeId: string; turn: number }
-  ): Promise<{ ok: boolean; reason?: string }> {
+    billing?: { taskId: string; nodeId: string; turn: number; keyBase: string }
+  ): Promise<{ ok: boolean; reason?: string; inconclusive?: boolean }> {
     // Only what the run actually established — tool results — not the whole conversation.
     const evidence = transcript
       .filter((m) => m.role === "tool")
@@ -1470,7 +1497,7 @@ export class AgentEngine {
         nodeId: billing.nodeId,
       });
       if (!check.allowed) {
-        return { ok: true, reason: `verification could not be evaluated (${check.reason ?? "token quota exceeded"})` };
+        return { ok: true, inconclusive: true, reason: `verification could not be evaluated (${check.reason ?? "token quota exceeded"})` };
       }
     }
 
@@ -1491,26 +1518,26 @@ export class AgentEngine {
                 outputTokens: event.usage.outputTokens,
                 taskId: billing.taskId,
                 nodeId: billing.nodeId,
-                idempotencyKey: `agent.node:${billing.nodeId}:verify:${billing.turn}`,
+                idempotencyKey: `${billing.keyBase}:verify:${billing.turn}`,
               })
               .catch(() => undefined);
           }
         }
       }
     } catch {
-      return { ok: true, reason: "verification could not be evaluated (the verifier call failed)" };
+      return { ok: true, inconclusive: true, reason: "verification could not be evaluated (the verifier call failed)" };
     }
 
     const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return { ok: true, reason: "verification could not be evaluated (no verdict returned)" };
+    if (!match) return { ok: true, inconclusive: true, reason: "verification could not be evaluated (no verdict returned)" };
     try {
       const parsed = JSON.parse(match[0]) as { ok?: unknown; reason?: unknown };
       if (typeof parsed.ok !== "boolean") {
-        return { ok: true, reason: "verification could not be evaluated (verdict had no boolean)" };
+        return { ok: true, inconclusive: true, reason: "verification could not be evaluated (verdict had no boolean)" };
       }
       return parsed.ok ? { ok: true } : { ok: false, reason: String(parsed.reason ?? "the answer did not pass") };
     } catch {
-      return { ok: true, reason: "verification could not be evaluated (verdict was not JSON)" };
+      return { ok: true, inconclusive: true, reason: "verification could not be evaluated (verdict was not JSON)" };
     }
   }
 

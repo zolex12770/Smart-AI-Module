@@ -4,7 +4,15 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { streamChat, type ChatMessage } from "../lib/chat-stream";
-import { listConversations, listModels, type Conversation, type Message, type ModelInfo } from "../lib/api";
+import {
+  deleteConversation,
+  listConversations,
+  listModels,
+  renameConversation,
+  type Conversation,
+  type Message,
+  type ModelInfo,
+} from "../lib/api";
 import { historyForRequest } from "../lib/chat-history";
 import { useSession } from "../lib/session-context";
 
@@ -34,6 +42,9 @@ export default function ChatView({
    * does not read as a failure to send.
    */
   const [sidebarError, setSidebarError] = useState<string | null>(null);
+  /** Rename/delete of the open conversation (audit finding 18): a draft title while editing. */
+  const [titleDraft, setTitleDraft] = useState<string | null>(null);
+  const [manageError, setManageError] = useState<string | null>(null);
   const [messages, setMessages] = useState<DisplayMessage[]>(toDisplay(initialMessages));
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -92,6 +103,15 @@ export default function ChatView({
         if (event.type === "token") {
           assistantText += event.delta;
           setMessages((prev) => replaceLast(prev, { role: "assistant", content: assistantText }));
+        } else if (event.type === "done" && event.finishReason === "length") {
+          // Audit finding 24: an answer cut off at the output cap looked complete. It is marked
+          // as cut off, in the words a reader can act on.
+          setMessages((prev) =>
+            replaceLast(prev, {
+              role: "assistant",
+              content: `${assistantText}\n\n[This answer was cut off at the output limit. Ask the model to continue, or for a shorter answer.]`,
+            })
+          );
         } else if (event.type === "tool_call") {
           /**
            * A tool call in CHAT is reported, not run — docs/26_DECISIONS.md ADR-141.
@@ -173,6 +193,33 @@ export default function ChatView({
     }
   }
 
+  const current = conversations.find((c) => c.id === conversationId);
+
+  async function saveTitle(e: React.FormEvent) {
+    e.preventDefault();
+    if (!conversationId || titleDraft === null || !titleDraft.trim()) return;
+    setManageError(null);
+    try {
+      const { title } = await renameConversation(conversationId, titleDraft.trim());
+      setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, title } : c)));
+      setTitleDraft(null);
+    } catch (err) {
+      setManageError(`Could not rename: ${describe(err)}`);
+    }
+  }
+
+  async function removeConversation() {
+    if (!conversationId) return;
+    if (!window.confirm("Delete this conversation? Its messages will no longer be shown anywhere.")) return;
+    setManageError(null);
+    try {
+      await deleteConversation(conversationId);
+      router.replace("/chat");
+    } catch (err) {
+      setManageError(`Could not delete: ${describe(err)}`);
+    }
+  }
+
   return (
     <div className="chat-layout">
       <aside className="chat-sidebar">
@@ -187,14 +234,46 @@ export default function ChatView({
             href={`/chat/${c.id}`}
             className={`chat-sidebar-item ${c.id === conversationId ? "active" : ""}`}
           >
-            {c.title ?? c.id.slice(0, 8)}
+            {c.title ?? "Untitled conversation"}
           </Link>
         ))}
       </aside>
 
       <div className="chat-page">
         <header className="chat-header">
-          <h1>Chat</h1>
+          <h1>{current?.title ?? "Chat"}</h1>
+          {conversationId ? (
+            titleDraft === null ? (
+              <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <button type="button" className="btn btn-secondary" onClick={() => setTitleDraft(current?.title ?? "")}>
+                  Rename
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => void removeConversation()}>
+                  Delete
+                </button>
+              </div>
+            ) : (
+              <form onSubmit={saveTitle} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                <input
+                  aria-label="Conversation title"
+                  value={titleDraft}
+                  maxLength={200}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                />
+                <button type="submit" className="btn" disabled={!titleDraft.trim()}>
+                  Save
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => setTitleDraft(null)}>
+                  Cancel
+                </button>
+              </form>
+            )
+          ) : null}
+          {manageError ? (
+            <p className="error-text" role="alert">
+              {manageError}
+            </p>
+          ) : null}
           {chatModel ? (
             <p>
               Answers come from <strong>{chatModel.provider}</strong> ({chatModel.model})

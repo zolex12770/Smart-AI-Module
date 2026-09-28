@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
 import {
   CONVERSATION_SUMMARY_PROMPT,
@@ -50,10 +51,41 @@ function scopedProjectId(authCtx: AuthContext): string {
   return authCtx.projectId;
 }
 
+/** A conversation's first title: the opening user message, on one line, cut at a word. */
+function titleFrom(messages: Array<{ role: string; content: string }>): string | undefined {
+  const first = messages.find((m) => m.role === "user")?.content.replace(/\s+/g, " ").trim();
+  if (!first) return undefined;
+  if (first.length <= 60) return first;
+  const cut = first.slice(0, 60);
+  const space = cut.lastIndexOf(" ");
+  return `${space > 30 ? cut.slice(0, space) : cut}…`;
+}
+
 export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
   app.get("/api/v1/conversations", async (request) => {
     const authCtx = await requireProject(request, ctx.auth, "project:read");
     return { conversations: await ctx.conversations.list(scopedProjectId(authCtx)) };
+  });
+
+  /**
+   * Rename and delete — audit finding 18. Neither existed: every conversation was titled by the
+   * first eight characters of its UUID, forever, and none could be removed.
+   */
+  app.patch<{ Params: { id: string } }>("/api/v1/conversations/:id", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "chat:write");
+    const parsed = z.object({ title: z.string().trim().min(1).max(200) }).safeParse(request.body);
+    if (!parsed.success) throw new ValidationError(parsed.error.message);
+    const renamed = await ctx.conversations.rename(scopedProjectId(authCtx), request.params.id, parsed.data.title);
+    if (!renamed) throw new NotFoundError(`Conversation "${request.params.id}" not found.`);
+    return { ok: true, title: parsed.data.title };
+  });
+
+  app.delete<{ Params: { id: string } }>("/api/v1/conversations/:id", async (request) => {
+    const authCtx = await requireProject(request, ctx.auth, "chat:write");
+    const deleted = await ctx.conversations.delete(scopedProjectId(authCtx), request.params.id);
+    // Another project's, unknown or already deleted: one answer (ADR-049).
+    if (!deleted) throw new NotFoundError(`Conversation "${request.params.id}" not found.`);
+    return { ok: true };
   });
 
   app.get<{ Params: { id: string } }>("/api/v1/conversations/:id/messages", async (request) => {
@@ -121,7 +153,13 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       // and attributed to the authenticated principal, never to a hardcoded owner (ADR-049).
       const conversation = chatRequest.conversationId
         ? await ctx.conversations.get(projectId, chatRequest.conversationId)
-        : await ctx.conversations.create({ projectId, createdByUserId: authCtx.user.id });
+        : await ctx.conversations.create({
+            projectId,
+            createdByUserId: authCtx.user.id,
+            // Named by what the user asked, so the sidebar says something a person recognises;
+            // renamable afterwards.
+            title: titleFrom(chatRequest.messages),
+          });
 
       if (!conversation) {
         throw new ValidationError(`Unknown conversationId "${chatRequest.conversationId}".`);

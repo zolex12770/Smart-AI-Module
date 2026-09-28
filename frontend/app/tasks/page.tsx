@@ -8,6 +8,7 @@ import {
   listTasks,
   listTools,
   listWorkspaceFiles,
+  readWorkspaceFile,
   setToolEnabled,
   writeWorkspaceFile,
   type ToolRow,
@@ -277,6 +278,22 @@ function WorkspaceSeed() {
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The file open for reading — audit finding 18: what the agent wrote could not be seen. */
+  const [viewing, setViewing] = useState<{ path: string; content: string } | null>(null);
+
+  async function view(filePath: string) {
+    if (viewing?.path === filePath) {
+      setViewing(null);
+      return;
+    }
+    setError(null);
+    try {
+      const file = await readWorkspaceFile(filePath);
+      setViewing({ path: file.path, content: file.content });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   const refresh = useCallback(() => {
     listWorkspaceFiles()
@@ -317,8 +334,20 @@ function WorkspaceSeed() {
         </p>
       )}
       {files?.map((f) => (
-        <div key={f.path} className="mono" style={{ fontSize: 12 }}>
-          {f.path} <span className="page-subtitle">({f.sizeBytes} bytes)</span>
+        <div key={f.path}>
+          <div className="mono" style={{ fontSize: 12, display: "flex", gap: 8, alignItems: "center" }}>
+            <span>
+              {f.path} <span className="page-subtitle">({f.sizeBytes} bytes)</span>
+            </span>
+            <button type="button" className="btn btn-secondary" onClick={() => void view(f.path)}>
+              {viewing?.path === f.path ? "Hide" : "View"}
+            </button>
+          </div>
+          {viewing?.path === f.path ? (
+            <pre className="mono" aria-label={`Contents of ${f.path}`} style={{ fontSize: 12, whiteSpace: "pre-wrap", maxHeight: 360, overflow: "auto" }}>
+              {viewing.content}
+            </pre>
+          ) : null}
         </div>
       ))}
       <div className="form-row" style={{ marginTop: 8 }}>

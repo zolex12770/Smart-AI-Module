@@ -179,6 +179,19 @@ describe("TaskDetail activity feed", () => {
     expect(screen.getByText(/does not address the goal/i)).toBeInTheDocument();
   });
 
+  it("says a verification that could not run was not completed — never that it passed", () => {
+    // Audit finding 15: this rendered "Verification passed — verification could not be evaluated".
+    hookResult.task = { ...task(), state: "RUNNING" } as unknown as Task;
+    hookResult.nodes = [];
+    hookResult.activity = [
+      { kind: "verification", ok: true, inconclusive: true, reason: "verification could not be evaluated (the verifier call failed)" },
+    ];
+
+    render(<TaskDetail taskId="task-1" initialTask={hookResult.task} initialNodes={[]} />);
+    expect(screen.getByText(/Verification could not be completed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Verification passed/i)).not.toBeInTheDocument();
+  });
+
   it("shows no activity card at all when nothing has happened yet", () => {
     hookResult.task = task();
     hookResult.nodes = [];

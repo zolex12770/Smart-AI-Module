@@ -26,9 +26,14 @@ const LOCAL_MODEL = { provider: "local", model: "qwen2.5:7b", isMock: false, isD
 const listModels = vi.fn(async () => ({ models: [LOCAL_MODEL], default: "local" as string | null }));
 vi.mock("../lib/api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/api")>()),
-  listConversations: async () => ({ conversations: [] }),
+  listConversations: () => listConversations(),
   listModels: () => listModels(),
+  renameConversation: (id: string, title: string) => renameConversation(id, title),
+  deleteConversation: (id: string) => deleteConversation(id),
 }));
+const listConversations = vi.fn(async () => ({ conversations: [] as Array<{ id: string; title: string | null; createdAt: string }> }));
+const renameConversation = vi.fn(async (_id: string, title: string) => ({ ok: true as const, title }));
+const deleteConversation = vi.fn(async (_id: string) => ({ ok: true as const }));
 
 const streamChat = vi.fn();
 /**
@@ -117,6 +122,30 @@ describe("ChatView failure and stop", () => {
     });
     // Both, in one bubble: the answer as far as it went, and why it stopped.
     expect(screen.getByText(/Half an ans/)).toBeInTheDocument();
+  });
+
+  it("marks an answer cut off at the output limit as cut off", async () => {
+    // Audit finding 24: `finishReason: "length"` was ignored, so a truncated answer looked whole.
+    streamChat.mockImplementation(() =>
+      (async function* () {
+        yield { type: "token", delta: "The first three steps are" } as ChatStreamEvent;
+        yield {
+          type: "done",
+          message: { role: "assistant", content: "The first three steps are" },
+          usage: { inputTokens: 5, outputTokens: 4096 },
+          provider: "local",
+          model: "qwen2.5:7b",
+          finishReason: "length",
+        } as ChatStreamEvent;
+      })()
+    );
+
+    await send("List every step");
+
+    await waitFor(() => {
+      expect(screen.getByText(/cut off at the output limit/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/The first three steps are/)).toBeInTheDocument();
   });
 
   it("offers a stop control while streaming that aborts the request", async () => {
@@ -232,5 +261,39 @@ describe("ChatView says which model answers", () => {
     listModels.mockResolvedValueOnce({ models: [], default: null });
     render(<ChatView />);
     expect(await screen.findByRole("status")).toHaveTextContent(/No language model is configured/);
+  });
+});
+
+describe("ChatView conversation management", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  const existing = { id: "conv-1", title: "How deep is the harbour?", createdAt: "2026-09-28T00:00:00.000Z" };
+
+  it("renames the open conversation", async () => {
+    listConversations.mockResolvedValue({ conversations: [existing] });
+    const user = userEvent.setup();
+    render(<ChatView conversationId="conv-1" initialMessages={[]} />);
+    expect(await screen.findByRole("heading", { name: "How deep is the harbour?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /rename/i }));
+    const field = screen.getByLabelText(/conversation title/i);
+    await user.clear(field);
+    await user.type(field, "Harbour depths");
+    await user.click(screen.getByRole("button", { name: /save/i }));
+    expect(renameConversation).toHaveBeenCalledWith("conv-1", "Harbour depths");
+    expect(await screen.findByRole("heading", { name: "Harbour depths" })).toBeInTheDocument();
+  });
+
+  it("deletes the open conversation after confirmation and leaves it", async () => {
+    listConversations.mockResolvedValue({ conversations: [existing] });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<ChatView conversationId="conv-1" initialMessages={[]} />);
+    await screen.findByRole("heading", { name: "How deep is the harbour?" });
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+    expect(deleteConversation).toHaveBeenCalledWith("conv-1");
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/chat"));
   });
 });

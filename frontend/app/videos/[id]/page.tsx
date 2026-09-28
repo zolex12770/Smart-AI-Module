@@ -8,7 +8,11 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
   const { id } = use(params);
   const [project, setProject] = useState<VideoProject | null>(null);
   const [scenes, setScenes] = useState<VideoScene[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  /** The last poll failed. Shown as a banner over what is already here, and cleared by the next
+   * successful one — a single dropped poll used to replace the whole screen for good. */
+  const [pollError, setPollError] = useState<string | null>(null);
+  /** A Retry or Cancel the server refused (a 429 quota, a 501) — audit finding 17. */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [cancelling, setCancelling] = useState(false);
 
@@ -17,8 +21,9 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
       .then((r) => {
         setProject(r.project);
         setScenes(r.scenes);
+        setPollError(null);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e: unknown) => setPollError(e instanceof Error ? e.message : String(e)));
   }
 
   useEffect(() => {
@@ -29,9 +34,12 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
 
   async function handleRetry() {
     setRetrying(true);
+    setActionError(null);
     try {
       await retryVideo(id);
       refresh();
+    } catch (e) {
+      setActionError(`Retry was refused: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setRetrying(false);
     }
@@ -40,16 +48,21 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
   /** Stops scenes that have not started yet (ADR-122); one already generating finishes. */
   async function handleCancel() {
     setCancelling(true);
+    setActionError(null);
     try {
       await cancelVideo(id);
       refresh();
+    } catch (e) {
+      setActionError(`Cancel was refused: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setCancelling(false);
     }
   }
 
-  if (error) return <div className="page error-text">{error}</div>;
-  if (!project) return <div className="page empty-state">Loading…</div>;
+  if (!project) {
+    // Nothing to show yet: the failure IS the screen until a poll succeeds.
+    return pollError ? <div className="page error-text">{pollError}</div> : <div className="page empty-state">Loading…</div>;
+  }
 
   /**
    * What a retry can actually fix — docs/26_DECISIONS.md ADR-157.
@@ -62,7 +75,19 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
    */
   const hasFailedScenes = scenes.some((s) => s.status === "failed");
   const renderIncomplete = project.renderStatus === "failed" || project.renderStatus === "skipped_no_ffmpeg";
-  const canRetry = hasFailedScenes || renderIncomplete;
+  // Audit finding 18: the backend resumes a CANCELLED project (ADR-150) and re-plans one stuck
+  // in planning, and neither was reachable from here. "Stuck" is a storyboard with no result
+  // after ten minutes — a 7B model on CPU takes a few; planning is idempotent either way.
+  const cancelled = project.status === "cancelled" || scenes.some((s) => s.status === "cancelled");
+  const planningStuck = project.status === "planning" && Date.now() - new Date(project.updatedAt).getTime() > 10 * 60_000;
+  const canRetry = hasFailedScenes || renderIncomplete || cancelled || planningStuck;
+  const retryLabel = planningStuck
+    ? "Plan again"
+    : cancelled
+      ? "Resume"
+      : hasFailedScenes
+        ? "Retry failed scenes"
+        : "Retry rendering";
 
   return (
     <div className="page">
@@ -75,7 +100,7 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
           <StatusBadge status={project.status} />
           {canRetry && (
             <button className="btn" disabled={retrying} onClick={handleRetry}>
-              {retrying ? "Retrying…" : hasFailedScenes ? "Retry failed scenes" : "Retry rendering"}
+              {retrying ? "Retrying…" : retryLabel}
             </button>
           )}
           {["planning", "generating_scenes", "assembling"].includes(project.status) && !project.cancelRequestedAt && (
@@ -86,6 +111,17 @@ export default function VideoDetailPage({ params }: { params: Promise<{ id: stri
           {project.cancelRequestedAt && <span className="page-subtitle">Cancellation requested</span>}
         </div>
       </div>
+
+      {actionError ? (
+        <p className="error-text" role="alert">
+          {actionError}
+        </p>
+      ) : null}
+      {pollError ? (
+        <p className="error-text" role="status">
+          Could not refresh this video: {pollError}. Retrying every two seconds.
+        </p>
+      ) : null}
 
       {project.status === "planning" ? (
         <div className="card" role="status">

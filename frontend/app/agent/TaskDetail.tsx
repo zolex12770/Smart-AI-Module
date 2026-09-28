@@ -296,7 +296,8 @@ export default function TaskDetail({
                 )}
                 {entry.kind === "verification" && (
                   <span style={{ flex: 1 }}>
-                    Verification {entry.ok ? "passed" : "failed"}
+                    {/* Audit finding 15: a check that could not run was shown as "passed". */}
+                    {entry.inconclusive ? "Verification could not be completed" : `Verification ${entry.ok ? "passed" : "failed"}`}
                     {entry.reason ? <span className="page-subtitle"> — {entry.reason}</span> : null}
                   </span>
                 )}
@@ -492,6 +493,7 @@ function persistedActivityOf(nodes: TaskNode[]): TaskActivity[] {
         name: typeof entry.name === "string" ? entry.name : undefined,
         arguments: (entry.arguments ?? undefined) as Record<string, unknown> | undefined,
         ok: typeof entry.ok === "boolean" ? entry.ok : undefined,
+        inconclusive: entry.inconclusive === true ? true : undefined,
         // The persisted log keeps the fuller text under `content`; the live feed calls it
         // `preview`. One field reaches the screen so the renderer needs no branch.
         preview: typeof entry.content === "string" ? entry.content : undefined,

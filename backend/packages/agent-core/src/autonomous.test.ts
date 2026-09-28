@@ -1234,6 +1234,93 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     expect(checks).toBeGreaterThanOrEqual(2);
   });
 
+  it("records each turn under the provider and model that answered it", async () => {
+    // Audit finding 23: turns were recorded as provider "reasoning", model "loop", which no price
+    // table knows — every autonomous run cost $0 in the usage figures.
+    const recorded: Array<{ provider: string; model: string; idempotencyKey?: string }> = [];
+    const meter = {
+      async checkTokens() {
+        return { allowed: true as const };
+      },
+      async record(entry: { provider: string; model: string; idempotencyKey?: string }) {
+        recorded.push(entry);
+      },
+    };
+    const { engine } = build([{ text: "The harbour is at 51.5N." }], undefined, [], undefined, meter);
+    const task = await engine.createAndStart("autonomous", { goal: "Where is the harbour?" }, { projectId: PROJECT, userId: USER });
+    await waitFor(task.id, ["COMPLETED", "FAILED"]);
+    const turns = recorded.filter((r) => (r.idempotencyKey ?? "").includes(":turn:"));
+    expect(turns.length).toBeGreaterThan(0);
+    for (const row of turns) expect(row).toMatchObject({ provider: "scripted", model: "scripted-1" });
+  });
+
+  it("reports a verification that could not run as inconclusive, not as passed", async () => {
+    // Audit finding 15: a refused, failed or unparseable check returned ok:true and the screen
+    // said "Verification passed — verification could not be evaluated".
+    let checks = 0;
+    const meter = {
+      async checkTokens() {
+        checks += 1;
+        return checks > 1 ? { allowed: false as const, reason: "Daily token limit reached." } : { allowed: true as const };
+      },
+      async record() {
+        /* nothing to record for a refused call */
+      },
+    };
+    const { engine } = build([{ text: "The harbour is at 51.5N." }], undefined, [], undefined, meter);
+    const task = await engine.createAndStart("autonomous", { goal: "Where is the harbour?" }, { projectId: PROJECT, userId: USER });
+    await waitFor(task.id, ["COMPLETED", "FAILED"]);
+    const [node] = await nodes.listByRootUnscoped(task.id);
+    const activity = (node.output as { activity: Array<{ kind: string; ok?: boolean; inconclusive?: boolean }> }).activity;
+    const verification = activity.find((a) => a.kind === "verification");
+    expect(verification).toMatchObject({ kind: "verification", inconclusive: true });
+    expect((node.output as { verification?: { inconclusive?: boolean } }).verification?.inconclusive).toBe(true);
+  });
+
+  it("charges a retried run's turns under keys of their own", async () => {
+    // Audit finding 14: a reconcile retry restarts the conversation, so its turns count from 1
+    // again and reused the keys the interrupted run had recorded — the ledger's unique index
+    // then dropped the retry's real charges.
+    const recorded: string[] = [];
+    const meter = {
+      async checkTokens() {
+        return { allowed: true as const };
+      },
+      async record(entry: { idempotencyKey?: string }) {
+        recorded.push(entry.idempotencyKey ?? "");
+      },
+    };
+    writeFileSync(join(workspaceDir, "important.txt"), "keep\n");
+    const { engine } = build(
+      [
+        { calls: [{ id: "c1", name: "fs.delete_file", arguments: { path: "important.txt" } }] },
+        { calls: [{ id: "c2", name: "fs.delete_file", arguments: { path: "important.txt" } }] },
+        { text: "Deleted." },
+      ],
+      undefined,
+      [],
+      undefined,
+      meter
+    );
+    const task = await engine.createAndStart("autonomous", { goal: "Delete important.txt" }, { projectId: PROJECT, userId: USER });
+    await waitFor(task.id, ["WAITING_FOR_APPROVAL"]);
+    const [parked] = await nodes.listByRootUnscoped(task.id);
+    await nodes.update(parked.id, { status: "waiting_model", approvedBy: USER, approvedAt: Date.now() });
+    await tasks.updateState(task.id, "EXECUTING");
+    await engine.resumeAll();
+    await waitFor(task.id, ["PAUSED"]);
+    await engine.reconcile(task.id, parked.id, "retry", USER);
+    await waitFor(task.id, ["WAITING_FOR_APPROVAL", "COMPLETED", "FAILED"]);
+
+    const turnKeys = recorded.filter((k) => k.includes(":turn:"));
+    expect(turnKeys).toContain(`agent.node:${parked.id}:turn:1`);
+    expect(turnKeys).toContain(`agent.node:${parked.id}:run:1:turn:1`);
+    expect(new Set(turnKeys).size).toBe(turnKeys.length);
+    // The retry's count survives its own park, so a second retry would not reuse the first's keys.
+    const [reparked] = await nodes.listByRootUnscoped(task.id);
+    expect((reparked.output as { reconciledRuns?: number }).reconciledRuns).toBe(1);
+  });
+
   it("audits a tool name the model invented, instead of rejecting it before the registry", async () => {
     /**
      * docs/26_DECISIONS.md ADR-159. `approvalFor` THROWS `Unknown tool "x"` for an unregistered

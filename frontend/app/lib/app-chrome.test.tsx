@@ -19,6 +19,7 @@ vi.mock("next/navigation", () => ({
 const session = vi.hoisted(() => ({
   value: null as { user: SessionUser; projects: ProjectSummary[] } | null,
   resolve: null as null | (() => void),
+  logout: null as null | (() => Promise<void>),
 }));
 
 vi.mock("./auth-client", async (importOriginal) => {
@@ -31,7 +32,7 @@ vi.mock("./auth-client", async (importOriginal) => {
       }),
     readStoredProjectId: () => null,
     storeProjectId: () => undefined,
-    logout: async () => undefined,
+    logout: () => (session.logout ? session.logout() : Promise.resolve()),
   };
 });
 
@@ -68,6 +69,7 @@ describe("AppChrome session gate", () => {
     fetches.length = 0;
     session.value = null;
     pathname.value = "/chat";
+    session.logout = null;
   });
 
   it("renders no screen, and so fetches nothing, before the session is known", async () => {
@@ -94,5 +96,30 @@ describe("AppChrome session gate", () => {
     pathname.value = "/login";
     mount();
     expect(screen.getByText("screen body")).toBeTruthy();
+  });
+
+  it("stays signed in, and says so, when the server refuses the sign-out", async () => {
+    // Audit finding 16: a refused logout (a 403, a network error) was swallowed and the screen
+    // showed signed-out while the server session stayed valid.
+    const { ApiError } = await import("./auth-client");
+    session.logout = () => Promise.reject(new ApiError(403, "CSRF_FAILED", "CSRF token missing or invalid."));
+    session.value = signedIn;
+    mount();
+    await act(async () => session.resolve?.());
+    await screen.findByText("screen body");
+    fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/still signed in/i);
+    expect(screen.getByText("screen body")).toBeTruthy();
+  });
+
+  it("signs out locally when the server says there was no session to end", async () => {
+    const { ApiError } = await import("./auth-client");
+    session.logout = () => Promise.reject(new ApiError(401, "UNAUTHORIZED", "Authentication required."));
+    session.value = signedIn;
+    mount();
+    await act(async () => session.resolve?.());
+    await screen.findByText("screen body");
+    fireEvent.click(screen.getByRole("button", { name: /sign out/i }));
+    await waitFor(() => expect(screen.queryByText("screen body")).toBeNull());
   });
 });

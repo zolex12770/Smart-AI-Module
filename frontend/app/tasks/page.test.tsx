@@ -45,7 +45,9 @@ vi.mock("../lib/api", async (importOriginal) => ({
   setToolEnabled: (...a: unknown[]) => setToolEnabled(...(a as [])),
   listWorkspaceFiles: () => listWorkspaceFiles(),
   writeWorkspaceFile: (...a: unknown[]) => writeWorkspaceFile(...(a as [])),
+  readWorkspaceFile: (path: string) => readWorkspaceFile(path),
 }));
+const readWorkspaceFile = vi.fn(async (path: string) => ({ path, content: "export const sum = (a, b) => a + b;" }));
 
 describe("Tasks screen", () => {
   afterEach(() => {
@@ -178,6 +180,17 @@ describe("Tasks screen", () => {
     await waitFor(() =>
       expect(writeWorkspaceFile).toHaveBeenCalledWith("src/sum.test.ts", "expect(sum(1,2)).toBe(3);")
     );
+  });
+
+  it("shows what is in a workspace file — what the agent wrote — on request", async () => {
+    // Audit finding 18: readWorkspaceFile existed and nothing called it.
+    listWorkspaceFiles.mockResolvedValueOnce({ files: [{ path: "src/sum.ts", sizeBytes: 36, modifiedAt: "" }], truncated: false });
+    const user = userEvent.setup();
+    render(<TasksPage />);
+    await user.selectOptions(screen.getByLabelText(/task type/i), "fix_failing_test");
+    await user.click(await screen.findByRole("button", { name: /^view$/i }));
+    expect(readWorkspaceFile).toHaveBeenCalledWith("src/sum.ts");
+    expect(await screen.findByLabelText("Contents of src/sum.ts")).toHaveTextContent("export const sum = (a, b) => a + b;");
   });
 
   it("does not offer a workspace for a task type that has no use for one", async () => {

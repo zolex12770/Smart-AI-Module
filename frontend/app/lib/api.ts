@@ -50,6 +50,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 // --- Conversations / chat history --------------------------------------------------
 
 export const listConversations = () => request<{ conversations: Conversation[] }>("/api/v1/conversations");
+export const renameConversation = (id: string, title: string) =>
+  request<{ ok: true; title: string }>(`/api/v1/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) });
+
+export const deleteConversation = (id: string) =>
+  request<{ ok: true }>(`/api/v1/conversations/${id}`, { method: "DELETE" });
+
 export const getConversationMessages = (id: string) =>
   request<{ messages: Message[] }>(`/api/v1/conversations/${id}/messages`);
 
@@ -265,7 +271,8 @@ export interface VideoProject {
 
 export interface VideoScene {
   id: string;
-  projectId: string;
+  /** The parent video (the backend's name since ADR-049; `projectId` means the tenant project). */
+  videoProjectId: string;
   sceneIndex: number;
   shotDescription: string;
   /** The line spoken over the shot; null for a scene with no script or no speech provider. */

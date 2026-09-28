@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  ApiError,
   fetchSession,
   getSelectedProjectId,
   logout as apiLogout,
@@ -36,6 +37,8 @@ interface SessionState {
   selectProject(projectId: string): void;
   refresh(): Promise<void>;
   signOut(): Promise<void>;
+  /** Why the last sign-out did not happen, while it has not; null otherwise. */
+  signOutError: string | null;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
@@ -50,6 +53,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectId, setProjectId] = useState<string | null>(null);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -97,7 +101,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signOut = useCallback(async () => {
-    await apiLogout().catch(() => undefined);
+    /*
+     * Signed out means the SERVER ended the session — audit finding 16. The failure used to be
+     * swallowed and the screen showed signed-out while the cookie stayed valid: on a shared
+     * machine, the next person was one refresh from the previous user's account. Only a success,
+     * or a 401 (there was no live session to end), clears this browser's state; anything else is
+     * shown, and the user is still signed in.
+     */
+    try {
+      await apiLogout();
+    } catch (err) {
+      if (!(err instanceof ApiError && err.status === 401)) {
+        setSignOutError(
+          `Sign-out did not complete, so you are still signed in: ${err instanceof Error ? err.message : String(err)}. Try again.`
+        );
+        return;
+      }
+    }
+    setSignOutError(null);
     setStatus("anonymous");
     setUser(null);
     setProjects([]);
@@ -106,8 +127,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   const value = useMemo<SessionState>(
-    () => ({ status, user, projects, projectId, selectProject, refresh, signOut }),
-    [status, user, projects, projectId, selectProject, refresh, signOut]
+    () => ({ status, user, projects, projectId, selectProject, refresh, signOut, signOutError }),
+    [status, user, projects, projectId, selectProject, refresh, signOut, signOutError]
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

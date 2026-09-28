@@ -233,4 +233,5 @@ export type TaskEvent =
       preview: string;
       iteration: number;
     }
-  | { type: "verification"; taskId: string; nodeId: string; ok: boolean; reason?: string };
+  /** `inconclusive`: the check could not be carried out; the answer is UNCHECKED, not passed. */
+  | { type: "verification"; taskId: string; nodeId: string; ok: boolean; reason?: string; inconclusive?: boolean };

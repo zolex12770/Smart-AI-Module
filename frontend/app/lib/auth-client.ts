@@ -208,6 +208,15 @@ export async function fetchSession(): Promise<{ user: SessionUser; projects: Pro
   }
 }
 
+/**
+ * Delete a project — audit finding 18: the route existed and nothing called it, so the
+ * per-organization project cap could only be freed by hand. The server refuses an
+ * organization's last project, and stops the project's queued and running work (DL-9).
+ */
+export async function deleteProject(projectId: string): Promise<{ ok: true; notStopped: string[] }> {
+  return apiFetch(`/api/v1/projects/${projectId}`, { method: "DELETE", unscoped: true });
+}
+
 export async function createProject(name: string, description?: string): Promise<ProjectSummary> {
   const result = await apiFetch<{ project: { id: string; name: string } }>("/api/v1/projects", {
     method: "POST",

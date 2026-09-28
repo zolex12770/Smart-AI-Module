@@ -28,7 +28,7 @@ import {
   type ApiKeySummary,
   type SessionSummary,
 } from "../lib/api";
-import { createProject } from "../lib/auth-client";
+import { createProject, deleteProject } from "../lib/auth-client";
 import { Can, RequireSession, useSession } from "../lib/session-context";
 
 /**
@@ -650,6 +650,35 @@ function ProjectsCard({
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  async function handleDelete(project: { id: string; name: string }) {
+    if (
+      !window.confirm(
+        `Delete "${project.name}"? Its queued and running work is stopped, and it disappears for every member.`
+      )
+    ) {
+      return;
+    }
+    setDeletingId(project.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await deleteProject(project.id);
+      // The server reports what it could not stop rather than hiding it (DL-9); so does this.
+      setNotice(
+        result.notStopped.length > 0
+          ? `"${project.name}" was deleted, but its ${result.notStopped.join(" and ")} could not be stopped — an operator should check.`
+          : `"${project.name}" was deleted.`
+      );
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -691,13 +720,26 @@ function ProjectsCard({
                 {p.id === projectId ? " · selected" : ""}
               </div>
             </div>
-            {p.id === projectId ? (
-              <span className="badge badge-success">Selected</span>
-            ) : (
-              <button type="button" className="btn btn-secondary" onClick={() => selectProject(p.id)}>
-                Switch to
-              </button>
-            )}
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              {p.id === projectId ? (
+                <span className="badge badge-success">Selected</span>
+              ) : (
+                <button type="button" className="btn btn-secondary" onClick={() => selectProject(p.id)}>
+                  Switch to
+                </button>
+              )}
+              {p.role === "admin" ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  disabled={deletingId !== null}
+                  aria-label={`Delete project ${p.name}`}
+                  onClick={() => void handleDelete(p)}
+                >
+                  {deletingId === p.id ? "Deleting…" : "Delete"}
+                </button>
+              ) : null}
+            </div>
           </div>
         ))}
       </div>
@@ -714,6 +756,11 @@ function ProjectsCard({
       {error ? (
         <p className="auth-error" role="alert">
           {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="page-subtitle" role="status">
+          {notice}
         </p>
       ) : null}
     </div>

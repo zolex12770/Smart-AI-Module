@@ -17,6 +17,8 @@ interface TaskEventPayload {
   name?: string;
   arguments?: Record<string, unknown>;
   ok?: boolean;
+  /** A verification that could not be carried out — unchecked, never "passed". */
+  inconclusive?: boolean;
   preview?: string;
   reason?: string;
   iteration?: number;
@@ -35,6 +37,8 @@ export interface TaskActivity {
   name?: string;
   arguments?: Record<string, unknown>;
   ok?: boolean;
+  /** A verification that could not be carried out — unchecked, never "passed". */
+  inconclusive?: boolean;
   preview?: string;
   reason?: string;
   iteration?: number;
@@ -123,7 +127,10 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
     };
     const onVerification = (e: MessageEvent) => {
       const p = JSON.parse(e.data) as TaskEventPayload;
-      setActivity((prev) => [...prev, { kind: "verification", ok: p.ok, reason: p.reason }]);
+      setActivity((prev) => [
+        ...prev,
+        { kind: "verification", ok: p.ok, reason: p.reason, ...(p.inconclusive ? { inconclusive: true } : {}) },
+      ]);
     };
 
     source.addEventListener("state", onState);

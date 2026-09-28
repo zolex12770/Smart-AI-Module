@@ -60,7 +60,12 @@ export interface ReasoningLoopDeps {
   /** Executes one call under policy: schema validation, approval, isolation, timeout. */
   executeTool(request: ToolExecutionRequest): Promise<ToolExecutionOutcome>;
   /** Optional final check on the answer; returning a reason triggers one correction round. */
-  verify?(answer: string, transcript: ChatMessage[]): Promise<{ ok: boolean; reason?: string }>;
+  /**
+   * `inconclusive` — the check could not be carried out (quota, a failed or unparseable verifier
+   * call). The answer is let through, since blocking on a broken check spends more, but it is
+   * reported as UNCHECKED, never as passed (audit finding 15).
+   */
+  verify?(answer: string, transcript: ChatMessage[]): Promise<{ ok: boolean; reason?: string; inconclusive?: boolean }>;
   /** Progress for SSE/observability. Must never throw. */
   onEvent?(event: ReasoningEvent): void;
 }
@@ -71,8 +76,9 @@ export type ReasoningEvent =
   | { type: "tool_call"; call: ToolCall; iteration: number }
   | { type: "tool_result"; callId: string; ok: boolean; content: string; iteration: number }
   | { type: "awaiting_approval"; call: ToolCall; iteration: number }
-  | { type: "verification"; ok: boolean; reason?: string }
-  | { type: "usage"; inputTokens: number; outputTokens: number };
+  | { type: "verification"; ok: boolean; reason?: string; inconclusive?: boolean }
+  /** One turn's real usage, and who produced it — the provider and model the router used. */
+  | { type: "usage"; inputTokens: number; outputTokens: number; provider: string; model: string };
 
 export interface ReasoningLoopOptions {
   /** Hard ceiling on model turns. The model cannot raise it. */
@@ -111,7 +117,7 @@ export interface ReasoningResult {
    * append one for every call here before it can send the conversation anywhere.
    */
   unexecutedCalls?: ToolCall[];
-  verification?: { ok: boolean; reason?: string };
+  verification?: { ok: boolean; reason?: string; inconclusive?: boolean };
 }
 
 const DEFAULTS = { maxIterations: 12, maxTotalTokens: 200_000, maxOutputTokensPerTurn: 4096 };
@@ -186,7 +192,13 @@ export async function runReasoningLoop(
           sawDone = true;
           usage.inputTokens += event.usage.inputTokens;
           usage.outputTokens += event.usage.outputTokens;
-          emit({ type: "usage", inputTokens: event.usage.inputTokens, outputTokens: event.usage.outputTokens });
+          emit({
+            type: "usage",
+            inputTokens: event.usage.inputTokens,
+            outputTokens: event.usage.outputTokens,
+            provider: event.provider,
+            model: event.model,
+          });
           // The provider is authoritative about what it actually produced.
           assistantContent = event.message.content || assistantContent;
           if (event.message.toolCalls?.length) {
@@ -278,7 +290,12 @@ export async function runReasoningLoop(
     // no verdict at all. Corrections are what is bounded, not verification.
     if (deps.verify) {
       const verdict = await deps.verify(assistantContent, transcript);
-      emit({ type: "verification", ok: verdict.ok, reason: verdict.reason });
+      emit({
+        type: "verification",
+        ok: verdict.ok,
+        reason: verdict.reason,
+        ...(verdict.inconclusive ? { inconclusive: true } : {}),
+      });
       if (!verdict.ok && correctionsUsed < maxCorrections) {
         // Self-correction: hand the model its own failure and let it fix the answer, a bounded
         // number of times (`maxCorrections`) — unbounded, this is how agents burn budget.
@@ -301,7 +318,7 @@ export async function runReasoningLoop(
 
   function finish(
     stopReason: ReasoningResult["stopReason"],
-    verification?: { ok: boolean; reason?: string },
+    verification?: { ok: boolean; reason?: string; inconclusive?: boolean },
     unexecutedCalls?: ToolCall[]
   ): ReasoningResult {
     const lastAssistant = [...transcript].reverse().find((m) => m.role === "assistant" && m.content);
