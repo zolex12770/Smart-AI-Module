@@ -1,6 +1,6 @@
 output "api_url" {
   value       = google_cloud_run_v2_service.api.uri
-  description = "Public URL of the deployed API service."
+  description = "The API service's URL. Internal-only ingress: build the web image with API_PROXY_TARGET set to this, and call the API through web_url/api/v1."
 }
 
 output "web_url" {

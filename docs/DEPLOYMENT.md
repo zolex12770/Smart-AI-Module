@@ -22,7 +22,7 @@ Nothing here has been deployed to a cloud.
 | `terraform fmt` / `init` / `validate` | **PASS** | CI and locally (providers from a filesystem mirror where the registry is unreachable) |
 | `terraform plan` / `apply` | **BLOCKED_EXTERNAL** | needs a GCP project and credentials |
 | Cloud Run, Cloud SQL, Cloud Storage, clamd sidecar | **BLOCKED_EXTERNAL** | never exercised against the real services; GCS verified against `fake-gcs-server`, clamd against a real clamd with EICAR |
-| `TRUST_PROXY_HOPS=1` behind Cloud Run | **BLOCKED_EXTERNAL** | needs a live service to check the hop count against |
+| `TRUST_PROXY_HOPS=2` behind Cloud Run (web proxy → internal API) | **BLOCKED_EXTERNAL** | needs a live service to check the hop count against. Measured locally: Next's proxy forwards `X-Forwarded-For` unchanged and adds no entry |
 | CI pipeline | **PASS** | GitHub Actions, all five jobs green (run 36316998578) |
 
 ## Roles
@@ -60,8 +60,17 @@ listens on `PORT` (8787 by default) and accepts the web app's origin from `CORS_
 (`http://localhost:3000` by default). The web app calls `NEXT_PUBLIC_API_URL`
 (`http://localhost:8787` when unset), which is fixed at build time.
 
+**Same-origin proxy mode** (what the Terraform deployment uses): build the web app with
+`API_PROXY_TARGET=<api-url>` and an empty `NEXT_PUBLIC_API_URL`. The browser then calls only the
+web app, which forwards `/api/*` to the API. Cookies are first-party (`COOKIE_SAMESITE=lax`), and
+no CORS preflight happens. Two settings make streaming work through it, both measured: the API's
+SSE responses carry `Cache-Control: no-transform` (otherwise Next gzips and buffers the whole
+stream), and `experimental.proxyTimeout` is one hour (otherwise Next cuts a proxied request after
+30 s with no bytes, before a slow CPU model's first token).
+
 Each image builds from the repository root: `docker build -f backend/Dockerfile .` and
-`docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=<api-url> .`. Building
+`docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=<api-url> .` (direct mode) or
+`docker build -f frontend/Dockerfile --build-arg API_PROXY_TARGET=<api-url> --build-arg NEXT_PUBLIC_API_URL= .` (proxy mode). Building
 behind a TLS-intercepting proxy, or where huggingface.co is blocked, is covered in
 [docker/README.md](../docker/README.md).
 
@@ -123,8 +132,9 @@ than one that will not start.
 | `CLAMD_HOST` | `127.0.0.1` | The `clamav/clamav` sidecar on the worker pool. |
 | `COOKIE_SECURE` | implied by `NODE_ENV=production` | Session cookies over TLS only. |
 | `CORS_ORIGIN` | the web service's URL | Wired automatically by Terraform. |
+| `COOKIE_SAMESITE` | `lax` in proxy mode (Terraform sets it); derived `none` when the web app calls the API cross-site | `none` makes the session a third-party cookie, which Safari blocks and Chrome is phasing out. |
 | `METRICS_PORT` / `METRICS_TOKEN` | set on the worker pool if it is scraped; always with a token outside a private network | A metrics-only listener (`GET /metrics`). Labels carry no tenant data, but counts are still operational information. |
-| `TRUST_PROXY_HOPS` | `1` directly behind Cloud Run's front end (Terraform sets it); `2` behind an external HTTPS load balancer; `0`, the default, with nothing in front | `request.ip` — every per-IP rate limit and audit row — trusts only the `X-Forwarded-For` entries that many proxies appended (ADR-112). A number higher than the real hop count lets a caller choose its own address. The Cloud Run value is unverified against a live service. |
+| `TRUST_PROXY_HOPS` | `2` behind the web service's proxy on Cloud Run (Terraform sets it, with the API's ingress internal-only so nobody can skip the proxy); `1` for an API called directly behind Cloud Run's front end; `0`, the default, with nothing in front | `request.ip` — every per-IP rate limit and audit row — trusts only the `X-Forwarded-For` entries that many proxies appended (ADR-112). A number higher than the real hop count lets a caller choose its own address. The Cloud Run value is unverified against a live service. |
 
 ## First run
 
@@ -137,8 +147,8 @@ behind your own ingress policy if that is not what you want.
 1. `terraform apply -target=google_project_service.apis -target=google_artifact_registry_repository.images`
    — breaks the image/registry circular dependency.
 2. Build and push the API image (`backend/Dockerfile`). Build the web image (`frontend/Dockerfile`)
-   with `NEXT_PUBLIC_API_URL` baked in (it is a build-time constant), which means the API's URL must
-   exist first. The full commands are in the runbook's §2.
+   with `API_PROXY_TARGET` set to the API's URL and `NEXT_PUBLIC_API_URL` empty (both build-time
+   constants), which means the API's URL must exist first. The full commands are in the runbook's §2.
 3. Full `terraform apply`.
 4. Run migrations against Cloud SQL through the Auth Proxy:
    `npm run db:migrate -w @ai-platform/database`.

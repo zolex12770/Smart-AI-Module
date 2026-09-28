@@ -126,7 +126,11 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
 
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      // `no-transform` stops any compressing proxy in between (the web app's same-origin mode, a
+      // CDN, nginx) from gzipping the stream, which buffers every event until the end; the second
+      // header is nginx's spelling of the same request.
+      "Cache-Control": "no-cache, no-transform",
+      "X-Accel-Buffering": "no",
       Connection: "keep-alive",
       // See backend/src/routes/v1/chat.ts for why this is written by hand: reply.hijack()
       // bypasses @fastify/cors's response hook entirely. The EventSource subscribes with

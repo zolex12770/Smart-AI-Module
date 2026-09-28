@@ -233,3 +233,29 @@ describe("requests the API will actually accept", () => {
     expect((init.headers as Headers).get("Content-Type")).toBeNull();
   });
 });
+
+/**
+ * The web app and the API on DIFFERENT hosts (the Cloud Run topology). The API's aip_csrf cookie
+ * is then not readable from this page, and every mutating request failed the double-submit check.
+ * The token the API returns at login is what a mutating request must carry instead.
+ */
+describe("CSRF when the API is on another host", () => {
+  afterEach(() => window.localStorage.clear());
+
+  it("sends the token the login response carried, with no readable cookie", async () => {
+    expect(document.cookie).not.toMatch(/aip_csrf=/);
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith("/auth/login")
+        ? new Response(JSON.stringify({ user: { id: "u1" }, projects: [{ id: "p-a" }], csrfToken: "issued-token-123" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })
+        : new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await login("a@example.com", "a-sufficiently-long-password");
+    await apiFetch("/api/v1/memory", { method: "POST", body: { content: "x" } });
+    const [, init] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get("x-csrf-token")).toBe("issued-token-123");
+  });
+});

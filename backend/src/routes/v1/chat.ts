@@ -87,7 +87,23 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       if (!parsed.success) {
         throw new ValidationError(parsed.error.message);
       }
-      const chatRequest = parsed.data;
+      /**
+       * What a caller may choose, and what the operator chooses for them.
+       *
+       * `model` is refused outright: the adapters send it verbatim, so a caller could pick any
+       * model the operator's key can reach, at any price. `provider` stays — it only selects
+       * among the providers the operator registered. `maxOutputTokens` is capped, and when absent
+       * the cap applies, so the quota estimate below can count the output this turn may produce.
+       */
+      if (parsed.data.model !== undefined) {
+        throw new ValidationError("`model` cannot be chosen per request; the operator configures the model.");
+      }
+      if (parsed.data.maxOutputTokens !== undefined && parsed.data.maxOutputTokens > ctx.chatMaxOutputTokens) {
+        throw new ValidationError(
+          `maxOutputTokens must be at most ${ctx.chatMaxOutputTokens} on this deployment (CHAT_MAX_OUTPUT_TOKENS).`
+        );
+      }
+      const chatRequest = { ...parsed.data, maxOutputTokens: parsed.data.maxOutputTokens ?? ctx.chatMaxOutputTokens };
 
       // An existing conversation is fetched *within* the project; a new one is created in it
       // and attributed to the authenticated principal, never to a hardcoded owner (ADR-049).
@@ -270,7 +286,11 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       // QUOTA_STRATEGY.md): a rough pre-flight estimate (real token counts aren't known until
       // the provider responds) decides only whether to reject now; the usage actually
       // recorded below is always the real post-call figure.
-      const estimatedTokens = estimatePromptTokens(promptMessages.map((m) => m.content).join(" "));
+      // Input AND the output this turn may produce: the provider is held to `maxOutputTokens`,
+      // so that is the most it can add, and a check on the prompt alone let one request spend
+      // far past the remaining allowance.
+      const estimatedTokens =
+        estimatePromptTokens(promptMessages.map((m) => m.content).join(" ")) + chatRequest.maxOutputTokens;
       // Quota is per project (ADR-049): one project's spend must never exhaust another's
       // allowance, so the scope goes into the check itself rather than being a global counter.
       const quotaCheck = await ctx.quota.checkLlmTokens(projectId, estimatedTokens);
@@ -283,7 +303,11 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
       // the whole streamed response even though the server sent it successfully.
       reply.raw.writeHead(200, {
         "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
+        // `no-transform` stops any compressing proxy in between (the web app's same-origin mode, a
+        // CDN, nginx) from gzipping the stream, which buffers every event until the end; the second
+        // header is nginx's spelling of the same request.
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
         Connection: "keep-alive",
         "X-Conversation-Id": conversation.id,
         "Access-Control-Allow-Origin": ctx.corsOrigin,

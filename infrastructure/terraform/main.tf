@@ -32,6 +32,7 @@ locals {
     "sqladmin.googleapis.com",
     "secretmanager.googleapis.com",
     "artifactregistry.googleapis.com",
+    "compute.googleapis.com", # the VPC the web service reaches the internal-only API through
   ]
 }
 
@@ -40,6 +41,29 @@ resource "google_project_service" "apis" {
   project            = var.project_id
   service            = each.value
   disable_on_destroy = false
+}
+
+# --- Network: web -> API --------------------------------------------------------
+# The web service proxies /api/* to the API (same-origin mode, frontend/next.config.mjs), and
+# the API accepts traffic ONLY from inside this VPC (ingress below). The web service reaches it
+# with Direct VPC egress, all traffic routed through this subnet; Private Google Access is what
+# lets that traffic reach the API's *.run.app address. Two reasons, docs/DECISION_LOG.md:
+#   - the API trusts two X-Forwarded-For hops (caller -> web front end -> web -> API front
+#     end). Were the API public, a caller going to it directly could write the entry the API
+#     trusts and choose their own rate-limit key;
+#   - every browser request is same-origin, so the session cookie is first-party.
+resource "google_compute_network" "main" {
+  name                    = "ai-platform"
+  auto_create_subnetworks = false
+  depends_on              = [google_project_service.apis]
+}
+
+resource "google_compute_subnetwork" "run" {
+  name                     = "ai-platform-run"
+  region                   = var.region
+  network                  = google_compute_network.main.id
+  ip_cidr_range            = "10.8.0.0/24"
+  private_ip_google_access = true
 }
 
 # --- Artifact Registry --------------------------------------------------------
@@ -284,12 +308,23 @@ resource "google_cloud_run_v2_service" "api" {
   name                = "ai-platform-api"
   location            = var.region
   deletion_protection = false
+  # Reachable only from the VPC above, i.e. through the web service's proxy. API-key clients
+  # use the same path: <web URL>/api/v1/...
+  ingress = "INGRESS_TRAFFIC_INTERNAL_ONLY"
 
   template {
     service_account = google_service_account.api.email
 
+    # The chat and agent streams are long-lived SSE responses. Cloud Run's default request
+    # timeout (300 s) would cut a slow CPU generation or a long agent run mid-stream, so the
+    # service allows the maximum. See docs/DECISION_LOG.md (Cloud Run API streaming).
+    timeout = "3600s"
+
     scaling {
-      min_instance_count = 0 # scale-to-zero, docs/18 §4.
+      # One warm instance: with scale-to-zero the first request after idle pays the container
+      # start plus the model warm-up, and the in-process agent engine (below) loses any task
+      # it was driving when the instance is reclaimed. A standing cost, deliberately.
+      min_instance_count = 1
       /**
        * ONE instance, deliberately — docs/26_DECISIONS.md ADR-159.
        *
@@ -317,6 +352,17 @@ resource "google_cloud_run_v2_service" "api" {
 
     containers {
       image = var.api_image
+
+      resources {
+        # CPU always allocated. With request-based billing, CPU is throttled outside a request,
+        # which starves the in-process agent engine and the pg-boss maintenance loop, and a
+        # streamed response still being flushed.
+        cpu_idle = false
+        limits = {
+          cpu    = "1"
+          memory = "1Gi"
+        }
+      }
 
       volume_mounts {
         name       = "cloudsql"
@@ -402,12 +448,20 @@ resource "google_cloud_run_v2_service" "api" {
         value = "/tmp/assets"
       }
       env {
-        # ADR-112 — how many proxies' X-Forwarded-For entries to trust. Cloud Run's front end
-        # appends the caller's address, so 1 takes that entry and ignores anything the caller
-        # wrote; an external HTTPS load balancer in front makes it 2. Not verified against a live
-        # Cloud Run service — this environment has no GCP project.
+        # ADR-112 — how many proxies' X-Forwarded-For entries to trust. The web service's front
+        # end appends the caller's address; Next's proxy forwards the header unchanged
+        # (measured); this service's front end appends the web instance's VPC address. So the
+        # caller is the second entry from the right, and anything the caller wrote is further
+        # left and ignored. Safe only because ingress is internal (above). Not verified against
+        # a live Cloud Run service — this environment has no GCP project.
         name  = "TRUST_PROXY_HOPS"
-        value = "1"
+        value = "2"
+      }
+      env {
+        # Same-origin through the web service's proxy: the session cookie is first-party, so
+        # Lax is enough, and it is what browsers that block third-party cookies accept.
+        name  = "COOKIE_SAMESITE"
+        value = "lax"
       }
       env {
         # ADR-040 — generated assets go to Cloud Storage, not the instance's ephemeral disk.
@@ -558,6 +612,18 @@ resource "google_cloud_run_v2_service" "web" {
   template {
     service_account = google_service_account.web.email
 
+    # All egress through the VPC: the only thing the web service calls is the internal-only API.
+    vpc_access {
+      network_interfaces {
+        network    = google_compute_network.main.id
+        subnetwork = google_compute_subnetwork.run.id
+      }
+      egress = "ALL_TRAFFIC"
+    }
+
+    # The proxied chat and agent streams live as long as the API allows (see the API service).
+    timeout = "3600s"
+
     scaling {
       min_instance_count = 0
       max_instance_count = 3
@@ -565,8 +631,12 @@ resource "google_cloud_run_v2_service" "web" {
 
     containers {
       image = var.web_image
-      # NEXT_PUBLIC_API_URL is already baked into this image at build time (see
-      # frontend/Dockerfile's build arg) — nothing to set here at runtime for it.
+      # The web image is built in same-origin proxy mode (docs/PRODUCTION_DEPLOYMENT.md):
+      # API_PROXY_TARGET=<api service URL> and an empty NEXT_PUBLIC_API_URL, both build args
+      # baked in by `next build`. The browser then only ever talks to this service, and Next
+      # forwards /api/* to the API. Without this the session cookie is a third-party cookie
+      # (two different *.run.app hosts, and run.app is a public suffix), and browsers that
+      # block third-party cookies cannot sign in.
     }
   }
 

@@ -49,13 +49,15 @@ gcloud auth configure-docker <REGION>-docker.pkg.dev
 docker build -f backend/Dockerfile -t <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/api:latest .
 docker push <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/api:latest
 
-# The web image needs the API's eventual URL baked in at build time (NEXT_PUBLIC_API_URL is a
-# Next.js build-time constant, not something read at container start — frontend/Dockerfile).
+# The web image needs the API's URL baked in at build time: it proxies /api/* to it (same-origin
+# mode, API_PROXY_TARGET) and the browser never calls the API itself — the API's ingress is
+# internal-only. NEXT_PUBLIC_API_URL stays EMPTY so the browser calls its own origin.
 # If this is the very first deploy, the API's URL isn't known yet: apply just the API service
 # first (step 4 below, without -target=...web), read its URL from the output, then come back
 # and build the web image with that URL before applying the web service.
 docker build -f frontend/Dockerfile \
-  --build-arg NEXT_PUBLIC_API_URL=https://<api-service-url> \
+  --build-arg API_PROXY_TARGET=https://<api-service-url> \
+  --build-arg NEXT_PUBLIC_API_URL= \
   -t <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/web:latest .
 docker push <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/web:latest
 ```
@@ -76,7 +78,10 @@ NOT scale-to-zero and are the ones to double-check against the approved budget (
 Cloud SQL instance, and the job worker pool (docs/26_DECISIONS.md ADR-039 — `MANUAL` scaling with
 one always-on instance, the smallest configuration a worker pool supports; set
 `manual_instance_count = 0` in `terraform/main.tf` to pause processing without destroying it).
-The API and web services scale to zero.
+The web service scales to zero. The API service does not: it keeps one instance with CPU always
+allocated (`min_instance_count = 1`, `cpu_idle = false`) so the in-process agent engine is not
+throttled or reclaimed mid-run and the first chat after idle does not pay a cold start — a
+standing cost to check against the budget too.
 
 ## 4. Run database migrations
 

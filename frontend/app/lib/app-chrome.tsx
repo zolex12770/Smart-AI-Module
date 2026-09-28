@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSession } from "./session-context";
+import { RequireSession, useSession } from "./session-context";
 
 const NAV_LINKS = [
   { href: "/chat", label: "Chat" },
@@ -81,7 +81,16 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
           </div>
         ) : null}
       </nav>
-      <main className="app-main">{children}</main>
+      <main className="app-main">
+        {/*
+          Every screen behind the chrome needs a session, and most did not say so: they fetched
+          before the session was known and again when sign-out cleared the project, which put
+          401s in the console (found by the real-browser acceptance). Gating here covers every
+          screen, present and future. `requireProject` stays with the screens that need one —
+          Settings is where an account with no project goes to create it.
+        */}
+        <RequireSession requireProject={false}>{children}</RequireSession>
+      </main>
     </div>
   );
 }

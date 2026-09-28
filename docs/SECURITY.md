@@ -15,7 +15,7 @@ file describes the **implementation**, and says plainly where the two diverge.
 |---|---|
 | Password storage | scrypt (RFC 7914) from Node's own crypto, `N=2^17, r=8, p=1`. Parameters are encoded in the hash, so the cost can be raised without invalidating existing hashes; a weaker hash is upgraded on next successful login. |
 | Session storage | 256-bit CSPRNG token; the database stores **only** a SHA-256. A database dump cannot be replayed as live sessions. |
-| Session transport | `httpOnly` cookie (JavaScript cannot read it, so an XSS bug cannot exfiltrate it), `SameSite=Lax`, `Secure` in production. |
+| Session transport | `httpOnly` cookie (JavaScript cannot read it, so an XSS bug cannot exfiltrate it), `Secure` in production. `SameSite` is `COOKIE_SAMESITE`: `Lax` behind the same-origin proxy (the Terraform deployment) and in local development; derived `None` when cookies are Secure and the browser calls the API on another site, which is when the double-submit CSRF token matters (ADR-070). |
 | API keys | 256-bit token prefixed `aip_`; only a SHA-256 is stored. The plaintext is returned exactly once, at creation. A non-secret prefix is kept so a user can identify a key in a list. |
 | Enumeration resistance | A wrong password and an unknown email return the **same** error and do comparable work (a decoy hash is verified when no account exists). |
 | Brute force | Failed-login counter with temporary lockout, shared by login and by the password re-check before account deletion (ADR-108); signup and login carry tighter per-route rate limits than the global default. Those limits are per IP, so they depend on `TRUST_PROXY_HOPS` (§9). |

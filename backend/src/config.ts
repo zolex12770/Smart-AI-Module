@@ -158,6 +158,15 @@ const envFields = z.object({
    * cold disk, long enough for Ollama's own load deadline to fail the request.
    */
   LLM_WARMUP: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  /**
+   * The most output tokens one chat turn may ask for, and the cap applied when it asks for none.
+   *
+   * A caller's `maxOutputTokens` is spent on the operator's key, and the pre-flight quota check
+   * has to count output, not just the prompt — without a ceiling one request could reserve
+   * 200,000 tokens of the most expensive model (audit finding, docs/DECISION_LOG.md). A request
+   * above it is refused with 400, not silently clamped.
+   */
+  CHAT_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().max(200_000).default(4096),
   LLM_API_KEY: optionalString,
   LLM_CONTEXT_WINDOW: optionalPositiveInt,
 

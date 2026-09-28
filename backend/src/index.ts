@@ -1537,6 +1537,7 @@ async function main() {
     conversations: new PgConversationRepository(db),
     messages: new PgMessageRepository(db),
     corsOrigin: config.CORS_ORIGIN,
+    chatMaxOutputTokens: config.CHAT_MAX_OUTPUT_TOKENS,
     engine,
     tasks,
     taskNodes,

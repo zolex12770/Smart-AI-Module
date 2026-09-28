@@ -127,7 +127,15 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext): void 
   app.get("/api/v1/auth/me", async (request) => {
     const user = requireUser(request);
     const projects = await ctx.auth.listProjectsForUser(user.id);
-    return { user, projects, method: request.auth?.method };
+    /**
+     * The double-submit token, for a web app on ANOTHER host than this API (the Cloud Run
+     * topology: two *.run.app origins). The cookie belongs to this host, so that page cannot read
+     * it from `document.cookie` and every mutating request failed CSRF. Login and signup already
+     * return it; returning it here as well is what lets a reloaded page recover it. Only a
+     * CORS-allowed origin can read this response, which is the same trust the token relies on.
+     */
+    const csrfToken = request.auth?.method === "session" ? (request.cookies?.[CSRF_COOKIE] ?? null) : null;
+    return { user, projects, method: request.auth?.method, csrfToken };
   });
 
   /**

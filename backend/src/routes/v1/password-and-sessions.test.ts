@@ -68,6 +68,13 @@ describe("password change and session management", () => {
     expect(mismatched.statusCode, mismatched.body).toBe(404);
   });
 
+  it("returns the double-submit token from /auth/me to a session, so a web app on another host can recover it", async () => {
+    const alice = await signUp("alice@example.com");
+    const csrf = alice.headers["x-csrf-token"];
+    const res = await me(alice.headers);
+    expect((res.json() as { csrfToken: string | null }).csrfToken).toBe(csrf);
+  });
+
   it("changes the password, and the new one is what works afterwards", async () => {
     const alice = await signUp("alice@example.com");
 

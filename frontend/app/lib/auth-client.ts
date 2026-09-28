@@ -41,10 +41,24 @@ export interface ProjectSummary {
 const CSRF_COOKIE = "aip_csrf";
 const PROJECT_STORAGE_KEY = "aip.selectedProjectId";
 
+/**
+ * The token the API handed back at login, signup or `/auth/me`.
+ *
+ * On localhost the API's `aip_csrf` cookie is readable here (same host, different port). Deployed
+ * with the web app and the API on DIFFERENT hosts, it is not: the cookie belongs to the API host,
+ * `document.cookie` never shows it, and every mutating request used to fail the double-submit
+ * check with 403. The API returns the token in those responses for exactly this case.
+ */
+let issuedCsrfToken: string | null = null;
+
+export function rememberCsrfToken(token: string | null | undefined): void {
+  if (token) issuedCsrfToken = token;
+}
+
 export function readCsrfToken(): string | null {
-  if (typeof document === "undefined") return null;
+  if (typeof document === "undefined") return issuedCsrfToken;
   const match = document.cookie.split("; ").find((c) => c.startsWith(`${CSRF_COOKIE}=`));
-  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : null;
+  return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : issuedCsrfToken;
 }
 
 export function getSelectedProjectId(): string | null {
@@ -156,21 +170,23 @@ export async function signup(input: {
   displayName: string;
   organizationName?: string;
 }): Promise<{ user: SessionUser; defaultProjectId: string }> {
-  const result = await apiFetch<{ user: SessionUser; defaultProjectId: string }>("/api/v1/auth/signup", {
+  const result = await apiFetch<{ user: SessionUser; defaultProjectId: string; csrfToken?: string }>("/api/v1/auth/signup", {
     method: "POST",
     body: input,
     unscoped: true,
   });
+  rememberCsrfToken(result.csrfToken);
   setSelectedProjectId(result.defaultProjectId);
   return result;
 }
 
 export async function login(email: string, password: string): Promise<{ user: SessionUser; projects: ProjectSummary[] }> {
-  const result = await apiFetch<{ user: SessionUser; projects: ProjectSummary[] }>("/api/v1/auth/login", {
+  const result = await apiFetch<{ user: SessionUser; projects: ProjectSummary[]; csrfToken?: string }>("/api/v1/auth/login", {
     method: "POST",
     body: { email, password },
     unscoped: true,
   });
+  rememberCsrfToken(result.csrfToken);
   if (result.projects[0]) setSelectedProjectId(result.projects[0].id);
   return result;
 }
@@ -181,7 +197,11 @@ export async function logout(): Promise<void> {
 
 export async function fetchSession(): Promise<{ user: SessionUser; projects: ProjectSummary[] } | null> {
   try {
-    return await apiFetch<{ user: SessionUser; projects: ProjectSummary[] }>("/api/v1/auth/me", { unscoped: true });
+    const result = await apiFetch<{ user: SessionUser; projects: ProjectSummary[]; csrfToken?: string | null }>("/api/v1/auth/me", {
+      unscoped: true,
+    });
+    rememberCsrfToken(result.csrfToken);
+    return result;
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return null;
     throw err;

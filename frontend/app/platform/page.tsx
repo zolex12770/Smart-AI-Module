@@ -97,7 +97,8 @@ export default function PlatformPage() {
 }
 
 function PlatformView() {
-  const { projectId } = useSession();
+  const { projectId, user } = useSession();
+  const isSystemAdmin = Boolean(user?.isSystemAdmin);
   const [models, setModels] = useState<ModelRow[]>([]);
   const [tools, setTools] = useState<ToolRow[]>([]);
   const [mcp, setMcp] = useState<McpRow[]>([]);
@@ -122,7 +123,11 @@ function PlatformView() {
         apiFetch<{ servers: McpRow[] }>("/api/v1/mcp"),
         apiFetch<{ jobs: JobRow[] }>("/api/v1/jobs"),
         apiFetch<{ deadLettered: DeadLetterRow[] }>("/api/v1/jobs/dead-letter"),
-        apiFetch<HealthResponse>("/api/v1/admin/health"),
+        // Asked only by a system administrator. For anyone else the answer is a known 404, and
+        // making the request anyway put a failed request in every member's browser console.
+        isSystemAdmin
+          ? apiFetch<HealthResponse>("/api/v1/admin/health")
+          : Promise.reject(new Error("readiness details are for system administrators")),
       ]);
 
       if (modelsRes.status === "fulfilled") setModels(modelsRes.value.models ?? []);
@@ -155,7 +160,7 @@ function PlatformView() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load platform status.");
     }
-  }, []);
+  }, [isSystemAdmin]);
 
   /**
    * Reconnects a dropped MCP server — ADR-144.

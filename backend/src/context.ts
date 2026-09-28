@@ -37,6 +37,8 @@ export interface AppContext {
   conversations: ConversationRepository;
   messages: MessageRepository;
   corsOrigin: string;
+  /** CHAT_MAX_OUTPUT_TOKENS — the ceiling on, and default for, one chat turn's output. */
+  chatMaxOutputTokens: number;
   engine: AgentEngine;
   tasks: TaskRepository;
   taskNodes: TaskNodeRepository;
