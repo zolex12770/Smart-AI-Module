@@ -31,7 +31,7 @@ import {
 import { EmbeddingService, HashEmbeddingProvider } from "@ai-platform/embeddings";
 import { MemoryService } from "@ai-platform/memory";
 import { fromPglite, JobQueue, type JobQueueOptions } from "@ai-platform/jobs";
-import { DEFAULT_EMBED_TIMEOUT_MS, LocalEmbeddingProvider } from "@ai-platform/llm-local";
+import { DEFAULT_EMBED_TIMEOUT_MS, LocalEmbeddingProvider, LocalOpenAICompatibleProvider } from "@ai-platform/llm-local";
 import { McpManager, parseMcpServerConfigs } from "@ai-platform/mcp";
 import {
   CloudStorageAssetStore,
@@ -293,7 +293,10 @@ async function main() {
   // loaded. Not awaited: boot must not wait on a model.
   if (config.LLM_WARMUP && runs.http && chatProviderCount > 0) {
     const chatDefault = registry.getDefault();
-    if (chatDefault.name === "local") void warmUpChatModel(chatDefault, logger);
+    // With the load deadline, not the ordinary one: an abandoned warm-up cancels the load (DL-22).
+    if (chatDefault instanceof LocalOpenAICompatibleProvider) {
+      void warmUpChatModel(chatDefault.withRequestTimeout(config.LLM_LOAD_TIMEOUT_MS), logger);
+    }
   }
 
   const sandboxRoot = resolve(config.SANDBOX_ROOT);

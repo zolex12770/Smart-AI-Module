@@ -159,6 +159,12 @@ const envFields = z.object({
    */
   LLM_WARMUP: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
   /**
+   * How long the boot warm-up waits for the local model to load (DL-22). Only the warm-up uses
+   * it; ordinary calls keep the adapter's 300-second silence deadline. A cold load of a 7B model
+   * took over five minutes here, and Ollama cancels a load whose request gives up.
+   */
+  LLM_LOAD_TIMEOUT_MS: z.coerce.number().int().min(1000).max(3_600_000).default(1_200_000),
+  /**
    * The most output tokens one chat turn may ask for, and the cap applied when it asks for none.
    *
    * A caller's `maxOutputTokens` is spent on the operator's key, and the pre-flight quota check

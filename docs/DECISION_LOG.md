@@ -602,3 +602,23 @@ five-minute turn cost nothing. Chat already charges an estimate for this case (D
   for `model_call` nodes. Nothing is charged when the provider failed before answering.
 - **Test:** `autonomous.test.ts` and `engine.test.ts` each have two tests. The charging test in
   each fails on the old engine.
+
+## DL-22: The warm-up waits out a cold model load
+
+**Context.** After the container restarted, the rerun's first coding task failed before its
+first tool call: "stopped sending for 300000ms". Ollama's log showed the cause:
+1. The warm-up request started loading qwen2.5:7b from a cold disk.
+2. At 5m0s the request was abandoned, and Ollama logged 499 and cancelled the load.
+3. The next request started the load again from scratch, and was abandoned the same way.
+
+The model never became ready. The previous total deadline (DL-21) had the same flaw. It was
+recorded in TROUBLESHOOTING as "past Ollama's own load deadline" without the cause.
+
+**Decision.**
+- The warm-up uses its own deadline, `LLM_LOAD_TIMEOUT_MS`, default 20 minutes, through
+  `LocalOpenAICompatibleProvider.withRequestTimeout()`.
+- Ordinary calls keep the 300-second silence deadline. A request that arrives during the load
+  may still fail, but the warm-up keeps the load alive, so the model becomes ready.
+
+**Test.** `llm-local/src/index.test.ts`: a runtime silent for 250 ms fails at a 100 ms deadline
+and succeeds through `withRequestTimeout(2000)`.

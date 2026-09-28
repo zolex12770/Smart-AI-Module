@@ -259,6 +259,30 @@ describe("LocalOpenAICompatibleProvider request deadline", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  it("withRequestTimeout gives the same runtime a longer wait, for a model that is still loading (DL-22)", async () => {
+    // Silent for ~250 ms before the first byte: a model load, as the runtime sees it.
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, 250);
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(t);
+          reject(new DOMException("This operation was aborted", "AbortError"));
+        });
+      });
+      const body =
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}\n\n` +
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1 } })}\n\n` +
+        "data: [DONE]\n\n";
+      return new Response(stringToStream(body), { status: 200 });
+    }) as unknown as typeof fetch;
+    const ordinary = new LocalOpenAICompatibleProvider({ ...base, fetchImpl, requestTimeoutMs: 100 });
+    await expect(collect(ordinary, { messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(/stopped sending/);
+    const patient = ordinary.withRequestTimeout(2_000);
+    expect(patient.model).toBe(ordinary.model);
+    const events = await collect(patient, { messages: [{ role: "user", content: "hi" }] });
+    expect(events.some((e) => e.type === "done")).toBe(true);
+  });
+
   it("closes the request when the caller stops reading, so the runtime stops generating", async () => {
     const { fetchImpl, signals } = pacedFetch(100, 10, false);
     const provider = new LocalOpenAICompatibleProvider({ ...base, fetchImpl, requestTimeoutMs: 5_000 });

@@ -71,7 +71,7 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
   private readonly supportsTools: boolean;
   private readonly requestTimeoutMs: number;
 
-  constructor(options: LocalProviderOptions) {
+  constructor(private readonly options: LocalProviderOptions) {
     this.name = options.name ?? "local";
     this.model = options.model;
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
@@ -80,6 +80,19 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
     this.contextWindow = options.contextWindow ?? null;
     this.supportsTools = options.supportsTools ?? true;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 300_000;
+  }
+
+  /**
+   * The same runtime and model with another silence deadline — DL-22.
+   *
+   * For the boot warm-up, whose whole job is to wait out a model load. Measured after a restart:
+   * a cold load of qwen2.5:7b took more than five minutes, and Ollama CANCELS a load when the
+   * request that started it disconnects (it logged 499 at 5m0s, then started the load again for
+   * the next request). A warm-up abandoned at the ordinary deadline therefore restarted the load
+   * forever and the model never became ready.
+   */
+  withRequestTimeout(requestTimeoutMs: number): LocalOpenAICompatibleProvider {
+    return new LocalOpenAICompatibleProvider({ ...this.options, requestTimeoutMs });
   }
 
   capabilities(): ProviderCapabilities {

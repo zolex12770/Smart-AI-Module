@@ -28,11 +28,14 @@ rebuild the image.
 Start Ollama (`ollama serve`, then `ollama pull qwen2.5:7b && ollama pull nomic-embed-text`), or
 set `LLM_BASE_URL` and `LLM_MODEL`.
 
-**The first chat after a restart fails with "Load failed … timed out" or waits for minutes.**
-Ollama loads the 4.7 GB model from disk on first use. Measured from a cold disk, that took more
-than five minutes, past Ollama's own load deadline. `LLM_WARMUP` (on by default) makes the API
-load it at boot: look for `chat model warmed up` in the log before testing. Keep Ollama's
-`OLLAMA_KEEP_ALIVE` long enough that the model is not evicted between uses.
+**The first chat after a restart fails with "stopped sending for 300000ms" or waits for minutes.**
+Ollama loads the 4.7 GB model from disk on first use. Measured from a cold disk after a restart,
+that took more than five minutes. `LLM_WARMUP` (on by default) makes the API load it at boot and
+waits up to `LLM_LOAD_TIMEOUT_MS` (20 minutes) for it. Look for `chat model warmed up` in the log
+before testing. Requests sent before then may fail; the load continues regardless. Do not lower
+`LLM_LOAD_TIMEOUT_MS` below the load time: Ollama cancels a load whose request gives up, so the
+model would never become ready (DL-22). Keep Ollama's `OLLAMA_KEEP_ALIVE` long enough that the
+model is not evicted between uses.
 
 **The agent ignores the task on long runs, or loses the thread.**
 The model's context window is too small. Run Ollama with `OLLAMA_CONTEXT_LENGTH=16384` (its
