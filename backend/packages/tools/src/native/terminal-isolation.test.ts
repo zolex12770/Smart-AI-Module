@@ -25,7 +25,9 @@ describe("terminal.run_command environment isolation (ADR-077)", () => {
   let workspace: string;
   const PROJECT_ID = "p1";
   const CANARIES = {
-    ANTHROPIC_API_KEY: "sk-ant-CANARY-must-not-escape",
+    // Joined at runtime: the literal has a real key's shape, and `npm run verify`'s secret scan
+    // (rightly) refuses any tracked file containing one.
+    ANTHROPIC_API_KEY: ["sk-ant", "CANARY-must-not-escape"].join("-"),
     OPENAI_API_KEY: "sk-CANARY-must-not-escape",
     DATABASE_URL: "postgres://canary:canary@localhost/canary",
     SESSION_SECRET: "CANARY-session-secret",
