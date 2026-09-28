@@ -27,7 +27,7 @@ On the final API image:
 - The full-system acceptance: **24/24**.
 - The attack suite: **11/11**.
 - Failure injection: **5/5**.
-- The browser suite: see §23.
+- The browser suite: **11/11**, including video playback in a browser without H.264.
 - CI is green on every code commit.
 
 **Running the platform for real this pass found 13 platform defects that tests had not caught.**
@@ -184,7 +184,7 @@ stable-diffusion.cpp (built from source) runs SDXL base 1.0 (q8_0) in the worker
 | IMAGE-NEGATIVE | PASS: 5 invalid requests → 400, and no generation was created |
 | IMAGE-REPRODUCIBLE (the idempotence check) | PASS: seed 4242 twice → byte-identical (sha256 `f7c2c1b9…`); seed 777 → a different image |
 | MEDIA-CRASH (sd-cli killed mid-run) | PASS: settled `failed` with no internals in the message, and not charged |
-| Browser IMAGE-UI | see §23 |
+| Browser IMAGE-UI | PASS: the browser decoded the generated 512×512 image |
 
 ## 13. Audio
 
@@ -364,7 +364,22 @@ Per workspace:
   web app with real models): the results are in
   [evidence/2026-09-28/browser-compose-final.md](evidence/2026-09-28/browser-compose-final.md).
 
-_This run was still in progress at this commit. Its results are added in the next commit._
+**Browser acceptance on the final stack: 11/11 PASS.** Every screen was checked for console errors
+and failed requests.
+
+| Check | Observed |
+|---|---|
+| SIGNUP | signed up in the browser and landed on `/chat` |
+| CHAT-STREAMING | 78 distinct rendered lengths while streaming; the header names `local (qwen2.5:7b)` |
+| CHAT-MULTI-TURN | 4 messages before a reload, 4 after, same URL |
+| CHAT-CANCEL | stopped at 12 characters and still 12 three seconds later; Send came back; the next answer arrived |
+| MEMORY-UI | "teal-599" filed on `/memory`; a new chat answered "teal-599" |
+| RAG-UI | answered "22:00" with the source shown; an unanswerable question was refused |
+| IMAGE-UI | the browser decoded the generated 512×512 image; a download link is present |
+| AUDIO-UI | the browser loaded the speech: 3.18 s |
+| VIDEO-UI | the browser (H.264 support `""`) decoded the WebM rendition: 8.0 s, 640 px, 1 subtitle track, 2 narration players |
+| ROUTES | 12 screens, no browser errors, no placeholder text |
+| LOGOUT-LOGIN | 4 conversations listed after signing back in |
 
 ## 24. Real-runtime evidence
 
@@ -377,11 +392,31 @@ All in [evidence/2026-09-28/](evidence/2026-09-28/):
 | Failure injection | run 1: 1/5 (three platform defects, two script defects); run 2: **5/5** | `failure-injection-run1.md`, `failure-injection-run2.md` |
 | Extra scenarios | run 3: 3 PASS, 1 FAIL (CODING-SECOND, §9) | `extra-scenarios-run*.md` |
 | Browser, VIDEO-UI after DL-19 | PASS (WebM decoded) | `browser-video-webm.md` |
-| Browser, full suite, final stack | see §23 | `browser-compose-final.md` |
+| Browser, full suite, final stack | **11/11** | `browser-compose-final.md` |
 | `npm run verify` | §22 | `verify.md` |
-| Latency | see below | `latency-compose-final.md` |
+| Latency | measured, below | `latency-compose-final.md` |
 
-_The latency measurement runs after the browser suite. Its results are added in the next commit._
+**Latency on the final stack** (4 CPU cores, 16 GB, no GPU; observations, not targets):
+
+| Measurement (ms) | n | p50 | p95 | max |
+|---|---|---|---|---|
+| liveness `GET /api/health` | 50 | 2.8 | 4.3 | 6.5 |
+| authenticated read `GET /api/v1/conversations` | 30 | 6.2 | 14.9 | 29.5 |
+| readiness `GET /api/v1/admin/health` (database + queue) | 20 | 12.3 | 15.4 | 15.4 |
+| embedding, one passage (nomic-embed-text) | 10 | 138.5 | 219.5 | 219.5 |
+| chat: time to first token | 3 | 3370 | 3911 | 3911 |
+| chat: interval between tokens | 154 | 224 | 306 | 391 |
+
+Durations from the acceptance run:
+
+| Operation | Duration |
+|---|---|
+| Image (SDXL, 512×512) | 352.8 s |
+| Speech (Piper) | 6.1 s for 4.09 s of audio |
+| Video (8 s, 2 narrated scenes) | 486.9 s |
+| Coding agent | 246 s |
+| RAG answer | 18 s |
+| Memory formed after the turn | 29.6 s |
 
 ## 25. Blockers
 

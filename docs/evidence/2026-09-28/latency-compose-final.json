@@ -1,0 +1,42 @@
+{
+  "api": "http://127.0.0.1:8787",
+  "measuredAt": "2026-09-28T13:18:03.465Z",
+  "liveness_ms": {
+    "n": 50,
+    "p50": 2.8,
+    "p95": 4.3,
+    "max": 6.5
+  },
+  "authenticated_read_ms": {
+    "n": 30,
+    "p50": 6.2,
+    "p95": 14.9,
+    "max": 29.5
+  },
+  "readiness_ms": {
+    "n": 20,
+    "p50": 12.3,
+    "p95": 15.4,
+    "max": 15.4
+  },
+  "embedding_ms": {
+    "n": 10,
+    "p50": 138.5,
+    "p95": 219.5,
+    "max": 219.5,
+    "model": "nomic-embed-text",
+    "dimensions": 768
+  },
+  "chat_first_token_ms": {
+    "n": 3,
+    "p50": 3370,
+    "p95": 3911,
+    "max": 3911
+  },
+  "chat_token_interval_ms": {
+    "n": 154,
+    "p50": 224,
+    "p95": 306,
+    "max": 391
+  }
+}
