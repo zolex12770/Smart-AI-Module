@@ -401,7 +401,10 @@ export class LocalEmbeddingProvider {
             `(${texts.length} input(s) to "${this.options.model}").`
         );
       }
-      throw err;
+      // A runtime that cannot be reached is a provider failure, like every other branch here
+      // (DL-23). The raw `TypeError: fetch failed` reached the caller as a 500, and named the
+      // runtime's host in the log line it produced; the host stays in `cause`, not the message.
+      throw new ProviderError("The embedding runtime could not be reached.", err);
     } finally {
       clearTimeout(timer);
     }

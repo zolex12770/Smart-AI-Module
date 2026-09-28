@@ -364,6 +364,17 @@ describe("LocalEmbeddingProvider", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  it("reports an unreachable runtime as a ProviderError that does not name its host (DL-23)", async () => {
+    // The failure-injection run stopped Ollama: RAG answered 500 from a raw `fetch failed`.
+    const fetchImpl = vi.fn(async () => {
+      throw Object.assign(new TypeError("fetch failed"), { cause: new Error("getaddrinfo ENOTFOUND ollama") });
+    }) as unknown as typeof fetch;
+    const provider = new LocalEmbeddingProvider({ baseUrl: "http://ollama:11434/v1", model: "m", dimensions: 1, fetchImpl });
+    const failure = await provider.embed(["a"]).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(ProviderError);
+    expect((failure as Error).message).not.toMatch(/ollama|11434|ENOTFOUND/);
+  });
+
   it("returns nothing for no input without calling the runtime", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const provider = new LocalEmbeddingProvider({ baseUrl: "http://x/v1", model: "m", dimensions: 1, fetchImpl });

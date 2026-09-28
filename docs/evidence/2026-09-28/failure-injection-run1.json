@@ -1,0 +1,46 @@
+{
+  "api": "http://127.0.0.1:8787",
+  "startedAt": "2026-09-28T12:04:41.275Z",
+  "counts": {
+    "PASS": 1,
+    "FAIL": 4,
+    "BLOCKED_EXTERNAL": 0
+  },
+  "results": [
+    {
+      "id": "LLM-DOWN",
+      "title": "Model runtime stopped: chat and RAG fail fast with a clear error, then recover",
+      "status": "FAIL",
+      "seconds": 65,
+      "detail": "RAG with no embedding runtime → 500"
+    },
+    {
+      "id": "DB-DOWN",
+      "title": "Postgres stopped: readiness says so, requests fail fast, and the API recovers without a restart",
+      "status": "FAIL",
+      "seconds": 6,
+      "detail": "liveness (/api/health) → 500; it must stay up so the orchestrator does not kill a process that will recover"
+    },
+    {
+      "id": "WORKER-DOWN",
+      "title": "Worker stopped: queued work waits, durably, and completes when a worker returns",
+      "status": "PASS",
+      "seconds": 27,
+      "detail": "pending for 20 s with no worker; succeeded after the worker restarted"
+    },
+    {
+      "id": "MEDIA-CRASH",
+      "title": "The image process killed mid-generation: the image fails honestly and is not charged",
+      "status": "FAIL",
+      "seconds": 7,
+      "detail": "threw: Command failed: docker exec cf5c1fd478133ea1e32d296f5766e95ef823c12f34a3ee07a1baa90747dffa10 sh -c 'pkill -9 -f sd-cli || kill -9 $(pidof sd-cli)'"
+    },
+    {
+      "id": "MCP-CRASH",
+      "title": "The MCP server process killed: it is marked down and its tools removed; reconnect restores it",
+      "status": "FAIL",
+      "seconds": 1,
+      "detail": "threw: Command failed: docker exec 331b3d71cde2eea70000f7df0c55dbd6f7aa8ac584e6498532e420303e52d1de sh -c 'pkill -9 -f server-filesystem'"
+    }
+  ]
+}

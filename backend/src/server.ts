@@ -200,6 +200,8 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
     authService: ctx.auth,
     cookieSecure: ctx.cookieSecure,
     publicPaths: PUBLIC_PATHS,
+    // Liveness answers without touching the database, whatever the caller sends (DL-23).
+    anonymousPaths: ["/api/health"],
   });
 
   registerHealthRoute(app);

@@ -53,12 +53,25 @@ export interface AuthPluginOptions {
   cookieSecure: boolean;
   /** Paths that never require authentication. Everything else does. */
   publicPaths: string[];
+  /**
+   * Paths whose caller is never looked up, even when a credential is presented — liveness
+   * (DL-23). The lookup is a database query; with Postgres stopped, a probe that carried a
+   * session cookie got 500 from `/api/health`, and an orchestrator restarts a process whose
+   * liveness fails, although this one recovers by itself when the database returns.
+   */
+  anonymousPaths?: string[];
 }
 
 export function registerAuth(app: FastifyInstance, options: AuthPluginOptions): void {
   app.decorateRequest("auth", null);
 
   app.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
+    const matched = request.routeOptions?.url;
+    // Only a path that is ALSO public: skipping the lookup must never skip the deny below.
+    if (matched && options.anonymousPaths?.includes(matched) && options.publicPaths.includes(matched)) {
+      request.auth = null;
+      return;
+    }
     const bearer = readBearer(request);
     const cookie = request.cookies?.[SESSION_COOKIE];
 

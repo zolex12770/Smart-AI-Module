@@ -11,7 +11,7 @@
  * Every scenario restores what it broke in a `finally`, even when it fails. INJECT_ONLY=ID,ID runs
  * a subset. Results: $ACCEPT_OUT/failure-injection.json and .md; exit 1 on any FAIL.
  */
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { API, Client } from "../lib/acceptance.mjs";
@@ -165,7 +165,7 @@ await check("MEDIA-CRASH", "The image process killed mid-generation: the image f
   if (!running) return { status: FAIL, detail: "the image never started processing" };
   await sleep(5000);
   const worker = container("worker");
-  execSync(`docker exec ${worker} sh -c 'pkill -9 -f sd-cli || kill -9 $(pidof sd-cli)'`, { stdio: "ignore" });
+  if (!killInContainer(worker, "sd-cli")) return { status: FAIL, detail: "the image was processing but no sd-cli process was running in the worker" };
   const settled = await until(async () => {
     const r = await user.call("GET", `/api/v1/images/${id}`);
     return ["succeeded", "failed", "cancelled"].includes(r.body?.generation?.status) ? r.body.generation : undefined;
@@ -181,6 +181,22 @@ await check("MEDIA-CRASH", "The image process killed mid-generation: the image f
   return verdict(failures, `settled "failed" with "${settled?.errorMessage ?? ""}"; not charged`);
 });
 
+/**
+ * SIGKILLs every process in `containerId` whose command line contains `name`; true when one was.
+ *
+ * No shell, on purpose. The first run used `sh -c 'pkill -9 -f sd-cli'`: the shell's own command
+ * line contains "sd-cli", so pkill killed its parent shell and the scenario died before injecting
+ * anything. `pkill` never matches itself, and with no shell there is nothing else to match.
+ */
+function killInContainer(containerId, name) {
+  try {
+    execFileSync("docker", ["exec", containerId, "pkill", "-9", "-f", name], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false; // exit 1: nothing matched
+  }
+}
+
 // --- An MCP server dying ------------------------------------------------------------------------------
 await check("MCP-CRASH", "The MCP server process killed: it is marked down and its tools removed; reconnect restores it", async () => {
   const email = process.env.ACCEPT_ADMIN_EMAIL;
@@ -194,7 +210,7 @@ await check("MCP-CRASH", "The MCP server process killed: it is marked down and i
   const server = servers.find((s) => s.status === "connected");
   if (!server) return { status: BLOCKED, detail: "no connected MCP server on this deployment" };
   const api = container("api");
-  execSync(`docker exec ${api} sh -c 'pkill -9 -f server-filesystem'`, { stdio: "ignore" });
+  if (!killInContainer(api, "server-filesystem")) return { status: FAIL, detail: "the server reported connected but no server-filesystem process was running" };
   const down = await until(async () => {
     const s = ((await admin.call("GET", "/api/v1/mcp")).body?.servers ?? []).find((x) => x.id === server.id);
     return s && s.status !== "connected" ? s : undefined;

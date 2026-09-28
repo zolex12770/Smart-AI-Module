@@ -622,3 +622,39 @@ recorded in TROUBLESHOOTING as "past Ollama's own load deadline" without the cau
 
 **Test.** `llm-local/src/index.test.ts`: a runtime silent for 250 ms fails at a 100 ms deadline
 and succeeds through `withRequestTimeout(2000)`.
+
+## DL-23: Honest answers during an outage, found by failure injection
+
+The first failure-injection run on compose (`scripts/acceptance/failure-injection.mjs`, images
+from `70b4229`) found three platform defects and two defects in the script.
+
+**1. Liveness failed during a database outage.** With Postgres stopped, `/api/health` answered
+500 to a caller that carried a session cookie. The auth hook looked the session up before any
+route ran. An orchestrator restarts a process whose liveness fails, although this one recovers
+by itself.
+- **Fix:** the auth plugin takes `anonymousPaths` (only `/api/health`); for those, no credential
+  is looked up. It applies only to a path that is also public, so it can never skip the
+  deny-by-default check.
+
+**2. A database outage looked like a bug.** Every authenticated read answered 500 "Something went
+wrong".
+- **Fix:** the error handler answers **503 `DATABASE_UNAVAILABLE`** with `Retry-After: 5` and no
+  host in the message.
+- **Scope:** only for an error raised by a query whose cause chain is a socket error or a Postgres
+  connection exception (`08xxx`, `57P01`, `57P03`). An unreachable model runtime has the same
+  socket codes and is not reported as a database outage.
+
+**3. RAG answered 500 with the model runtime stopped.** The embedding provider rethrew the raw
+`TypeError: fetch failed`, the one branch that did not wrap its error.
+- **Fix:** it is now a `ProviderError` (502) whose message does not name the host; the host stays
+  in `cause` for the log.
+
+**Script defects.** MEDIA-CRASH and MCP-CRASH ran `sh -c 'pkill -9 -f sd-cli'`. The shell's own
+command line contains the pattern, so `pkill` killed the shell, and nothing was injected. The
+script now runs `pkill` through `docker exec` with no shell, and fails with a clear reason when
+no process matched.
+
+**Tests.** Each fails against the previous code:
+- `src/plugins/outage-responses.test.ts`: liveness with a cookie; the 503; the classifier,
+  including an unreachable model runtime not being called a database outage.
+- `llm-local/src/index.test.ts`: the unreachable embedding runtime.

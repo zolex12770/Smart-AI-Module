@@ -36,9 +36,42 @@ export function registerErrorHandler(app: FastifyInstance): void {
       return;
     }
 
+    // The database could not be reached — DL-23. That is an outage the caller may retry, not a
+    // defect in the request or the code: 503, and nothing about the host in the message.
+    if (isDatabaseUnreachable(err)) {
+      request.log.error({ err, requestId }, "database unreachable");
+      reply.status(503).header("Retry-After", "5").send({
+        error: { code: "DATABASE_UNAVAILABLE", message: "The database is unavailable. Try again shortly.", requestId },
+      });
+      return;
+    }
+
     request.log.error({ err, requestId }, "unhandled error");
     reply.status(500).send({
       error: { code: "INTERNAL_ERROR", message: "Something went wrong.", requestId },
     });
   });
+}
+
+/** Network-level failures to reach a server, and Postgres' "connection exception" class (08). */
+const CONNECTION_CODES = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "ECONNRESET", "EPIPE", "57P01", "57P03"]);
+
+/**
+ * Whether `err` is a query that failed because the database could not be reached.
+ *
+ * Only errors raised by a QUERY qualify (drizzle's `DrizzleQueryError` carries the `query`): an
+ * unreachable model runtime fails with the same socket codes, and must not be reported as a
+ * database outage. The socket error itself is somewhere down the `cause` chain.
+ */
+export function isDatabaseUnreachable(err: unknown): boolean {
+  if (!err || typeof err !== "object" || !("query" in err)) return false;
+  let current: unknown = err;
+  for (let depth = 0; current && typeof current === "object" && depth < 6; depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && (CONNECTION_CODES.has(code) || code.startsWith("08"))) return true;
+    const message = (current as { message?: unknown }).message;
+    if (typeof message === "string" && /Connection terminated|connect ECONNREFUSED|getaddrinfo (ENOTFOUND|EAI_AGAIN)/.test(message)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
