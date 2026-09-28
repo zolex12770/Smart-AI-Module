@@ -296,9 +296,21 @@ await gate("TERRAFORM", async () => {
   if (version.code !== 0) return { status: FAIL, detail: "terraform is not installed (https://developer.hashicorp.com/terraform/install)" };
   const fmt = await run("TERRAFORM", "terraform", ["fmt", "-check", "-recursive"], { cwd });
   if (fmt.code !== 0) return { status: FAIL, detail: "terraform fmt -check found unformatted files" };
-  // -lockfile=readonly: a gate must not rewrite a tracked file. An init against a local provider
-  // mirror added this platform's hashes to .terraform.lock.hcl, and the change got committed.
-  const init = await run("TERRAFORM", "terraform", ["init", "-backend=false", "-input=false", "-lockfile=readonly"], { cwd });
+  // A gate must not leave a tracked file changed. `init` adds this platform's package hashes to
+  // .terraform.lock.hcl (which `validate` then needs), and one such change got committed, so the
+  // committed lock file is put back when the gate ends. `-lockfile=readonly` is not an option:
+  // without those hashes, `validate` rejects the providers.
+  const lockPath = join(cwd, ".terraform.lock.hcl");
+  const lockBefore = existsSync(lockPath) ? readFileSync(lockPath) : null;
+  try {
+    return await terraformInitAndValidate(cwd);
+  } finally {
+    if (lockBefore !== null) writeFileSync(lockPath, lockBefore);
+  }
+});
+
+async function terraformInitAndValidate(cwd) {
+  const init = await run("TERRAFORM", "terraform", ["init", "-backend=false", "-input=false"], { cwd });
   if (init.code !== 0) {
     if (/registry\.terraform\.io|Forbidden|could not connect|timeout|no such host/i.test(init.output) && !existsSync(join(cwd, ".terraform"))) {
       return { status: BLOCKED, detail: "providers cannot be downloaded (registry unreachable); set TF_CLI_CONFIG_FILE to a filesystem mirror" };
@@ -308,7 +320,7 @@ await gate("TERRAFORM", async () => {
   const validate = await run("TERRAFORM", "terraform", ["validate"], { cwd });
   if (validate.code !== 0) return { status: FAIL, detail: "terraform validate failed" };
   return { status: PASS, detail: "fmt, init, validate pass (plan/apply need GCP credentials: docs/PRODUCTION_DEPLOYMENT_BLOCKER.md)" };
-});
+}
 
 // --- summary ----------------------------------------------------------------------------------
 const counts = { [PASS]: 0, [FAIL]: 0, [BLOCKED]: 0 };
