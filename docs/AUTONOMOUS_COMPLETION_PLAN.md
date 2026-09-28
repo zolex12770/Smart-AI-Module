@@ -1,8 +1,9 @@
 # Autonomous completion plan
 
-The plan the 2026-09-27 completion pass worked to, what it found, and the checklist it closed
-against. Statuses use only `PASS`, `FAIL`, `BLOCKED_EXTERNAL` and `NOT_IMPLEMENTED`, and every
-`PASS` names its evidence. The verdicts and the full status matrix are in
+The plan the 2026-09-27 and 2026-09-28 completion passes worked to, what they found, and the
+checklist they closed against. The checklist uses the state vocabulary of
+[PROJECT_STATUS.md](PROJECT_STATUS.md), and every state past `IMPLEMENTED` names its evidence
+(files under `docs/evidence/`, a command, or a CI run). The verdicts are in
 [FINAL_PRODUCTION_READINESS_REPORT.md](FINAL_PRODUCTION_READINESS_REPORT.md).
 
 ## Method
@@ -55,6 +56,14 @@ regression test that fails without it.
 | 27 | A blank numeric setting (`LIMIT: ${LIMIT:-}` in compose) stopped the boot | Blank means unset, as for strings |
 | 28 | The chat screen said "mock by default" under a real model's answer; `/api/v1/models` answered 500 when no model was configured | The screen names the configured model (or says none is); the route answers an empty list |
 | 29 | The bundled MCP filesystem server would have let one tenant read another's workspace once enabled | (Also #13) confirmed live: the compose MCP check's probe of another project's directory is refused |
+| 30 | A rendered video did not play in a browser without H.264/AAC (the test Chromium) | A WebM (VP9/Opus) rendition beside the MP4; the player offers both (DL-19) |
+| 31 | The compose stack could not follow the documented 30-minute agent node budget for a 7B model on CPU | Compose passes `AGENT_NODE_TIMEOUT_MS` (DL-20) |
+| 32 | The patch parser dropped a blank context line and refused a model's correct diff twice | An empty line inside a hunk is empty context, as `git apply` reads it (DL-21) |
+| 33 | A generation still streaming was killed by a 300 s total deadline | The deadline is for silence; the request closes when its caller stops (DL-21) |
+| 34 | An agent turn or model call that died mid-stream was never billed | An estimate is charged under a `:partial` key (DL-21) |
+| 35 | After a restart, the warm-up abandoned a cold model load; Ollama cancelled it, and the model never became ready | The warm-up has its own load deadline, `LLM_LOAD_TIMEOUT_MS` (DL-22) |
+| 36 | With Postgres stopped, liveness answered 500 to a caller with a session cookie | Liveness never looks up a credential (DL-23) |
+| 37 | A database outage answered 500; RAG answered 500 with Ollama stopped | 503 `DATABASE_UNAVAILABLE`; the embedding failure is a 502 `ProviderError` (DL-23) |
 
 The acceptance script had its own defects, fixed the same way. It asked for chat history without
 sending it, although the API takes history from the client as OpenAI's does. It also read metric
@@ -62,45 +71,211 @@ names the platform does not export.
 
 ## Checklist
 
-Machine-readable: the JSON block below is the checklist. `evidence` names a file, a command or a
-CI run.
+Machine-readable: the JSON block below is the checklist. `state` is the highest state reached; no
+item is `PRODUCTION_VERIFIED`. An item left at `IMPLEMENTED` was run and did not pass: its
+evidence says why.
 
 ```json
 {
-  "date": "2026-09-27",
+  "date": "2026-09-28",
   "branch": "claude/zen-brahmagupta-6l5o4u",
-  "statuses": ["PASS", "FAIL", "BLOCKED_EXTERNAL", "NOT_IMPLEMENTED"],
+  "verified_code_commit": "51a66a5",
+  "states": [
+    "NOT_STARTED",
+    "IN_PROGRESS",
+    "IMPLEMENTED",
+    "LOCALLY_VERIFIED",
+    "E2E_VERIFIED",
+    "REAL_RUNTIME_VERIFIED",
+    "PRODUCTION_VERIFIED",
+    "BLOCKED_EXTERNAL"
+  ],
   "items": [
-    { "id": "structure.frontend", "status": "PASS", "evidence": "frontend/ builds and runs alone; scripts/verify-boundary.sh 8/8" },
-    { "id": "structure.backend", "status": "PASS", "evidence": "backend/ builds and runs alone; scripts/verify-boundary.sh 8/8" },
-    { "id": "startup.backend", "status": "PASS", "evidence": "fresh clone: cd backend && npm install && npm run dev -> GET /api/health 200" },
-    { "id": "startup.frontend", "status": "PASS", "evidence": "fresh clone: cd frontend && npm install && npm run dev -> GET /chat 200" },
-    { "id": "gate.build", "status": "PASS", "evidence": "npx tsc -b; npm run build (CI build-and-test)" },
-    { "id": "gate.typecheck", "status": "PASS", "evidence": "npm run typecheck, 0 errors" },
-    { "id": "gate.lint", "status": "PASS", "evidence": "npm run lint, 0 errors" },
-    { "id": "gate.tests", "status": "PASS", "evidence": "npm test (docs/TESTING.md)" },
-    { "id": "gate.e2e_browser", "status": "PASS", "evidence": "cd frontend && npx playwright test; CI e2e job" },
-    { "id": "gate.acceptance", "status": "PASS", "evidence": "docs/evidence/acceptance-compose-2026-09-27.md (23/24; the failure fixed) + acceptance-compose-metrics-rerun-2026-09-27.md (7/7)" },
-    { "id": "real.chat_streaming", "status": "PASS", "evidence": "CHAT-STREAM, CHAT-HISTORY with qwen2.5:7b (dev and compose)" },
-    { "id": "real.memory", "status": "PASS", "evidence": "MEMORY-FORMATION/RECALL/DELETE (compose); 4/4 memory probes" },
-    { "id": "real.rag", "status": "PASS", "evidence": "RAG-INGEST/ANSWER/REFUSAL (dev and compose)" },
-    { "id": "real.coding_agent", "status": "PASS", "evidence": "3/3 probes + compose CODING-AGENT; docs/evidence/coding-agent-probes-2026-09-27.log" },
-    { "id": "real.image", "status": "PASS", "evidence": "IMAGE, SDXL via stable-diffusion.cpp (dev and compose worker)" },
-    { "id": "real.audio", "status": "PASS", "evidence": "AUDIO, Piper (dev and compose)" },
-    { "id": "real.video", "status": "PASS", "evidence": "VIDEO: h264+aac+mov_text, model storyboard, narrated (dev run 2 and compose)" },
-    { "id": "real.mcp", "status": "PASS", "evidence": "MCP (compose): real MCP server read inside an agent task; cross-project path refused" },
-    { "id": "real.quota", "status": "PASS", "evidence": "QUOTA (compose): 429 QUOTA_EXCEEDED, nothing created" },
-    { "id": "real.metrics", "status": "PASS", "evidence": "METRICS re-run on compose: API + worker /metrics, all counters non-zero" },
-    { "id": "real.tenant_isolation", "status": "PASS", "evidence": "TENANT-ISOLATION (compose): 404, 404, 404" },
-    { "id": "performance.measured", "status": "PASS", "evidence": "docs/evidence/latency-compose-2026-09-27.md; timings in the final report" },
-    { "id": "docker.images", "status": "PASS", "evidence": "CI infrastructure job builds both images" },
-    { "id": "docker.sandbox", "status": "PASS", "evidence": "npm run test:docker -w @ai-platform/security, 4/4" },
-    { "id": "docker.compose", "status": "PASS", "evidence": "compose stack up (5 services healthy); acceptance + browser smoke against it" },
-    { "id": "docker.real_postgres_boot", "status": "PASS", "evidence": "CI infrastructure job: API image against pgvector/pg16, 23 tables" },
-    { "id": "terraform.validate", "status": "PASS", "evidence": "terraform fmt -check, init, validate (CI)" },
-    { "id": "terraform.plan_apply", "status": "BLOCKED_EXTERNAL", "evidence": "needs a GCP project and credentials" },
-    { "id": "cloud.deployment", "status": "BLOCKED_EXTERNAL", "evidence": "needs a GCP project and credentials" },
-    { "id": "ci", "status": "PASS", "evidence": "GitHub Actions ci.yml, all five jobs green" }
+    {
+      "id": "structure.frontend_backend_separate",
+      "state": "E2E_VERIFIED",
+      "evidence": "scripts/verify-boundary.sh 8/8; each app builds and runs alone"
+    },
+    {
+      "id": "gate.build",
+      "state": "E2E_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/verify.md BUILD"
+    },
+    {
+      "id": "gate.typecheck",
+      "state": "E2E_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/verify.md TYPECHECK, 0 errors"
+    },
+    {
+      "id": "gate.lint",
+      "state": "E2E_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/verify.md LINT, 0 errors"
+    },
+    {
+      "id": "gate.unit",
+      "state": "LOCALLY_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/verify.md UNIT 996 passed, 2 skipped; CI 36420864142"
+    },
+    {
+      "id": "gate.integration",
+      "state": "LOCALLY_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/verify.md INTEGRATION 273 passed"
+    },
+    {
+      "id": "gate.api_contract",
+      "state": "LOCALLY_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/verify.md API, 76 routes"
+    },
+    {
+      "id": "gate.security",
+      "state": "E2E_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/verify.md SECURITY (run 2 PASS); docs/evidence/2026-09-28/attacks-compose-final.md 11/11"
+    },
+    {
+      "id": "gate.e2e_playwright",
+      "state": "E2E_VERIFIED",
+      "evidence": "verify E2E 14 passed; CI e2e job"
+    },
+    {
+      "id": "gate.database",
+      "state": "E2E_VERIFIED",
+      "evidence": "verify DATABASE 3/3; compose on Postgres 16"
+    },
+    {
+      "id": "gate.boot",
+      "state": "E2E_VERIFIED",
+      "evidence": "verify BOOT 8/8"
+    },
+    {
+      "id": "real.chat_streaming",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md CHAT-STREAM; browser CHAT-STREAMING"
+    },
+    {
+      "id": "real.chat_cancel_multiturn_refresh",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/browser-compose-final.md CHAT-CANCEL, CHAT-MULTI-TURN"
+    },
+    {
+      "id": "real.memory",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md MEMORY-*; browser MEMORY-UI"
+    },
+    {
+      "id": "real.rag",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md RAG-*; browser RAG-UI; attacks RAG-INJECTION"
+    },
+    {
+      "id": "real.coding_agent.first_task",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md CODING-AGENT, COMPLETED 246 s"
+    },
+    {
+      "id": "real.coding_agent.bad_patch",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/extra-scenarios-run3.md CODING-BAD-PATCH"
+    },
+    {
+      "id": "real.coding_agent.second_task",
+      "state": "IMPLEMENTED",
+      "evidence": "docs/evidence/2026-09-28/extra-scenarios-run3.md CODING-SECOND FAIL in all 3 runs (model); reported honestly each time"
+    },
+    {
+      "id": "real.image",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md IMAGE (SDXL)"
+    },
+    {
+      "id": "real.image.negative",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/extra-scenarios-run3.md IMAGE-NEGATIVE"
+    },
+    {
+      "id": "real.image.reproducible",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/extra-scenarios-run3.md IMAGE-REPRODUCIBLE"
+    },
+    {
+      "id": "real.audio",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md AUDIO; browser AUDIO-UI"
+    },
+    {
+      "id": "real.video",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md VIDEO; docs/evidence/2026-09-28/browser-video-webm.md"
+    },
+    {
+      "id": "real.mcp",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md MCP; failure-injection-run2.md MCP-CRASH"
+    },
+    {
+      "id": "real.quota_usage",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md USAGE, QUOTA"
+    },
+    {
+      "id": "real.tenant_isolation",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md TENANT-ISOLATION; attacks TENANT-IDOR"
+    },
+    {
+      "id": "real.metrics",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md METRICS"
+    },
+    {
+      "id": "real.failure_injection",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/failure-injection-run2.md 5/5"
+    },
+    {
+      "id": "real.browser_routes",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/browser-compose-final.md ROUTES"
+    },
+    {
+      "id": "performance.measured",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/latency-compose-final.md"
+    },
+    {
+      "id": "docker.images_and_compose",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "verify DOCKER; every runtime script ran against the compose stack"
+    },
+    {
+      "id": "docker.sandbox",
+      "state": "E2E_VERIFIED",
+      "evidence": "docs/evidence/2026-09-28/verify.md DOCKER run 2, sandbox 4/4"
+    },
+    {
+      "id": "terraform.validate",
+      "state": "LOCALLY_VERIFIED",
+      "evidence": "verify TERRAFORM; CI infrastructure job"
+    },
+    {
+      "id": "terraform.plan_apply",
+      "state": "BLOCKED_EXTERNAL",
+      "evidence": "docs/PRODUCTION_DEPLOYMENT_BLOCKER.md: GCP project and credentials"
+    },
+    {
+      "id": "cloud.deployment",
+      "state": "BLOCKED_EXTERNAL",
+      "evidence": "docs/PRODUCTION_DEPLOYMENT_BLOCKER.md"
+    },
+    {
+      "id": "ci",
+      "state": "E2E_VERIFIED",
+      "evidence": "ci.yml five jobs green: 36420864142 (51a66a5)"
+    },
+    {
+      "id": "audit.independent",
+      "state": "E2E_VERIFIED",
+      "evidence": "docs/DECISION_LOG.md DL-18; findings fixed in 81cedf8"
+    }
   ]
 }
 ```

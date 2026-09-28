@@ -1,403 +1,492 @@
 # Final production-readiness report
 
-**Date:** 2026-09-27 · **Branch:** `claude/zen-brahmagupta-6l5o4u` · **Verified at:** `0487870` (the last code commit; the commits after it change documentation only)
+**Date:** 2026-09-28 · **Branch:** `claude/zen-brahmagupta-6l5o4u` · **Code verified at:** `51a66a5`
+(API image and CI). The later commits change a test fixture and documentation only; the report's
+own commit is listed in §2.
 
-## Verdict
-
-The platform runs end to end on self-hosted software, locally and as a Docker Compose stack:
-chat, streaming, memory, RAG, tool calling, the agent and the coding agent on a real local model,
-and image, speech and long-form video generation with real generators. Every capability in the
-status matrix is `PASS` on evidence below. The exception is anything that needs Google Cloud.
-
-**It has not been deployed to a cloud.** Terraform validates. `plan`, `apply` and every
-production smoke test need a GCP project and credentials, which this environment does not have.
-Those rows are `BLOCKED_EXTERNAL`. This report calls nothing "production ready" beyond what was
-verified here.
+The state vocabulary is the one in [PROJECT_STATUS.md](PROJECT_STATUS.md):
+`NOT_STARTED` → `IN_PROGRESS` → `IMPLEMENTED` → `LOCALLY_VERIFIED` → `E2E_VERIFIED` →
+`REAL_RUNTIME_VERIFIED` → `PRODUCTION_VERIFIED`, and `BLOCKED_EXTERNAL`. **No capability is
+`PRODUCTION_VERIFIED`:** nothing has been deployed to a cloud.
 
 ---
 
-## 1. Architecture
+## 1. Executive summary
 
-Two separately built and deployed applications, joined by HTTP and SSE and by a types-only
-`shared/` package:
+The platform runs end to end on self-hosted software as a Docker Compose stack: Postgres with
+pgvector, Ollama, the API, a separate worker and the web app.
+- **AI capabilities** run on a real local model (qwen2.5:7b on 4 CPU cores): chat, streaming,
+  memory, RAG, tool calling, the agent and the coding agent.
+- **Media** runs on real generators: image with SDXL via stable-diffusion.cpp, speech with Piper,
+  and narrated, subtitled video with ffmpeg.
 
-```
-browser ──HTTP/SSE──▶ frontend (Next.js 16)        backend (Fastify 5, one image, three roles)
-                         │                            ROLE=api     HTTP, agent engine, video.plan
-                         └──── NEXT_PUBLIC_API_URL ─▶ ROLE=worker  ingestion, scanning, image,
-                                                                   speech, video scenes, render
-                                                      ROLE=all     both (local development)
-                                                          │
-                     PostgreSQL + pgvector (PGlite embedded locally, or DATABASE_URL)
-                     pg-boss job queues · object storage (local disk or GCS)
-                     model runtime: Ollama / any OpenAI-compatible server, or a hosted key
-```
+On the final API image:
 
-The model is behind a capability-aware registry and a router that retries, falls back and trips
-a circuit breaker. Authorization is a SQL predicate: every tenant read is `get(projectId, id)`.
-The agent is a reasoning loop whose harness owns the limits: iteration and token ceilings,
-context-window budgeting, the approval gate, argument validation and deadlines.
-[ARCHITECTURE.md](ARCHITECTURE.md) has the details.
+- `npm run verify`: **17 PASS, 2 FAIL** on the first run. Both failures were fixed and pass on
+  re-run (§22).
+- The full-system acceptance: **24/24**.
+- The attack suite: **11/11**.
+- Failure injection: **5/5**.
+- The browser suite: see §23.
+- CI is green on every code commit.
 
-## 2. Frontend structure
+**Running the platform for real this pass found 13 platform defects that tests had not caught.**
+Each is fixed with a test that fails against the previous code (DL-19 to DL-23):
 
-`frontend/` is a Next.js 16 app with 18 screens: `/`, `/login`, `/signup`, `/chat`,
-`/chat/[conversationId]`, `/tasks`, `/agent/[id]`, `/coding/[id]`, `/ask` (RAG), `/files`,
-`/memory`, `/images`, `/audio`, `/videos`, `/videos/[id]`, `/usage`, `/platform` and `/settings`.
-It imports only types from `shared/`. A syntax-tree checker (`scripts/verify-boundary.sh`,
-self-test plus 7 rules) enforces that it reaches no database, queue, filesystem or server
-environment variable. It builds and runs on its own: `cd frontend && npm install && npm run
-build && npm run test && npm run dev`, verified from a fresh clone.
+- a video that would not play in a browser without H.264;
+- a correct model diff refused by the patch parser;
+- a live generation killed at 300 s;
+- agent turns never billed when they died mid-stream;
+- a cold model load that could never finish after a restart;
+- liveness failing during a database outage;
+- 500s where 503 and 502 were honest.
 
-Screens state what is actually configured. Chat names the model that answers. Images, video and
-audio name their provider and label a mock as a mock. A capability with no provider says
-"not configured" instead of showing placeholder output.
+**Not shown:** the coding agent completing a second, unrelated task. It failed in all three runs
+(§9). The platform reported every failure honestly, but qwen2.5:7b on CPU did not complete it.
+**Blocked:** every production cell needs a GCP project and credentials (§25).
 
-## 3. Backend structure
+## 2. Commit
 
-`backend/` is a Fastify 5 API with 70 routes, all in [API.md](API.md), which is generated from
-the route registrations and checked against real requests. It has 14 packages: `agent-core`,
-`model-router`, `memory`, `rag`, `embeddings`, `media`, `tools`, `mcp`, `security`, `quota`,
-`jobs`, `database`, `scanning` and `observability`. It has 11 provider adapters: LLM `local`,
-`openai`, `anthropic`, `google` and `mock`; image `sdcpp`, `openai` and `mock`; video `motion`,
-`replicate` and `mock`.
-
-The database has 23 tables, 47 indexes and 5 migrations. The backend builds, tests and runs on
-its own: `cd backend && npm install && npm run build && npm run test && npm run dev`, verified
-from a fresh clone.
-
-## 4. Implemented capabilities
-
-| Capability | What exists |
+| What | Commit |
 |---|---|
-| Auth | scrypt passwords; hashed session tokens and API keys; CSRF double-submit; logout revokes server-side; account deletion |
-| Multi-tenancy | organizations, projects and members; RBAC; every content row scoped by `project_id` in SQL; a cross-tenant id answers 404 |
-| Chat & streaming | SSE token streaming; conversations stored; rolling summaries within the model's real context window |
-| Tool calling | native tools (fs, code, search, terminal, web.fetch with an SSRF guard) plus MCP tools; schema validation; approval gate; audit rows |
-| Agent | task graph with persistence, crash recovery, approvals, deadlines and cancellation; an autonomous `reasoning` node |
-| Coding agent | `fix_failing_test`: runs the real test, reads and edits the source (`code.replace_text`, `code.apply_patch`), re-runs the test in the loop; the test file is read-only to it |
-| Memory | extraction from chat turns (identifiers must match what the user wrote), retrieval into new conversations, a Memory screen, deletion |
-| RAG | PDF/DOCX/text upload; malware scan (clamd, optional); chunking; pgvector; cited answers; explicit refusal |
-| Image | stable-diffusion.cpp (local) or OpenAI-compatible; async jobs; one run at a time per provider |
-| Audio | Piper (offline), OpenAI-compatible or Windows SAPI |
-| Video | storyboard written by the model (`video.plan` job) → per-scene still + motion + narration → ffmpeg render with SRT/WebVTT subtitles; resumable; cancellable |
-| MCP | stdio and Streamable HTTP (SSE fallback); tools register disabled; the bundled filesystem server confined to the caller's workspace |
-| Usage & quota | usage ledger per call; daily/monthly token, image, speech and video-seconds limits checked before work starts |
-| Rate limiting | Postgres-shared counters; per-route limits with `Retry-After` |
-| Observability | structured JSON logs with request ids across API, jobs and providers; OpenTelemetry spans; Prometheus metrics (API route + `METRICS_PORT` listener for workers) |
-| Deployment | two Dockerfiles; `docker-compose.yml` (+ sd.cpp overlay); Terraform for Cloud Run + Cloud SQL + GCS; runbook |
+| API image used for every runtime result in this report | `51a66a5` |
+| Web image | `149bd22` (the frontend is unchanged since) |
+| Last CI-verified code commit | `51a66a5`, CI run 36420864142 |
+| Commits after it | `f0f3d13` (a test canary joined at runtime), then documentation and evidence only |
 
-## 5. Runtime verification
+Code commits this pass, in order (all CI-green):
+- `ef08c48`, `9651a83`, `567bc93`, `14123b5`, `10abb12`, `81cedf8`: before this report's runs.
+- `149bd22` (DL-19), `77e7e41` (DL-20), `87f1b1b` (DL-21), `70b4229` (DL-22), `51a66a5` (DL-23).
 
-The full user journey ran through `scripts/acceptance/full-system.mjs` against running systems.
-It checks the content of each result: the words of an answer, the pixels of an image, the samples
-of the audio, the streams of the video.
+## 3. Frontend
 
-| Run | Where | Result |
+`frontend/` is a Next.js 16 app, built and run on its own (`cd frontend && npm install && npm run
+dev`, port **3000**).
+- **Screens:** 18. Chat, tasks, agent and coding runs, Ask (RAG), files, memory, images, audio,
+  videos, usage, platform and settings, plus the auth pages.
+- **Boundary:** it imports only types from `shared/`. `scripts/verify-boundary.sh` enforces that it
+  reaches no database, queue, filesystem or server environment variable (8/8).
+- **Tests:** 124 unit tests. 14 Playwright tests against a real API and database.
+- **Changes this pass:** the video player offers an MP4 and a WebM source (DL-19). Same-origin
+  proxy mode (`NEXT_PUBLIC_API_PROXY_TARGET`) avoids third-party cookies in a cross-site
+  deployment.
+
+## 4. Backend
+
+`backend/` is a Fastify 5 API, port **8787**, built and run on its own (`cd backend && npm install
+&& npm run dev`).
+- **Routes:** 76, all in [API.md](API.md), each requested by the contract test.
+- **Roles:** `ROLE=all` for local, `api` and `worker` in compose and Cloud Run.
+- **Packages:** 14 workspace packages plus 11 provider adapters.
+- **Changes this pass:**
+  - Outage handling: liveness never touches the database; an unreachable database answers 503;
+    provider failures answer 502 (DL-23).
+  - Agent partial-turn billing (DL-21).
+  - The warm-up's load deadline (DL-22).
+
+## 5. Database
+
+- **Development and tests:** embedded PGlite with pgvector.
+- **Compose and production:** Postgres 16 + pgvector via `DATABASE_URL`.
+- **Migrations:** 7 (`0000`–`0006`; `0006` adds `render_webm_asset_id`). The DATABASE gate applies
+  them to an empty database, re-applies them cleanly, and checks that they match the schema.
+- **Queues:** pg-boss, in Postgres.
+- **Rate-limit counters:** shared in Postgres.
+- **Outage:** failure injection stopped Postgres. The authenticated read answered 503 at once,
+  liveness stayed 200, and the API recovered without a restart.
+
+## 6. AI runtime
+
+- **Chat and tools:** Ollama `qwen2.5:7b` (`MODEL_RUNTIME`: `LLM_BASE_URL` + `LLM_MODEL`, or
+  auto-detected in development).
+- **Embeddings:** `nomic-embed-text` (768-d).
+- **Hosted adapters:** OpenAI, Anthropic and Google are fixture-tested only; no key exists here.
+- **Changes this pass:**
+  - The local adapter's deadline is for silence and re-arms on every chunk. A generation still
+    streaming is no longer cut off (Ollama had logged 5m0s).
+  - The adapter closes the request when its caller stops reading.
+  - The boot warm-up waits up to `LLM_LOAD_TIMEOUT_MS` (20 minutes) for a cold load, because
+    Ollama cancels a load whose request gives up.
+
+## 7. Chat
+
+- **Behaviour:** SSE streaming, stored conversations, rename and delete. A rolling summary fits the
+  model's real context window. Output is capped by `CHAT_MAX_OUTPUT_TOKENS`, and a request asking
+  for more is refused with 400.
+- **Billing:** a turn cut off by an error or a cancel is charged an estimate.
+- **Evidence:**
+  - Acceptance CHAT-STREAM: 34 token events, first at 927 ms.
+  - Acceptance CHAT-HISTORY: a word planted two turns earlier was recalled.
+  - Browser CHAT-STREAMING: 78 distinct rendered lengths while streaming, through the web app.
+
+## 8. Agent
+
+- **Design:** a persisted task graph with approvals, per-node deadlines, cancellation, crash
+  recovery and an execution lease. An autonomous reasoning loop whose harness owns the limits.
+- **Billing:** every turn is charged, including one that dies mid-stream (DL-21).
+- **Configuration:** the compose stack passes `AGENT_NODE_TIMEOUT_MS` (30 minutes) for a 7B model
+  on CPU (DL-20).
+- **Evidence:** acceptance MCP (a real MCP tool inside an agent task) and CODING-AGENT.
+
+## 9. Coding agent
+
+`fix_failing_test` runs the real test, reads and edits the source, and re-runs the test. The test
+file is read-only to it.
+
+| Scenario | Result | Evidence |
 |---|---|---|
-| Dev run 1 | `node dist/index.js`, PGlite, real providers | 19 PASS · 3 FAIL. CHAT-HISTORY failed on a defect in the check; VIDEO had no narration (storyboard fallback); CODING-AGENT failed (model variance). All three led to fixes. |
-| Dev run 2 | same, after those fixes | 19 PASS · 3 FAIL. VIDEO and CHAT-HISTORY PASS. MEMORY failed on a mis-copied digit, which led to the grounding filter; CODING-AGENT failed on a text-written tool call, which led to recovery. |
-| **Compose** | the Docker Compose stack: postgres/pgvector, ollama, api, worker and web as separate containers, with the sd.cpp overlay | **23 PASS · 1 FAIL** of 24. METRICS failed: the worker's counters were unreachable, which led to `METRICS_PORT`. **Re-run of METRICS and its prerequisites on the fixed stack: 7 PASS · 0 FAIL.** |
+| Acceptance CODING-AGENT (`sum.js`) | **PASS**: COMPLETED in 246 s, independent re-run exit 0, test untouched | `acceptance-compose-final.md` |
+| CODING-BAD-PATCH (a naive fix is wrong) | **PASS** in runs 2 and 3: the verdict (`FAILED`) agrees with an independent run of the test, and the test is untouched | `extra-scenarios-run3.md` |
+| CODING-SECOND (a second, unrelated task: `slugify`) | **FAIL** in all 3 runs | `extra-scenarios-run1-600s-node-budget.md`, `extra-scenarios-run2-partial.log`, `extra-scenarios-run3.md` |
 
-The compose run's checks, all against real providers: AUTH-SIGNUP, AUTH-SESSION (logout revokes;
-the replayed cookie gets 401), PROJECT-CREATE, PROVIDERS, CHAT-STREAM, CHAT-HISTORY,
-MEMORY-FORMATION, MEMORY-RECALL, MEMORY-DELETE, RAG-INGEST, RAG-ANSWER, RAG-REFUSAL, IMAGE, AUDIO,
-VIDEO, CODING-AGENT, MCP, USAGE, QUOTA, AUDIT, TENANT-ISOLATION, PERSISTENCE (logout, then login
-again), RATE-LIMIT, and METRICS (after the fix). The result files are in
-[evidence/](evidence/).
+CODING-SECOND is reported as it happened:
+- **Run 1** was stopped by the 10-minute node deadline. The fix was the compose node budget
+  (DL-20).
+- **Run 2** exposed three platform defects (DL-21):
+  - the patch parser refused the model's *correct* diff twice;
+  - the 300 s total deadline killed a live generation;
+  - that turn was never billed.
+- **Run 3** had all fixes. The model's first edit replaced the closing `}` with a `return`, which
+  broke the file. Every later edit was correctly refused, and the run stopped at 12 turns.
 
-Also verified:
+In every run, the platform reported `FAILED` with the reason, never `COMPLETED` over a failing
+test.
 
-- A real browser signed up, chatted and reloaded against the compose web container. The answer
-  streamed and persisted; the only failed request was the expected pre-login 401 on
-  `/auth/me`. Screenshot: `evidence/compose-chat-2026-09-27.jpg`.
-- The startup contract passed from a fresh clone of the pushed branch (see §19).
+## 10. Memory
 
-**Measured performance** (4 CPU cores, 16 GB, no GPU; no targets were set, these are
-observations):
+Facts are extracted from chat turns; an identifier the user did not write is dropped. They are
+recalled in new conversations, and can be deleted from the Memory screen.
+- **Acceptance:** MEMORY-FORMATION stored "The user's project codename is NIGHTHAWK-384272." A new
+  conversation recalled it (MEMORY-RECALL). MEMORY-DELETE left 0 matching items.
+- **Browser:** MEMORY-UI.
+- **Across tenants:** the TENANT-ISOLATION and TENANT-IDOR probes cover memory rows by project
+  scope.
 
-| Measurement | Value |
+## 11. RAG
+
+PDF, DOCX and text uploads are scanned (clamd, optional), chunked and embedded into pgvector. The
+answer is cited, and an unanswerable question is refused.
+- **Acceptance:**
+  - RAG-ANSWER: "An engineer receives 27 days of paid leave per calendar year. [1]", with the
+    handbook excerpt cited.
+  - RAG-REFUSAL: the outcome was `refused`, and a refusal is never called grounded.
+- **Attack RAG-INJECTION:** an instruction planted in a document was not followed.
+- **Failure:** with Ollama stopped, RAG answers 502 (it was 500 before DL-23).
+
+## 12. Image
+
+stable-diffusion.cpp (built from source) runs SDXL base 1.0 (q8_0) in the worker. That is
+`MEDIA_RUNTIME` for images; see [MEDIA_SETUP.md](MEDIA_SETUP.md).
+
+| Check | Result |
 |---|---|
-| API liveness / authenticated read / readiness (DB + queue), p50 | 2.4 ms / 5.4 ms / 11.4 ms |
-| Embedding one ~100-word passage (nomic-embed-text), p50 / p95 | 122 ms / 308 ms |
-| Chat: time to first token | 0.45–1.7 s across the acceptance runs (short prompt); 3.6 s p50 in the latency run (longer prompt, with memory retrieval) |
-| Chat: interval between tokens, p50 / p95 | 207 ms / 289 ms |
-| RAG: ingest a document / answer with citation | ~2 s / ~5 s |
-| Memory formed after the turn | 28–33 s |
-| Image, SDXL 512×512, 12 steps | 350–456 s |
-| Speech, two sentences (Piper) | ~3 s for ~4 s of audio |
-| Video, 8 s, 2 narrated scenes | 427–462 s (storyboard 28–37 s) |
-| Coding agent, `fix_failing_test` | 211 s, 326 s, 381 s (probes); 496 s (compose run) |
+| Acceptance IMAGE (red apple, 512×512) | PASS, 352.8 s. PNG decoded: luminance stddev 75.9, 420 distinct colours |
+| IMAGE-NEGATIVE | PASS: 5 invalid requests → 400, and no generation was created |
+| IMAGE-REPRODUCIBLE (the idempotence check) | PASS: seed 4242 twice → byte-identical (sha256 `f7c2c1b9…`); seed 777 → a different image |
+| MEDIA-CRASH (sd-cli killed mid-run) | PASS: settled `failed` with no internals in the message, and not charged |
+| Browser IMAGE-UI | see §23 |
 
-## 6. Real model verification
+## 13. Audio
 
-Every AI capability was exercised against **Ollama `qwen2.5:7b`** (chat, tools and JSON) and
-**`nomic-embed-text`** (768-d), not against a mock. Running a real 7B model exposed defects that
-no mock could, and each was fixed at its root, with a test that fails without the fix:
+Piper (`en_US-lessac-low`) is baked into the API image.
+- **Acceptance AUDIO:** a 16 kHz WAV, 4.09 s, RMS 0.142 (silence would be 0).
+- **Browser AUDIO-UI:** the page's `<audio>` loaded and measured it.
 
-- **Silent context truncation.** Ollama's default 4096-token window truncates prompts from the
-  front. The harness now reads the real window and fits prompts to it; compose sets 16K.
-- **Malformed JSON.** A storyboard came back unusable and the video lost its narration. The fix
-  is JSON mode (grammar-constrained on Ollama) plus one corrective retry, both metered. Five of
-  five storyboards were then model-written.
-- **Hallucinated identifiers.** A codename was stored with one digit changed. Facts whose
-  digit-bearing tokens are not in the user's message are now dropped. Four of four memory
-  probes then formed and recalled the exact codename.
-- **Incomplete and textual tool calls.** Calls written as text (`Ronaldo\n{"name": ...}`) had
-  been taken as final answers. Well-formed calls to offered tools are now recovered and run
-  through the normal path.
-- **Wrong tool use.** The model edited the test instead of the source, which is now refused and
-  restored. It edited a file that does not exist; the error now lists the real files. It sent
-  diffs with wrong indentation; the error now names the mismatched line. It sent headerless
-  diffs; the error now points to `code.replace_text`.
-- **Citation-only answers and false grounding.** A refusal carrying `[1]` was reported as
-  grounded. RAG now reports an explicit `outcome`.
-- **Long-running requests.** The storyboard's 25 s in-request ceiling became a job with a
-  180 s deadline. Node deadlines are enforced and reported as timeouts, never as cancellations.
+## 14. Video
 
-Model variance cannot be removed, and the platform does not pretend otherwise. A failed coding
-run ends `FAILED` with the real test output, never `COMPLETED`.
+The pipeline has four steps:
+1. The model writes the storyboard (a `video.plan` job).
+2. Each scene is an SDXL still animated by ffmpeg ("image-motion": **motion, not a video model**),
+   with Piper narration.
+3. The render muxes an MP4 with H.264 video, AAC audio and a `mov_text` subtitle track.
+4. The render also produces a WebVTT file and a **WebM (VP9/Opus) rendition** (DL-19).
 
-## 7. Image verification
+- **Acceptance VIDEO:** 486.9 s. 2 narrated scenes. `ffprobe` shows `[video:h264, audio:aac,
+  subtitle:mov_text]`, 8.0 s.
+- **Browser VIDEO-UI:** the test Chromium has no H.264 support (`canPlayType` returned `""`). It
+  chose and decoded the WebM: 8.0 s, 640 px, with the caption track. Before DL-19 this check
+  failed.
 
-stable-diffusion.cpp (commit `168f7b8`, built from source) runs **SDXL base 1.0**, converted to
-q8_0 GGUF. The model was fetched from Docker Hub's `ai/stable-diffusion` artifact because Hugging
-Face is unreachable here (`scripts/models/`). The IMAGE check requests a red apple on a wooden
-table. It decodes the returned PNG (512×512) and requires real content: luminance stddev 75.9,
-420 distinct colours. This was verified through the API in development (350 s) and in the compose
-worker container (443 s). Evidence: `evidence/image-red-apple-sdxl-2026-09-27.jpg`. CI runs the
-real-model image tests with SD-Turbo. The OpenAI-compatible images adapter is fixture-tested only,
-since there are no credentials.
+## 15. MCP
 
-## 8. Audio verification
+stdio and Streamable HTTP clients. Tools register disabled. The bundled filesystem server is
+confined to the caller's project workspace.
+- **Acceptance MCP:** an agent task read a planted word through the real server, and another
+  project's directory was refused.
+- **MCP-CRASH:** the killed server was marked `failed` with 0 tools, and reconnect restored its 14
+  tools.
 
-Piper (`en_US-lessac-low`) runs in the dev backend and inside the API image. The AUDIO check
-decodes the WAV and measures it: 16 kHz, 3.9–4.1 s, RMS 0.13–0.17, so silence would fail. It
-passed in every run, including compose. Scene narration in the video pipeline uses the same
-provider.
+## 16. Security
 
-## 9. Video verification
+- **Attack suite on the final API: 11/11.** Checks:
+  - 72 protected routes return 401 without credentials;
+  - CSRF;
+  - 6 cross-tenant IDOR probes → 404;
+  - API-key scope;
+  - path traversal;
+  - upload validation;
+  - malformed input (413 and 400, no 5xx);
+  - chat overrides;
+  - enumeration;
+  - response headers;
+  - RAG prompt injection.
+- **Earlier on compose:** X-Forwarded-For spoofing.
+- **`verify` SECURITY:** `npm audit` has no high or critical findings; the secret scan finds all
+  579 tracked files clean; no mock serves production.
+- **CI:** gitleaks.
+- **Sandbox:** the real-container sandbox runs with no network, a read-only root, a non-root user
+  and one workspace (4/4).
+- **Stated limits** ([SECURITY.md](SECURITY.md)): on Cloud Run the agent sandbox is process
+  isolation, there is no SSO or MFA, and `web.fetch` needs an allowlist to stop exfiltration.
 
-For "A short explainer about how bees make honey" (8 s, two 4-s scenes), the pipeline ran as
-follows:
+## 17. Observability
 
-1. `video.plan` job: the model wrote the storyboard (`scriptSource: model`), with narration such
-   as "Bees start their journey for nectar."
-2. Each scene: an SDXL still animated by ffmpeg (image-motion; **motion, not a video model**,
-   as it says), plus Piper narration.
-3. Render: ffmpeg produced an MP4.
+- **Logs:** structured JSON, with request ids across the API, jobs and providers.
+- **Traces:** OpenTelemetry spans, exported to logs; no collector is deployed.
+- **Metrics:** Prometheus, from the API and from the worker's own `METRICS_PORT` listener.
+- **Acceptance METRICS:** both endpoints were scraped, and every counter was non-zero:
+  `http_requests_total` 606, `provider_request_count` 25, `token_usage_total` 18966.
 
-`ffprobe` of the downloaded MP4 shows **h264 video, AAC audio and a mov_text subtitle track,
-8.0 s**, plus a valid WebVTT asset. This passed in dev run 2 (427 s) and in compose (462 s, the
-plan job in the API container and the scenes and render in the worker).
+## 18. Docker
 
-Evidence: `evidence/video-bees-ffprobe-2026-09-27.json` and `evidence/video-bees-frame-2026-09-27.jpg`.
-The frame shows the low fidelity of SDXL at 512 px and 12 steps. A real video model is the
-Replicate adapter, which is fixture-tested only because there is no token.
+- **Images:** `backend/Dockerfile` (API and worker: ffmpeg, Piper and a voice) and
+  `frontend/Dockerfile`.
+  - Both build in CI.
+  - Locally the API image's runtime stage is Ubuntu, because `deb.debian.org` is blocked here.
+    The build stage is identical.
+- **Compose stack** (with the `docker-compose.sdcpp.yml` overlay): postgres, ollama, api, worker
+  and web. Every runtime script in this report ran against it.
+- **`verify` DOCKER:** the compose file is valid and the sandbox passes 4/4 (on re-run, §22).
 
-## 10. Coding-agent verification
+## 19. Terraform
 
-The check writes a real project: `sum.js` returns `a - b`, and `sum.test.cjs` asserts
-`sum(2, 3) === 5`. It creates a `fix_failing_test` task and afterwards re-runs the test
-**independently**, on the files as the API serves them. Current build:
+`infrastructure/terraform` defines:
+- a Cloud Run API service (internal ingress, 3600 s timeout, `cpu_idle = false`);
+- a worker pool;
+- a web service with Direct VPC egress;
+- Cloud SQL, GCS, Artifact Registry, Secret Manager and a VPC.
 
-| Run | Result | Time | Test file | Independent re-run |
-|---|---|---|---|---|
-| Probe 1 | COMPLETED | 211 s | unchanged | exit 0 |
-| Probe 2 | COMPLETED | 381 s | unchanged | exit 0 |
-| Probe 3 | COMPLETED | 326 s | unchanged | exit 0 |
-| Compose acceptance | COMPLETED | 496 s | unchanged | exit 0 |
+`terraform fmt -check`, `init` and `validate` pass, in CI and in `verify` (from a filesystem
+provider mirror, because the registry is unreachable here). `plan` and `apply` are
+`BLOCKED_EXTERNAL`.
 
-The logs show the loop the brief asks for. The agent runs the test and reads the failure, reads
-the source, edits it (one diff refused with the reason, then `code.replace_text` succeeds),
-re-runs the test and answers. On earlier builds the same check failed in dev acceptance runs 1
-and 2 and in a probe, each time ending `FAILED` with the source untouched. Those failures are how
-the agent fixes in §6 were found. Evidence: `evidence/coding-agent-probes-2026-09-27.log`, and the
-acceptance files.
+## 20. CI/CD
 
-## 11. Security verification
+`.github/workflows/ci.yml` has five jobs:
+- **build-and-test:** includes the binary-gated suites, with an assertion that none were skipped.
+- **frontend.**
+- **e2e:** Playwright.
+- **security:** gitleaks, `npm audit`, no-fake-in-production.
+- **infrastructure:** the sandbox suite, both image builds, boots in the worker role and against
+  real Postgres, and Terraform.
 
-- **Tenant isolation, live:** another tenant's conversation, document and workspace file each
-  return 404 (compose TENANT-ISOLATION). The Playwright suite asserts cross-tenant 404s in a
-  browser.
-- **A cross-tenant read found and fixed:** the bundled MCP filesystem server spans every
-  project's workspace. Its path arguments are now confined to the caller's workspace. The real
-  server is tested with a control case that reads the other tenant's secret when the confinement
-  is removed. Live, a probe for another project's directory was refused (compose MCP check).
-- **Sessions:** logout revokes server-side, so a replayed cookie gets 401. Rate limit: 429 with
-  `Retry-After`. Quota: 429 `QUOTA_EXCEEDED` before any work, and nothing created.
-- **Agent sandbox:** `DockerSandbox` is verified in a real container (4/4: no network, read-only
-  root, dropped capabilities, one workspace), locally and in CI. The coding agent cannot modify
-  its test.
-- **No fake output in production:** mock providers are opt-in, and production refuses them.
-- **CI security job:** gitleaks over full history; `npm audit --audit-level=high` exits 0 (six
-  moderate advisories remain, each assessed in SECURITY.md: four are in a dev-only tool chain; two
-  are in the GCS client's dependencies, in a function the platform does not call); the
-  no-fake-in-production assertion.
-- **Known, stated limits:** the compose stack runs agent commands under the process sandbox (no
-  Docker socket is mounted). The rate limiter fails open. There is no SSO or MFA. `web.fetch` is
-  an exfiltration channel unless `WEB_FETCH_ALLOWLIST` is set. See [SECURITY.md](SECURITY.md).
+Green runs this pass:
 
-## 12. Database verification
+| Commit | CI run |
+|---|---|
+| `10abb12` | 36385621375 |
+| `81cedf8` | 36389714948 |
+| `149bd22` | 36394898273 |
+| `87f1b1b` | 36400678818 |
+| `70b4229` | 36414199421 |
+| `51a66a5` | 36420864142 |
 
-- **Embedded:** PGlite with pgvector serves development and the whole test suite (real
-  migrations, real pg-boss).
-- **Standalone Postgres 16 + pgvector:**
-  - The compose stack ran all 24 acceptance checks on it.
-  - CI now boots the built API image against `pgvector/pgvector:pg16` and checks that the
-    migrations created all 23 tables.
-  - Starting that path found a bug that stopped every standalone-Postgres boot: pg-boss 12
-    rejected an explicit `backend: undefined`. It is fixed, with a test.
-- **Persistence:** data survived logout and login in the PERSISTENCE check.
+There is no deployment pipeline (CD); deployment is the runbook.
 
-## 13. E2E verification
+## 21. Cloud
 
-- **Browser:** Playwright runs **14 tests in 5 specs** in a real Chromium against the real API and
-  a real database. The specs cover chat and history, auth and cross-tenant isolation, account
-  security, the admin boundary, and the autonomous agent with live SSE and approval. Result:
-  **14 passed** locally (Chromium). The CI `e2e` job is green.
-- **System:** the full-system acceptance ran against the dev backend and against the compose
-  stack (§5), plus a browser smoke test against the compose web container.
+**`BLOCKED_EXTERNAL`.** Nothing is deployed. [PRODUCTION_DEPLOYMENT_BLOCKER.md](PRODUCTION_DEPLOYMENT_BLOCKER.md)
+names each missing item (GCP project, credentials, database password, a reachable model runtime),
+the exact command it unblocks, and the result each command must produce.
 
-## 14. Docker verification
+## 22. Test counts
 
-- **Images:** `backend/Dockerfile` (API and worker, with ffmpeg, Piper and a voice) and
-  `frontend/Dockerfile` both build in CI.
-- **Boots in CI:** the API image boots in the worker role with no LLM key, and boots against a
-  real Postgres.
-- **Compose stack, run here:**
-  - `docker compose -f docker-compose.yml -f docker-compose.sdcpp.yml up -d` brought up
-    postgres, ollama, api, worker and web.
-  - All five services are healthy. The API applies migrations; the worker registers its six
-    queues and serves `/metrics` on 9464; the web app serves the UI.
-  - Acceptance and browser checks ran against the stack (§5).
-- **Local build difference:** this environment cannot reach `deb.debian.org`. The local API image
-  therefore used a verification-only variant of `backend/Dockerfile`, identical except that its
-  runtime stage is `ubuntu:24.04` instead of `node:24-bookworm-slim`. The application build stage
-  is unchanged. The committed Debian Dockerfile is the one CI builds and boots.
-- **Real-container sandbox:** DockerSandbox 4/4.
+From `npm run verify` on the final tree (`docs/evidence/2026-09-28/verify.md`):
 
-## 15. Terraform verification
+| Gate | Result |
+|---|---|
+| BUILD | PASS |
+| TYPECHECK | PASS, 0 errors |
+| LINT | PASS, 0 errors (5 warnings) |
+| UNIT | PASS, **996 passed, 0 failed, 2 skipped** across 26 workspaces |
+| INTEGRATION | PASS, **273 passed**, 0 failed (backend application) |
+| API | PASS, 5 contract tests, 76 routes each requested once, no drift |
+| SECURITY | FAIL on run 1 (a test canary matched the key pattern; fixed in `f0f3d13`), then **PASS** |
+| E2E | PASS, Playwright 14 |
+| DATABASE | PASS, 3/3 |
+| BOUNDARY | PASS, 8/8 |
+| BOOT | PASS, 8/8 |
+| REAL RUNTIME, MEDIA, AGENT, RAG, MEMORY, MCP | PASS (the 24/24 acceptance run) |
+| DOCKER | FAIL on run 1 (the sandbox image was missing and Docker Hub answered 429), then **PASS**, 4/4 |
+| TERRAFORM | PASS |
 
-`infrastructure/terraform/` defines Cloud Run (API service, worker pool, web), Cloud SQL
-Postgres, Cloud Storage, Artifact Registry, secrets and a clamd sidecar.
+**Automated tests: 1274 passed, 0 failed, 2 skipped** (996 unit + 273 integration + 5 contract).
+The 2 skips are the real-model SD image and video suites, which need a model file; CI runs them
+with SD-Turbo.
 
-- **Passes:** `terraform fmt -check`, `init` and `validate` (CI, and locally from a filesystem
-  provider mirror because the registry is unreachable here).
-- **Blocked:** `terraform plan` and `apply` need a GCP project and credentials, so they are
-  **BLOCKED_EXTERNAL**.
-- **Known gap:** there is no remote state backend. Configure one before any shared use.
+Per workspace:
 
-## 16. Cloud deployment verification
+| Workspace | Tests |
+|---|---|
+| web | 124 |
+| tools | 167 |
+| media | 106 |
+| agent-core | 101 |
+| security | 87 |
+| rag | 65 |
+| memory | 44 |
+| mcp | 39 |
+| observability | 31 |
+| video-replicate | 31 |
+| model-router | 30 |
+| jobs | 23 |
+| llm-local | 19 |
+| quota | 16 |
+| llm-openai | 16 |
+| llm-google | 15 |
+| image-sdcpp | 13 (+1 skipped) |
+| llm-anthropic | 13 |
+| shared | 11 |
+| image-openai | 10 |
+| video-motion | 10 (+1 skipped) |
+| video-mock | 8 |
+| scanning | 7 |
+| image-mock | 4 |
+| database | 3 |
+| embeddings | 3 |
 
-**BLOCKED_EXTERNAL.** Nothing has been deployed, and no production smoke test has run. The
-required access and steps:
+## 23. E2E counts
 
-- **Needed:** a GCP project with billing and a budget alert, and credentials for `terraform` and
-  `gcloud`.
-- **Deploy steps:** follow `infrastructure/DEPLOYMENT_RUNBOOK.md`:
-  1. The bootstrap apply.
-  2. Build and push both images.
-  3. The full apply.
-  4. Migrations through the Cloud SQL Auth Proxy.
-  5. Its verification list: health, auth, the api/worker split, GCS assets, upload scanning with
-     EICAR, and `TRUST_PROXY_HOPS`.
-- **To run the acceptance there:** set `ACCEPT_API_URL` to the service, run
-  `node scripts/acceptance/full-system.mjs`, and add the worker's metrics endpoint if one is
-  exposed.
-- **Image generation on Cloud Run** needs either sd.cpp baked into an image or a GPU image service
-  behind `IMAGE_BASE_URL`. The Terraform configures neither.
+- **Playwright:** 14 tests in 5 specs, against the real API and database: chat and history, auth
+  and cross-tenant isolation, account security, the admin boundary, and the autonomous agent with
+  live SSE and approval. 14 passed in `verify` and in CI.
+- **Browser acceptance** (`scripts/acceptance/browser.mjs`, a real Chromium driving the compose
+  web app with real models): the results are in
+  [evidence/2026-09-28/browser-compose-final.md](evidence/2026-09-28/browser-compose-final.md).
 
-## 17. CI verification
+_This run was still in progress at this commit. Its results are added in the next commit._
 
-`.github/workflows/ci.yml` runs on GitHub Actions (push, pull request and `workflow_dispatch`):
+## 24. Real-runtime evidence
 
-- **`build-and-test`:** install, build, typecheck, lint, boundary, API-doc drift, migrations, and
-  the full suite with real clamd, fake-gcs-server, ffmpeg, Piper and stable-diffusion.cpp +
-  SD-Turbo. It asserts that no gated suite skipped.
-- **`frontend`:** unit tests and build.
-- **`e2e`:** Playwright.
-- **`security`:** gitleaks, audit, no-fake-in-production.
-- **`infrastructure`:** real-container sandbox suite, both image builds, boot in the worker role,
-  **boot against real Postgres**, `terraform fmt` and `validate`.
+All in [evidence/2026-09-28/](evidence/2026-09-28/):
 
-Green runs this pass: 36311897333, 36316998578, 36319558071, 36322243655, 36324867561, and the
-final run on `0487870`: **36327781128, all five jobs green**, including the zero-skip assertion and the real-Postgres boot. One run failed, 36324427930 on `1b6ec04`: the typecheck step
-caught a mistyped test mock. It was fixed in `d163202`, not bypassed.
+| Run | Result | File |
+|---|---|---|
+| Full-system acceptance, final image | **24/24** | `acceptance-compose-final.md` |
+| Attacks, final image | **11/11** | `attacks-compose-final.md` |
+| Failure injection | run 1: 1/5 (three platform defects, two script defects); run 2: **5/5** | `failure-injection-run1.md`, `failure-injection-run2.md` |
+| Extra scenarios | run 3: 3 PASS, 1 FAIL (CODING-SECOND, §9) | `extra-scenarios-run*.md` |
+| Browser, VIDEO-UI after DL-19 | PASS (WebM decoded) | `browser-video-webm.md` |
+| Browser, full suite, final stack | see §23 | `browser-compose-final.md` |
+| `npm run verify` | §22 | `verify.md` |
+| Latency | see below | `latency-compose-final.md` |
 
-## 18. Remaining blockers
+_The latency measurement runs after the browser suite. Its results are added in the next commit._
+
+## 25. Blockers
 
 Only external ones remain:
 
-1. **GCP project and credentials.** Needed for `terraform plan`/`apply`, the Cloud Run
-   deployment and its smoke tests, verifying `TRUST_PROXY_HOPS` against the real front end, and
-   exercising real Cloud SQL, GCS and the clamd sidecar.
-2. **Hosted provider credentials** (optional; the platform runs fully without them). The
-   OpenAI, Anthropic and Google LLM adapters, the OpenAI-compatible images adapter and the
-   Replicate video adapter are fixture-tested but have served no real request.
+1. **A GCP project with billing, credentials, a database password and a model runtime reachable
+   from Cloud Run.** These gate `terraform plan`/`apply`, the deployment, and every production
+   smoke test. They also gate verifying `TRUST_PROXY_HOPS`, internal ingress and the
+   one-hour proxy timeout on real Cloud Run. See
+   [PRODUCTION_DEPLOYMENT_BLOCKER.md](PRODUCTION_DEPLOYMENT_BLOCKER.md).
+2. **Hosted provider credentials** (optional). The OpenAI, Anthropic and Google LLM adapters, the
+   OpenAI-compatible images adapter and the Replicate video adapter are fixture-tested but have
+   served no real request.
 
-Not blockers, but worth knowing:
+## 26. Limitations
 
-- A 7B model on CPU is slow (see §5) and sometimes wrong. The harness contains the damage.
-- SDXL at 512 px is low-fidelity.
-- The compose stack's agent sandbox is process-level.
+- **A 7B model on 4 CPU cores is slow and sometimes wrong.** It did not complete the second coding
+  task (§9). The harness contains the damage: honest verdicts, a read-only test, bounded turns and
+  time.
+- **Media speed and fidelity:** SDXL at 512 px takes about 6 minutes per image and is
+  low-fidelity. Local video is animated stills, not a video model.
+- **Cold model load:** the fix is covered by a unit test. The runtime restart after it found the
+  model already in the page cache (warmed in 1.4 s), so a cold load after the fix was not observed
+  on this machine.
+- **One API instance:** the agent's live event bus is in-process (ADR-159).
+- **Sandbox on compose and Cloud Run:** agent commands run under process isolation; the Docker
+  sandbox needs a Docker socket.
+- **No SSO, MFA, password reset or email verification**, by decision.
+- **Local Docker images:** built with an Ubuntu runtime stage, and the sandbox image came from
+  `mirror.gcr.io`, both because of this network. CI builds the committed Debian Dockerfile.
 
-## 19. Exact commands to run locally
+## 27. Local commands
 
 ```bash
-# Each application on its own (Node 22+). Optional model runtime:
-ollama pull qwen2.5:7b && ollama pull nomic-embed-text        # OLLAMA_CONTEXT_LENGTH=16384
-cd backend  && npm install && npm run build && npm run test && npm run dev   # :8787
-cd frontend && npm install && npm run build && npm run test && npm run dev   # :3000
+# Model runtime (optional in development; required for the real-runtime gates)
+ollama pull qwen2.5:7b && ollama pull nomic-embed-text      # OLLAMA_CONTEXT_LENGTH=16384
 
-# The whole repository's gates
-npm ci && npm run build && npm run typecheck && npm run lint && npm test
-bash scripts/verify-boundary.sh && bash scripts/verify-boot.sh
-npm run test:docker -w @ai-platform/security            # needs Docker
-cd frontend && npx playwright test                       # browser E2E
+# Each application on its own
+cd backend  && npm install && npm run dev      # BACKEND_PORT 8787, PGlite unless DATABASE_URL
+cd frontend && npm install && npm run dev      # FRONTEND_PORT 3000
 
-# The stack in containers
+# The stack
 docker compose up -d --build
-docker compose --profile setup run --rm ollama-pull
-SD_CLI_DIR=/opt/sd SD_MODEL_DIR=/opt/models IMAGE_SD_MODEL_FILE=<model> \
-  docker compose -f docker-compose.yml -f docker-compose.sdcpp.yml up -d   # optional images/video
+docker compose -f docker-compose.yml -f docker-compose.sdcpp.yml up -d   # with local image generation
 
-# Acceptance and latency against whatever is running
-ACCEPT_ADMIN_EMAIL=… ACCEPT_ADMIN_PASSWORD=… \
-ACCEPT_EXTRA_METRICS_URLS=http://127.0.0.1:9464/metrics \
-  node scripts/acceptance/full-system.mjs
+# Every gate
+ACCEPT_API_URL=http://127.0.0.1:8787 ACCEPT_ADMIN_EMAIL=… ACCEPT_ADMIN_PASSWORD=… \
+ACCEPT_EXTRA_METRICS_URLS=http://127.0.0.1:9464/metrics npm run verify
+
+# Runtime scripts against a running stack
+node scripts/acceptance/full-system.mjs
+WEB_URL=http://localhost:3000 node scripts/acceptance/browser.mjs
+node scripts/acceptance/attacks.mjs
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.sdcpp.yml" node scripts/acceptance/failure-injection.mjs
+node scripts/acceptance/extra-scenarios.mjs
 node scripts/acceptance/latency.mjs
-
-# Terraform (static)
-terraform -chdir=infrastructure/terraform init -backend=false && terraform -chdir=infrastructure/terraform validate
 ```
 
-## 20. Final status matrix
+The setup details are in [LOCAL_SETUP.md](LOCAL_SETUP.md) and [MEDIA_SETUP.md](MEDIA_SETUP.md), every
+environment variable is in [ENVIRONMENT.md](ENVIRONMENT.md), and known problems are in
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
-| Capability | Code | Local | E2E | Real Runtime | Production | Status |
-|---|---|---|---|---|---|---|
-| Auth | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Multi-tenancy | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Chat | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Streaming | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Tool calling | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Agent | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Coding agent | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Memory | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| RAG | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Image | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Audio | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Video | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| MCP | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Usage | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Quota | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Security | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Observability | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Docker | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Terraform | PASS | PASS | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL |
-| CI/CD | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Frontend | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
-| Backend | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS |
+## 28. Production commands
 
-Column definitions, and the completion gate, are in [PROJECT_STATUS.md](PROJECT_STATUS.md).
-Automated tests at `69de762` (`0487870` after it adds only an app icon): **1175 passed, 0 failed, 2 skipped** across 136 files; the two skips are the real-model image and video suites, which need a stable-diffusion model file and run in CI with SD-Turbo. Typecheck: 0 errors; lint: 0 errors.
+[PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) and
+`infrastructure/DEPLOYMENT_RUNBOOK.md` give the full sequence:
+1. The Terraform bootstrap apply.
+2. Build and push the API image.
+3. Apply the API service.
+4. Build the web image with `NEXT_PUBLIC_API_PROXY_TARGET=<api url>`.
+5. The full apply.
+6. Migrations through the Cloud SQL Auth Proxy.
+7. Verification through the web URL.
+
+[PRODUCTION_DEPLOYMENT_BLOCKER.md](PRODUCTION_DEPLOYMENT_BLOCKER.md) lists each command with its
+expected result. None has been run.
+
+## 29. Final matrix
+
+| Capability | Code | Local | E2E | Real runtime | Production |
+|---|---|---|---|---|---|
+| Auth | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Invitations and roles | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Multi-tenancy | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Chat | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Streaming | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Tool calling | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Agent | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Coding agent | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED (first task; the second task was not completed, §9) | BLOCKED_EXTERNAL |
+| Memory | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| RAG | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Image | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Audio | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Video | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| MCP | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Usage and quota | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Security | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Resilience | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Observability | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Frontend | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Backend | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Docker | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | REAL_RUNTIME_VERIFIED | BLOCKED_EXTERNAL |
+| Terraform | IMPLEMENTED | LOCALLY_VERIFIED | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL |
+| CI/CD | IMPLEMENTED | LOCALLY_VERIFIED | E2E_VERIFIED | E2E_VERIFIED | BLOCKED_EXTERNAL |
+| Cloud deployment | IMPLEMENTED | LOCALLY_VERIFIED | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL |
+
+The evidence, test command, runtime command and known limitations for each row are in
+[PROJECT_STATUS.md](PROJECT_STATUS.md).
