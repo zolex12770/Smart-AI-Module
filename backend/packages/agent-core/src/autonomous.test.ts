@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDb,
   runMigrations,
@@ -1252,6 +1252,60 @@ describe("autonomous tasks run through the model-driven loop (ADR-064)", () => {
     const turns = recorded.filter((r) => (r.idempotencyKey ?? "").includes(":turn:"));
     expect(turns.length).toBeGreaterThan(0);
     for (const row of turns) expect(row).toMatchObject({ provider: "scripted", model: "scripted-1" });
+  });
+
+  /**
+   * DL-21. A compose run's turn 12 streamed for five minutes and was then cut off. Only a turn
+   * that reached `done` was charged, so that turn — the longest of the run — cost nothing. Chat
+   * already charges an estimate for a turn that dies mid-stream (DL-10); the agent now does too.
+   */
+  it("charges an estimate for a turn that fails after the model started answering", async () => {
+    const recorded: Array<{ provider: string; model: string; idempotencyKey?: string; inputTokens: number; outputTokens: number }> = [];
+    const meter = {
+      async checkTokens() {
+        return { allowed: true as const };
+      },
+      async record(entry: (typeof recorded)[number]) {
+        recorded.push(entry);
+      },
+    };
+    const provider = new ScriptedAgentProvider([{ text: "unused" }]);
+    provider.streamChat = async function* () {
+      yield { type: "token", delta: "Let me look at the failing test and then change slugify so that it " } as never;
+      throw new Error("This operation was aborted");
+    };
+    const { engine } = build([], undefined, [], provider, meter);
+    const task = await engine.createAndStart("autonomous", { goal: "Fix it." }, { projectId: PROJECT, userId: USER });
+    await waitFor(task.id, ["COMPLETED", "FAILED"]);
+    const [node] = await nodes.listByRootUnscoped(task.id);
+    await vi.waitFor(() => expect(recorded.some((r) => (r.idempotencyKey ?? "").endsWith(":partial"))).toBe(true));
+    const partial = recorded.find((r) => (r.idempotencyKey ?? "").endsWith(":partial"))!;
+    expect(partial.idempotencyKey).toBe(`agent.node:${node.id}:turn:1:partial`);
+    expect(partial).toMatchObject({ provider: "scripted", model: "scripted-1" });
+    expect(partial.inputTokens).toBeGreaterThan(0);
+    expect(partial.outputTokens).toBeGreaterThan(0);
+  });
+
+  it("charges nothing for a turn whose provider failed before answering", async () => {
+    const recorded: string[] = [];
+    const meter = {
+      async checkTokens() {
+        return { allowed: true as const };
+      },
+      async record(entry: { idempotencyKey?: string }) {
+        recorded.push(entry.idempotencyKey ?? "");
+      },
+    };
+    const provider = new ScriptedAgentProvider([{ text: "unused" }]);
+    // eslint-disable-next-line require-yield
+    provider.streamChat = async function* () {
+      throw new Error("connection refused");
+    };
+    const { engine } = build([], undefined, [], provider, meter);
+    const task = await engine.createAndStart("autonomous", { goal: "Fix it." }, { projectId: PROJECT, userId: USER });
+    await waitFor(task.id, ["COMPLETED", "FAILED"]);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(recorded.filter((k) => k.includes(":turn:"))).toEqual([]);
   });
 
   it("reports a verification that could not run as inconclusive, not as passed", async () => {

@@ -569,3 +569,36 @@ keeps the planner's per-node deadlines. The FAIL from the first run is kept as e
   provider is a FAIL, not a block.
 - `attacks.mjs` read the same response wrongly. It fell back to `/api/v1/models`, which was
   right by accident; it now reads `/api/v1/models` directly.
+
+## DL-21: Three defects found by the coding-agent rerun
+
+The rerun with the 30-minute node budget (DL-20) still failed CODING-SECOND, after 848 s, and
+CODING-BAD-PATCH ended the same way. The audit log, Ollama's request log and the usage ledger
+show three platform defects. The model's own mistakes were a separate matter.
+
+**1. A correct diff was refused.** qwen2.5:7b sent a correct unified diff for `slugify.js` twice.
+Its blank context line had no leading space, as many diff producers write it, and as `git apply`
+and GNU patch both accept. The parser dropped the line, the hunk lost its blank context line, and
+the model was told the lines were "not in this order".
+- **Fix:** an empty line inside a hunk is read as an empty context line, but only when more body
+  lines of the same hunk follow it. Trailing blank lines and a blank before the next file header
+  still belong to nothing.
+- **Test:** `patch.test.ts` uses the diff verbatim from the audit log, plus the two guard cases.
+
+**2. A generation still streaming was killed at 300 s.** Ollama logged the call at exactly 5m0s.
+The local adapter's `requestTimeoutMs` was a total deadline, but an agent turn may ask for 4096
+tokens, and this CPU produces about 5 tokens/s.
+- **Fix:** the deadline is now for silence: it re-arms on every chunk. A runtime that stops
+  sending is still abandoned, and the error now says it stopped sending. A live generation is
+  bounded by the output cap and the node deadline.
+- **Also:** the adapter now aborts the request when its caller stops reading (a node deadline, a
+  cancel). Before, Ollama kept generating on the CPU the next call needed.
+- **Test:** `llm-local/src/index.test.ts` has three tests, each failing on the old adapter.
+
+**3. A turn that died mid-stream was never charged.** Only `done` carried usage, so that
+five-minute turn cost nothing. Chat already charges an estimate for this case (DL-10).
+- **Fix:** once the router has committed to a provider, an unfinished turn is charged an
+  estimate: `…:turn:<n>:partial` for reasoning nodes and `agent.node:<id>:attempt:<n>:partial`
+  for `model_call` nodes. Nothing is charged when the provider failed before answering.
+- **Test:** `autonomous.test.ts` and `engine.test.ts` each have two tests. The charging test in
+  each fails on the old engine.

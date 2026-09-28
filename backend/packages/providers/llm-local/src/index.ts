@@ -116,8 +116,28 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
       body.tool_choice = request.toolChoice ?? "auto";
     }
 
+    /**
+     * A deadline for SILENCE, re-armed by every chunk (DL-21). It was a total deadline: on four
+     * CPU cores qwen2.5:7b streams ~5 tokens/s, an agent turn may ask for 4096, and a call still
+     * streaming was cut off at exactly 300 s, failing the node. A runtime that stops sending is
+     * still abandoned after `requestTimeoutMs`; one that is making progress is bounded by the
+     * request's output cap and by the caller's own deadline instead.
+     */
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    let silentTooLong = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const armDeadline = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        silentTooLong = true;
+        controller.abort();
+      }, this.requestTimeoutMs);
+    };
+    const silenceError = () =>
+      new ProviderError(
+        `The local model runtime at ${this.baseUrl} stopped sending for ${this.requestTimeoutMs}ms and was abandoned.`
+      );
+    armDeadline();
     let res: Response;
     try {
       res = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
@@ -131,6 +151,7 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
       });
     } catch (err) {
       clearTimeout(timer);
+      if (silentTooLong) throw silenceError();
       throw new ProviderError(
         `Could not reach the local model runtime at ${this.baseUrl}: ${err instanceof Error ? err.message : String(err)}`,
         err
@@ -151,7 +172,18 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
       // Streamed tool calls arrive fragmented and out of order; `index` is the only stable key.
       const partialCalls = new Map<number, { id: string; name: string; args: string }>();
 
-      for await (const { data } of parseSseStream(res.body)) {
+      const events = parseSseStream(res.body)[Symbol.asyncIterator]();
+      for (;;) {
+        let step: IteratorResult<{ data: string }>;
+        try {
+          step = await events.next();
+        } catch (err) {
+          if (silentTooLong) throw silenceError();
+          throw err;
+        }
+        if (step.done) break;
+        armDeadline();
+        const { data } = step.value;
         if (!data || data === "[DONE]") continue;
         let payload: CompletionChunk;
         try {
@@ -228,6 +260,9 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
       };
     } finally {
       clearTimeout(timer);
+      // Also when the caller stopped reading early (a node deadline, a cancel): closing the
+      // request is what makes the runtime stop generating on a CPU the next call needs.
+      controller.abort();
     }
   }
 }

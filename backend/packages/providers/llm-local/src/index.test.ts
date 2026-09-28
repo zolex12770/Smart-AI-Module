@@ -195,6 +195,80 @@ describe("LocalOpenAICompatibleProvider", () => {
   });
 });
 
+/**
+ * DL-21. A real compose run: qwen2.5:7b on four CPU cores streams about 5 tokens/s, and an agent
+ * turn may ask for 4096. Ollama logged the call at exactly 5m0s. The adapter's 300-second
+ * deadline was a TOTAL deadline, so it cut off a generation that was still streaming, and the
+ * node failed. The deadline is now for SILENCE: a runtime that stops sending is still abandoned,
+ * but one that is making progress is bounded by the output cap and the node deadline instead.
+ */
+describe("LocalOpenAICompatibleProvider request deadline", () => {
+  const encoder = new TextEncoder();
+  const chunk = (c: object) => encoder.encode(`data: ${JSON.stringify(c)}\n\n`);
+
+  /** A body that sends `count` token chunks `everyMs` apart, then either finishes or goes silent. */
+  function pacedFetch(count: number, everyMs: number, thenSilent: boolean) {
+    const signals: AbortSignal[] = [];
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const signal = init!.signal!;
+      signals.push(signal);
+      let sent = 0;
+      let timer: ReturnType<typeof setInterval> | undefined;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal.addEventListener("abort", () => {
+            clearInterval(timer);
+            controller.error(new DOMException("This operation was aborted", "AbortError"));
+          });
+          timer = setInterval(() => {
+            if (sent < count) {
+              controller.enqueue(chunk({ choices: [{ delta: { content: `t${sent} ` } }] }));
+              sent++;
+              return;
+            }
+            clearInterval(timer);
+            if (thenSilent) return;
+            controller.enqueue(chunk({ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 5, completion_tokens: count } }));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          }, everyMs);
+        },
+        cancel() {
+          clearInterval(timer);
+        },
+      });
+      return new Response(body, { status: 200 });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, signals };
+  }
+
+  it("does not cut off a generation that is still streaming past the deadline", async () => {
+    const { fetchImpl } = pacedFetch(12, 25, false); // ~300 ms of streaming against a 120 ms deadline
+    const provider = new LocalOpenAICompatibleProvider({ ...base, fetchImpl, requestTimeoutMs: 120 });
+    const events = await collect(provider, { messages: [{ role: "user", content: "hi" }] });
+    const done = events.find((e) => e.type === "done");
+    expect(done).toBeTruthy();
+    expect(events.filter((e) => e.type === "token")).toHaveLength(12);
+  });
+
+  it("still abandons a runtime that goes silent mid-stream", async () => {
+    const { fetchImpl } = pacedFetch(3, 10, true);
+    const provider = new LocalOpenAICompatibleProvider({ ...base, fetchImpl, requestTimeoutMs: 120 });
+    const started = Date.now();
+    await expect(collect(provider, { messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(/stopped sending|120 ?ms/i);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("closes the request when the caller stops reading, so the runtime stops generating", async () => {
+    const { fetchImpl, signals } = pacedFetch(100, 10, false);
+    const provider = new LocalOpenAICompatibleProvider({ ...base, fetchImpl, requestTimeoutMs: 5_000 });
+    for await (const event of provider.streamChat({ messages: [{ role: "user", content: "hi" }] })) {
+      if (event.type === "token") break; // the agent's node deadline or a cancel does this
+    }
+    expect(signals[0]!.aborted).toBe(true);
+  });
+});
+
 describe("LocalEmbeddingProvider", () => {
   it("requests the documented shape and returns vectors in index order", async () => {
     const fetchImpl = vi.fn(

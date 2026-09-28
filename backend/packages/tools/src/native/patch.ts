@@ -95,6 +95,17 @@ export function parseUnifiedDiff(diff: string): FilePatch[] {
       hunk.lines.push(line);
       continue;
     }
+    /**
+     * An empty line INSIDE a hunk is an empty context line whose leading space was stripped — as
+     * `git apply` and GNU patch read it (DL-21). It was dropped, so a correct diff from a real
+     * model run lost its blank context line and was refused as "not in this order". Only a blank
+     * line followed by more body lines of the same hunk counts: trailing blank lines, and those
+     * before the next file's header, are still not part of anything.
+     */
+    if (hunk && line === "" && continuesHunk(lines, i + 1)) {
+      hunk.lines.push(" ");
+      continue;
+    }
     // "\ No newline at end of file" and diff/index/similarity headers are ignored.
   }
   closeHunk();
@@ -152,6 +163,16 @@ function checkHunkCounts(patch: FilePatch, hunk: Hunk): void {
   hunk.oldLines = oldCount;
   hunk.newLines = newCount;
   hunk.recounted = true;
+}
+
+/** Whether the first non-empty line from `from` is another body line of the current hunk. */
+function continuesHunk(lines: string[], from: number): boolean {
+  let j = from;
+  while (j < lines.length && lines[j] === "") j++;
+  const next = lines[j];
+  if (next === undefined) return false;
+  if (next.startsWith("--- ") && (lines[j + 1] ?? "").startsWith("+++ ")) return false;
+  return next.startsWith(" ") || next.startsWith("+") || next.startsWith("-");
 }
 
 function stripPrefix(path: string): string {

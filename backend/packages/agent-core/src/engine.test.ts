@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDb,
   organizations,
@@ -22,6 +22,7 @@ import { MockLLMProvider } from "@ai-platform/llm-mock";
 import { ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import { createFilesystemTools, ToolRegistry } from "@ai-platform/tools";
 import type {
+  ChatStreamEvent,
   CreateTaskNodeInput,
   NodeStatus,
   RequiresApproval,
@@ -731,6 +732,37 @@ describe("AgentEngine model-call metering", () => {
     expect(recorded.outputTokens).toBeGreaterThan(0);
     const nodes = await harness.taskNodes.listByRoot(projectId, task.id);
     expect(nodes.some((n) => n.id === recorded.nodeId)).toBe(true);
+  });
+
+  it("charges an estimate for a call that fails after the provider started answering (DL-21)", async () => {
+    const { projectId, userId } = harness;
+    // The router committed (the provider produced output), then the stream died.
+    harness.modelRouter.streamChat = async function* (_request, options) {
+      options?.onCommit?.({ provider: "local", model: "qwen2.5:7b" });
+      yield { type: "token", delta: "The answer to your question is that the harbour lies" } as ChatStreamEvent;
+      throw new Error("This operation was aborted");
+    } as typeof harness.modelRouter.streamChat;
+
+    const task = await harness.engine.createAndStart("echo_chat", { message: "meter me" }, { projectId, userId });
+    await waitForTaskState(harness, task.id, ["FAILED"]);
+    await vi.waitFor(() => expect(harness.meterCalls.length).toBe(1));
+    const [recorded] = harness.meterCalls as Array<(typeof harness.meterCalls)[number] & { idempotencyKey?: string }>;
+    expect(recorded).toMatchObject({ provider: "local", model: "qwen2.5:7b", taskId: task.id });
+    expect(recorded.idempotencyKey).toMatch(/^agent\.node:.+:attempt:\d+:partial$/);
+    expect(recorded.inputTokens).toBeGreaterThan(0);
+    expect(recorded.outputTokens).toBeGreaterThan(0);
+  });
+
+  it("charges nothing when the provider failed before answering", async () => {
+    const { projectId, userId } = harness;
+    // eslint-disable-next-line require-yield
+    harness.modelRouter.streamChat = async function* () {
+      throw new Error("connect ECONNREFUSED");
+    } as typeof harness.modelRouter.streamChat;
+    const task = await harness.engine.createAndStart("echo_chat", { message: "meter me" }, { projectId, userId });
+    await waitForTaskState(harness, task.id, ["FAILED"]);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(harness.meterCalls).toEqual([]);
   });
 
   it("refuses the call when quota says no — the node fails with the reason and NOTHING is recorded", async () => {

@@ -53,6 +53,54 @@ describe("parseUnifiedDiff", () => {
   });
 });
 
+/**
+ * DL-21. qwen2.5:7b wrote a correct diff whose blank context line carried no leading space, as
+ * many diff producers do and as `git apply` and GNU patch both accept. The parser dropped the
+ * line, the hunk lost its blank context line, and the model was told twice that the lines were
+ * "not in this order" — for a diff that was right.
+ */
+describe("blank context lines without their leading space", () => {
+  const file = "function slugify(title) {\n  return title.trim().replace(' ', '-');\n}\n\nmodule.exports = { slugify };\n";
+  // Verbatim from the audit log of the compose run.
+  const diff =
+    "--- a/slugify.js\n+++ b/slugify.js\n@@ -1,6 +1,7 @@\n function slugify(title) {\n" +
+    "-  return title.trim().replace(' ', '-');\n+  return title.toLowerCase().trim().replace(' ', '-');\n" +
+    " }\n\n module.exports = { slugify };\n";
+
+  it("reads an empty line inside a hunk as an empty context line", () => {
+    const [patch] = parseUnifiedDiff(diff);
+    expect(patch!.hunks[0]!.lines).toEqual([
+      " function slugify(title) {",
+      "-  return title.trim().replace(' ', '-');",
+      "+  return title.toLowerCase().trim().replace(' ', '-');",
+      " }",
+      " ",
+      " module.exports = { slugify };",
+    ]);
+  });
+
+  it("applies the model's diff exactly", () => {
+    const [patch] = parseUnifiedDiff(diff);
+    expect(applyPatchToContent(file, patch!).content).toBe(
+      "function slugify(title) {\n  return title.toLowerCase().trim().replace(' ', '-');\n}\n\nmodule.exports = { slugify };\n"
+    );
+  });
+
+  it("does not turn trailing blank lines after the last hunk into context", () => {
+    const tail = "--- a/a.js\n+++ b/a.js\n@@ -1,2 +1,2 @@\n const a = 1;\n-const b = 2;\n+const b = 3;\n\n\n";
+    const [patch] = parseUnifiedDiff(tail);
+    expect(patch!.hunks[0]!.lines).toEqual([" const a = 1;", "-const b = 2;", "+const b = 3;"]);
+    expect(applyPatchToContent("const a = 1;\nconst b = 2;\n", patch!).content).toBe("const a = 1;\nconst b = 3;\n");
+  });
+
+  it("does not carry a blank line across into the next hunk or file", () => {
+    const two =
+      "--- a/a.js\n+++ b/a.js\n@@ -1,1 +1,1 @@\n-x\n+y\n\n--- a/b.js\n+++ b/b.js\n@@ -1,1 +1,1 @@\n-p\n+q\n";
+    const patches = parseUnifiedDiff(two);
+    expect(patches.map((p) => p.hunks[0]!.lines)).toEqual([["-x", "+y"], ["-p", "+q"]]);
+  });
+});
+
 describe("applyPatchToContent", () => {
   const file = ["line one", "line two", "line three", "line four"].join("\n") + "\n";
 

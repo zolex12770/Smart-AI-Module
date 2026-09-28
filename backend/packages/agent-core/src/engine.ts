@@ -987,17 +987,57 @@ export class AgentEngine {
             tools,
             async *streamChat(request) {
               await checkTurnQuota(request.messages);
-              yield* modelRouter.streamChat(
-                {
-                  messages: request.messages,
-                  tools: request.tools,
-                  toolChoice: request.toolChoice,
-                  // Dropped here until the context-window fix: without it a local runtime may
-                  // generate until its window is full, leaving the next prompt no room at all.
-                  ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
-                },
-                { signal: controller.signal }
-              );
+              /**
+               * A turn that dies mid-stream is still charged — DL-21, as chat does (DL-10).
+               *
+               * Only `done` carries real usage, so a turn cut off by an error, a cancel or the
+               * node deadline cost nothing: in a compose run that was a five-minute turn. Once
+               * the router has committed to a provider (it produced output), the turn's prompt
+               * and what it streamed are charged as an estimate under their own key. Nothing is
+               * charged when the provider failed before answering.
+               */
+              const thisTurn = turn;
+              let committed: { provider: string; model: string } | null = null;
+              let completed = false;
+              let streamed = "";
+              try {
+                for await (const event of modelRouter.streamChat(
+                  {
+                    messages: request.messages,
+                    tools: request.tools,
+                    toolChoice: request.toolChoice,
+                    // Dropped here until the context-window fix: without it a local runtime may
+                    // generate until its window is full, leaving the next prompt no room at all.
+                    ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+                  },
+                  {
+                    signal: controller.signal,
+                    onCommit: (c) => {
+                      committed = c;
+                    },
+                  }
+                )) {
+                  if (event.type === "token") streamed += event.delta;
+                  else if (event.type === "tool_call") streamed += event.call.name + JSON.stringify(event.call.arguments);
+                  else if (event.type === "done") completed = true;
+                  yield event;
+                }
+              } finally {
+                const charged = committed as { provider: string; model: string } | null;
+                if (!completed && charged && meter) {
+                  void meter
+                    .record({
+                      provider: charged.provider,
+                      model: charged.model,
+                      inputTokens: estimatePromptTokens(request.messages.map((m) => m.content).join(" ")),
+                      outputTokens: estimatePromptTokens(streamed),
+                      taskId: task.id,
+                      nodeId: node.id,
+                      idempotencyKey: `${chargeKeyBase}:turn:${thisTurn}:partial`,
+                    })
+                    .catch(() => undefined);
+                }
+              }
             },
             executeTool: async ({ call }) => {
               /**
@@ -1382,7 +1422,20 @@ export class AgentEngine {
       const result = await this.withNodeDeadline(
         node,
         controller,
-        runModelToCompletion(this.deps.modelRouter, messages, node.modelProvider, controller.signal)
+        runModelToCompletion(this.deps.modelRouter, messages, node.modelProvider, controller.signal, (partial) => {
+          // DL-21: an unfinished call is charged an estimate, under its own key.
+          void this.deps.meter
+            ?.record({
+              provider: partial.provider,
+              model: partial.model,
+              inputTokens: estimatePromptTokens(messages.map((m) => m.content).join(" ")),
+              outputTokens: estimatePromptTokens(partial.streamed),
+              taskId: task.id,
+              nodeId: node.id,
+              idempotencyKey: `agent.node:${node.id}:attempt:${node.attemptCount}:partial`,
+            })
+            .catch(() => undefined);
+        })
       );
       if (!(await this.stillRunning(node, "waiting_model"))) return;
       if (this.deps.meter) {
@@ -2071,17 +2124,40 @@ async function runModelToCompletion(
   router: ModelRouter,
   messages: ChatMessage[],
   provider: string | null,
-  signal: AbortSignal
+  signal: AbortSignal,
+  /**
+   * Called when the call ends without `done` after a provider committed to it (it produced
+   * output): an error, the deadline or a cancel. The caller charges an estimate (DL-21).
+   */
+  onUnfinished?: (partial: { provider: string; model: string; streamed: string }) => void
 ): Promise<{ content: string; provider: string; model: string; usage: TokenUsage }> {
-  for await (const event of router.streamChat({ messages, provider: provider ?? undefined }, { signal })) {
-    if (event.type === "error") throw new Error(event.message);
-    if (event.type === "done") {
-      // `usage` was previously discarded here — which is precisely why an agent task's real
-      // token spend never reached the ledger (ADR-046).
-      return { content: event.message.content, provider: event.provider, model: event.model, usage: event.usage };
+  let committed: { provider: string; model: string } | null = null;
+  let streamed = "";
+  let completed = false;
+  try {
+    for await (const event of router.streamChat(
+      { messages, provider: provider ?? undefined },
+      {
+        signal,
+        onCommit: (c) => {
+          committed = c;
+        },
+      }
+    )) {
+      if (event.type === "error") throw new Error(event.message);
+      if (event.type === "token") streamed += event.delta;
+      if (event.type === "done") {
+        completed = true;
+        // `usage` was previously discarded here — which is precisely why an agent task's real
+        // token spend never reached the ledger (ADR-046).
+        return { content: event.message.content, provider: event.provider, model: event.model, usage: event.usage };
+      }
     }
+    throw new Error("Model stream ended without a done event.");
+  } finally {
+    const charged = committed as { provider: string; model: string } | null;
+    if (!completed && charged) onUnfinished?.({ ...charged, streamed });
   }
-  throw new Error("Model stream ended without a done event.");
 }
 
 /**
