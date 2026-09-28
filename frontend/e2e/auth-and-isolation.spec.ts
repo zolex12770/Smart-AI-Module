@@ -117,7 +117,8 @@ test.describe("usage", () => {
     // organization totals the ceilings are actually checked against, and this project's share
     // is reported beside them rather than instead of them. The screen used to show only the
     // project figure under organization limits, so the meter could not predict the refusal.
-    await expect(page.getByText(/tokens today/i)).toHaveCount(2);
+    // Exactly "Tokens today": the embedding meters ("Embedding tokens today") are separate figures.
+    await expect(page.getByText("Tokens today", { exact: true })).toHaveCount(2);
     await expect(page.getByText(/everything this organization has spent/i)).toBeVisible();
     await expect(page.getByRole("heading", { name: /this project.s share/i })).toBeVisible();
     await expect(page.getByText(/no limit of its own/i)).toBeVisible();

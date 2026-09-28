@@ -20,7 +20,7 @@ CSRF token was also unreadable: `document.cookie` cannot see another host's cook
 
 **Decision:**
 
-- Add an optional same-origin mode. Build the web app with `API_PROXY_TARGET=<api origin>` and an
+- Add an optional same-origin mode. Build the web app with `NEXT_PUBLIC_API_PROXY_TARGET=<api origin>` and an
   empty `NEXT_PUBLIC_API_URL`, and Next rewrites `/api/*` to the API. The Terraform deployment
   uses this mode, with `COOKIE_SAMESITE=lax`.
 - The API also returns the CSRF token from signup, login and `/auth/me`, and the client keeps it.
@@ -38,7 +38,7 @@ CSRF token was also unreadable: `document.cookie` cannot see another host's cook
    - Fix: `experimental.proxyTimeout` is one hour.
    - It is set unconditionally, because `next start` re-evaluates `next.config.mjs` at runtime.
      While the value was set only alongside the rewrites, a server started without
-     `API_PROXY_TARGET` still proxied (the rewrites are fixed at build time) but fell back to
+     `NEXT_PUBLIC_API_PROXY_TARGET` still proxied (the rewrites are fixed at build time) but fell back to
      30 s.
    - Re-measured after the fix: the 40 s response arrives whole.
 3. **Next forwards `X-Forwarded-For` unchanged and appends nothing** (measured: the value a

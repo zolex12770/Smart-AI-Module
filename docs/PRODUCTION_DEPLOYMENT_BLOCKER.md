@@ -54,7 +54,7 @@ terraform apply -target=google_cloud_run_v2_service.api -var project_id=<PROJECT
   -var db_password=<PASSWORD> -var llm_base_url=<URL> -var llm_model=<MODEL>
 API_URL=$(terraform output -raw api_url)
 cd ../..
-docker build -f frontend/Dockerfile --build-arg API_PROXY_TARGET=$API_URL --build-arg NEXT_PUBLIC_API_URL= \
+docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_PROXY_TARGET=$API_URL --build-arg NEXT_PUBLIC_API_URL= \
   -t <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/web:v1 .
 docker push <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/web:v1
 ```

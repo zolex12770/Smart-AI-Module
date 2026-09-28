@@ -64,7 +64,7 @@ condition: `next start` re-reads the file at runtime.
 **Sign-in works locally but not in the deployed app on Safari (or Chrome with third-party cookies
 blocked).**
 The web app and the API are on different sites, so the session cookie is third-party. Deploy in
-same-origin mode: build the web image with `API_PROXY_TARGET=<api url>` and an empty
+same-origin mode: build the web image with `NEXT_PUBLIC_API_PROXY_TARGET=<api url>` and an empty
 `NEXT_PUBLIC_API_URL`, and set `COOKIE_SAMESITE=lax` on the API. The Terraform deployment already
 does this ([PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md)).
 

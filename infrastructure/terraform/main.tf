@@ -632,7 +632,7 @@ resource "google_cloud_run_v2_service" "web" {
     containers {
       image = var.web_image
       # The web image is built in same-origin proxy mode (docs/PRODUCTION_DEPLOYMENT.md):
-      # API_PROXY_TARGET=<api service URL> and an empty NEXT_PUBLIC_API_URL, both build args
+      # NEXT_PUBLIC_API_PROXY_TARGET=<api service URL> and an empty NEXT_PUBLIC_API_URL, both build args
       # baked in by `next build`. The browser then only ever talks to this service, and Next
       # forwards /api/* to the API. Without this the session cookie is a third-party cookie
       # (two different *.run.app hosts, and run.app is a public suffix), and browsers that

@@ -13,7 +13,7 @@ the shape of it and the settings that matter.
 
 ```
 browser ──HTTPS──▶ ai-platform-web (Cloud Run, public, scales to zero)
-                     │  Next.js; proxies /api/* (API_PROXY_TARGET), one hour proxy timeout
+                     │  Next.js; proxies /api/* (NEXT_PUBLIC_API_PROXY_TARGET), one hour proxy timeout
                      │  Direct VPC egress, all traffic
                      ▼
                    ai-platform-api (Cloud Run, INTERNAL ingress, 1 warm instance, CPU always on,
@@ -47,7 +47,7 @@ Why it is shaped this way (the decisions are DL-1 and DL-2 in
 | 1 | Enable APIs, create Artifact Registry | `terraform apply -target=google_project_service.apis -target=google_artifact_registry_repository.images …` | `validate` only |
 | 2a | Build and push the API image | `docker build -f backend/Dockerfile -t <REGION>-docker.pkg.dev/<PROJECT>/ai-platform/api:<tag> . && docker push …` | build: yes (CI and locally); push: no |
 | 2b | Apply the API service, read its URL | `terraform apply -target=google_cloud_run_v2_service.api …`, then `terraform output api_url` | no |
-| 2c | Build and push the web image in proxy mode | `docker build -f frontend/Dockerfile --build-arg API_PROXY_TARGET=<api_url> --build-arg NEXT_PUBLIC_API_URL= -t …/web:<tag> .` | build in proxy mode: yes (locally, `next build` with the same arguments) |
+| 2c | Build and push the web image in proxy mode | `docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_PROXY_TARGET=<api_url> --build-arg NEXT_PUBLIC_API_URL= -t …/web:<tag> .` | build in proxy mode: yes (locally, `next build` with the same arguments) |
 | 3 | Full apply | `terraform apply -var project_id=… -var api_image=… -var web_image=… -var db_password=… [-var llm_base_url=… -var llm_model=…]` | `fmt` and `validate`: yes; `plan`/`apply`: no |
 | 4 | Migrations | `cloud-sql-proxy <connection> & DATABASE_URL=… npm run db:migrate -w @ai-platform/database` | against Postgres 16 + pgvector in Docker: yes; Cloud SQL: no |
 | 5 | Verify | the runbook's §5, and `ACCEPT_API_URL=https://<web-url> node scripts/acceptance/full-system.mjs` | against the compose stack: yes; against a deployment: no |
@@ -66,7 +66,7 @@ Why it is shaped this way (the decisions are DL-1 and DL-2 in
 | `CLAMD_HOST`, `UPLOAD_SCAN_REQUIRED` | `127.0.0.1`, `true` | Terraform |
 | `SANDBOX_ALLOW_PROCESS_IN_PRODUCTION` | `true`, with the exposure stated in [DEPLOYMENT.md](DEPLOYMENT.md#security-relevant-settings) | Terraform |
 | `LLM_BASE_URL` / `LLM_MODEL`, or a provider key | the model runtime. Production never auto-detects one | Terraform variables → Secret Manager |
-| `API_PROXY_TARGET` (web, build time) | the API service URL | `docker build --build-arg` |
+| `NEXT_PUBLIC_API_PROXY_TARGET` (web, build time) | the API service URL | `docker build --build-arg` |
 | `NEXT_PUBLIC_API_URL` (web, build time) | empty | `docker build --build-arg` |
 
 The rest of the variables are in [ENVIRONMENT.md](ENVIRONMENT.md). The production security

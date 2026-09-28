@@ -13,6 +13,7 @@
  * Results: $ACCEPT_OUT/attacks.json and attacks.md; exit 1 on any FAIL.
  */
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import { API, Client, requireRunningApi } from "../lib/acceptance.mjs";
 
@@ -92,7 +93,7 @@ await check("TENANT-IDOR", "A second tenant gets 404 for the first tenant's reso
     body: form,
   });
   const document = (await upload.json()).document;
-  const memoryId = memory.body?.memory?.id ?? memory.body?.id;
+  const memoryId = memory.body?.item?.id;
   const failures = [];
   if (!memoryId) failures.push(`setup: memory create → ${memory.status}`);
   if (!document?.id) failures.push(`setup: upload → ${upload.status}`);
@@ -137,27 +138,42 @@ await check("API-KEY-SCOPE", "A key for one project cannot act in another, and c
 // --- 5. Workspace path traversal -------------------------------------------------------------------
 await check("PATH-TRAVERSAL", "Workspace paths cannot escape the project's directory", async () => {
   const failures = [];
-  for (const path of ["../../../../etc/passwd", "/etc/passwd", "src/../../outside.txt", "..\\..\\windows.txt"]) {
+  for (const path of ["../../../../etc/passwd", "/etc/passwd", "src/../../outside.txt", "src/../../../../tmp/escape.txt"]) {
     const write = await alice.call("POST", "/api/v1/workspace/files", { path, content: "x" });
     if (write.status !== 400) failures.push(`write ${path} → ${write.status}`);
     const read = await alice.call("GET", `/api/v1/workspace/file?path=${encodeURIComponent(path)}`);
     if (read.status !== 400 && read.status !== 404) failures.push(`read ${path} → ${read.status}`);
     if (/root:x:0:0/.test(read.text)) failures.push(`read ${path} returned /etc/passwd`);
   }
-  return verdict(failures, "4 escapes refused on write (400) and read");
+  // A backslash is a separator on Windows and an ordinary filename character on POSIX. Either way
+  // the file must stay inside the workspace: refused on Windows, or stored under that literal name.
+  const backslash = "..\\..\\windows.txt";
+  const write = await alice.call("POST", "/api/v1/workspace/files", { path: backslash, content: "x" });
+  if (write.status === 201) {
+    const listed = await alice.call("GET", "/api/v1/workspace/files");
+    const names = (listed.body?.files ?? []).map((f) => f.path);
+    if (!names.includes(backslash)) failures.push(`backslash path accepted but not listed as a literal name: ${names.join(", ")}`);
+  } else if (write.status !== 400) failures.push(`backslash path → ${write.status}`);
+  return verdict(failures, `4 escapes refused on write (400) and read; a backslash path ${write.status === 201 ? "is stored as one literal filename inside the workspace (POSIX)" : "is refused"}`);
 });
 
 // --- 6. Upload validation ---------------------------------------------------------------------------
 await check("UPLOAD-VALIDATION", "Uploads are allow-listed and sniffed, not trusted by name or header", async () => {
   const send = async (name, bytes, type) => {
-    const form = new FormData();
-    form.append("file", new Blob([bytes], { type }), name);
-    const res = await fetch(`${API}/api/v1/files/upload`, {
-      method: "POST",
-      headers: { cookie: alice.cookie, "x-csrf-token": alice.csrf, "x-project-id": alice.projectId },
-      body: form,
-    });
-    return res.status;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const form = new FormData();
+      form.append("file", new Blob([bytes], { type }), name);
+      const res = await fetch(`${API}/api/v1/files/upload`, {
+        method: "POST",
+        headers: { cookie: alice.cookie, "x-csrf-token": alice.csrf, "x-project-id": alice.projectId },
+        body: form,
+      });
+      // The upload limit (10 a minute per address) is a different defence doing its job; wait it
+      // out and ask again, so this check measures validation and nothing else.
+      if (res.status !== 429) return res.status;
+      await new Promise((r) => setTimeout(r, (Number(res.headers.get("retry-after")) || 30) * 1000 + 500));
+    }
+    return 429;
   };
   const failures = [];
   const exe = await send("payload.exe", "MZ\x90\x00", "application/octet-stream");
@@ -172,8 +188,21 @@ await check("UPLOAD-VALIDATION", "Uploads are allow-listed and sniffed, not trus
 // --- 7. Oversized and malformed input ---------------------------------------------------------------
 await check("MALFORMED-INPUT", "Oversized bodies, bad JSON and hostile ids fail cleanly (4xx, never 5xx)", async () => {
   const failures = [];
-  const big = await alice.call("POST", "/api/v1/memory", { content: "x".repeat(8 * 1024 * 1024) });
-  if (big.status !== 413) failures.push(`8 MiB body → ${big.status}`);
+  // node:http rather than fetch: the server answers 413 and closes while the body is still being
+  // sent, and fetch reports that as a network error instead of the response it received.
+  const bigStatus = await new Promise((resolve) => {
+    const req = httpRequest(`${API}/api/v1/memory`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: alice.cookie, "x-csrf-token": alice.csrf, "x-project-id": alice.projectId },
+    });
+    req.on("response", (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    });
+    req.on("error", () => resolve("connection closed without a response"));
+    req.end(JSON.stringify({ content: "x".repeat(8 * 1024 * 1024) }));
+  });
+  if (bigStatus !== 413) failures.push(`8 MiB body → ${bigStatus}`);
   const res = await fetch(`${API}/api/v1/memory`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie: alice.cookie, "x-csrf-token": alice.csrf, "x-project-id": alice.projectId },

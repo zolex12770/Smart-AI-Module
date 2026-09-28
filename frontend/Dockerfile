@@ -23,8 +23,8 @@ ARG NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 # Same-origin mode (frontend/next.config.mjs): the API's origin, with NEXT_PUBLIC_API_URL set to
 # an empty string. Recommended wherever the web app and the API are different sites.
-ARG API_PROXY_TARGET
-ENV API_PROXY_TARGET=${API_PROXY_TARGET}
+ARG NEXT_PUBLIC_API_PROXY_TARGET
+ENV NEXT_PUBLIC_API_PROXY_TARGET=${NEXT_PUBLIC_API_PROXY_TARGET}
 RUN npm run build --workspace=@ai-platform/web
 
 # Next.js's `output: "standalone"` (frontend/next.config.mjs) traces the actual runtime

@@ -27,7 +27,7 @@ default in `config.ts` applies.
 | `HOST` | unset (e.g. `127.0.0.1`) | Interface to listen on (ADR-113). Unset: 127.0.0.1 outside production, 0.0.0.0 in production. Set 0.0.0.0 only when other machines must reach a development server — they can then sign up. |
 | `ROLE` | `all` | all \| api \| worker — one image, three roles (ADR-039). Local dev must stay `all` (PGlite permits one process per data directory); Cloud Run sets api/worker per unit. |
 | `LOG_LEVEL` | `info` | pino level: fatal \| error \| warn \| info \| debug \| trace. |
-| `CORS_ORIGIN` | `http://localhost:3000` | The web app's origin, the only one allowed to call the API with credentials. Behind the same-origin proxy (API_PROXY_TARGET in the frontend) it is still the web app's URL. |
+| `CORS_ORIGIN` | `http://localhost:3000` | The web app's origin, the only one allowed to call the API with credentials. Behind the same-origin proxy (NEXT_PUBLIC_API_PROXY_TARGET in the frontend) it is still the web app's URL. |
 | `TRUST_PROXY_HOPS` | `0` | How many reverse proxies in front of this process may be trusted to have appended to X-Forwarded-For (ADR-112). 0 uses the connection's own address — right when nothing sits in front. An API called directly behind Cloud Run: 1. Behind the web app's proxy on Cloud Run (the Terraform deployment): 2. Higher than the real number lets a caller choose its own IP. |
 
 ### Database (ADR-025 / ADR-037)
@@ -180,7 +180,7 @@ default in `config.ts` applies.
 
 | Variable | Template value | What it does |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8787` | Not read by the backend, nor by docker compose (which takes PUBLIC_API_URL for the web image's build). Kept so a single .env copied to frontend/.env.local works; the frontend's own list, with API_PROXY_TARGET for same-origin mode, is frontend/.env.example. |
+| `NEXT_PUBLIC_API_URL` | `http://localhost:8787` | Not read by the backend, nor by docker compose (which takes PUBLIC_API_URL for the web image's build). Kept so a single .env copied to frontend/.env.local works; the frontend's own list, with NEXT_PUBLIC_API_PROXY_TARGET for same-origin mode, is frontend/.env.example. |
 
 ## Frontend
 
@@ -189,7 +189,7 @@ default in `config.ts` applies.
 | Variable | Template value | What it does |
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8787` | Where the backend is. This is the ONE variable a normal local setup needs. It must be an origin the BROWSER can reach, not one only the Next.js server can: these requests are made by the page, cross-origin, with credentials. The backend's CORS_ORIGIN must name this app's origin in return, or the browser will refuse every call — including the login that would otherwise tell you something is wrong. Default when unset: http://localhost:8787 (backend/.env.example's PORT). |
-| `API_PROXY_TARGET` | unset (e.g. `http://localhost:8787`) | Same-origin proxy mode (optional; what the Cloud Run deployment uses). Set this to the API's origin and set NEXT_PUBLIC_API_URL= (empty): the browser then calls this app, which forwards /api/* to the API, so the session cookie is first-party. Read at BUILD time by next.config.mjs. The API's COOKIE_SAMESITE can then be `lax`. See docs/DEPLOYMENT.md. |
+| `NEXT_PUBLIC_API_PROXY_TARGET` | unset (e.g. `http://localhost:8787`) | Same-origin proxy mode (optional; what the Cloud Run deployment uses). Set this to the API's origin and set NEXT_PUBLIC_API_URL= (empty): the browser then calls this app, which forwards /api/* to the API, so the session cookie is first-party. Read at BUILD time by next.config.mjs. The API's COOKIE_SAMESITE can then be `lax`. See docs/DEPLOYMENT.md. |
 | `E2E_API_URL` | unset (e.g. `http://127.0.0.1:8790`) | Point the Playwright run at an API that is already running instead of starting one. |
 | `E2E_BASE_URL` | unset (e.g. `http://127.0.0.1:3100`) | Point the Playwright run at a frontend that is already running instead of building one. |
 | `PLAYWRIGHT_CHROMIUM_PATH` | unset (e.g. *(empty)*) | An explicit Chromium binary, for a machine where `npx playwright install` cannot be run. |

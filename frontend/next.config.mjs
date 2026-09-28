@@ -1,5 +1,5 @@
 /**
- * Same-origin API mode (optional): build with `API_PROXY_TARGET=<api origin>` and
+ * Same-origin API mode (optional): build with `NEXT_PUBLIC_API_PROXY_TARGET=<api origin>` and
  * `NEXT_PUBLIC_API_URL=` (empty), and the web app forwards `/api/*` to the API itself.
  *
  * Why it exists: deployed with the web app and the API on two hosts that are different SITES (two
@@ -11,10 +11,14 @@
  * each service the API sees one more entry — the web instance's own address — and
  * `TRUST_PROXY_HOPS` on the API must count it.
  *
+ * `NEXT_PUBLIC_` because it is public by nature — an API origin, which every request the proxy
+ * makes reveals anyway — and because the frontend reads no server-side variable at all
+ * (scripts/check-boundary.mjs, rule 6). It is read only here, so it is not compiled into the bundle.
+ *
  * Unset (the default, and local development), the browser calls the API directly as before.
  * Both are evaluated at BUILD time, like every `NEXT_PUBLIC_*` value.
  */
-const apiProxyTarget = process.env.API_PROXY_TARGET?.trim().replace(/\/+$/, "");
+const apiProxyTarget = process.env.NEXT_PUBLIC_API_PROXY_TARGET?.trim().replace(/\/+$/, "");
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -29,7 +33,7 @@ const nextConfig = {
     // can take longer than that to its first token, so the proxy waits as long as the API's own
     // deployment lets a request run (Cloud Run's maximum, infrastructure/terraform/main.tf).
     // Unconditional on purpose: `next start` re-evaluates this file at RUNTIME, where
-    // API_PROXY_TARGET may be unset although the build-time rewrites are still active — a
+    // NEXT_PUBLIC_API_PROXY_TARGET may be unset although the build-time rewrites are still active — a
     // conditional value silently fell back to 30 s there. It does nothing without a rewrite.
     proxyTimeout: 3_600_000,
   },

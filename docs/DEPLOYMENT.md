@@ -61,7 +61,7 @@ listens on `PORT` (8787 by default) and accepts the web app's origin from `CORS_
 (`http://localhost:8787` when unset), which is fixed at build time.
 
 **Same-origin proxy mode** (what the Terraform deployment uses): build the web app with
-`API_PROXY_TARGET=<api-url>` and an empty `NEXT_PUBLIC_API_URL`. The browser then calls only the
+`NEXT_PUBLIC_API_PROXY_TARGET=<api-url>` and an empty `NEXT_PUBLIC_API_URL`. The browser then calls only the
 web app, which forwards `/api/*` to the API. Cookies are first-party (`COOKIE_SAMESITE=lax`), and
 no CORS preflight happens. Two settings make streaming work through it, both measured: the API's
 SSE responses carry `Cache-Control: no-transform` (otherwise Next gzips and buffers the whole
@@ -70,7 +70,7 @@ stream), and `experimental.proxyTimeout` is one hour (otherwise Next cuts a prox
 
 Each image builds from the repository root: `docker build -f backend/Dockerfile .` and
 `docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_URL=<api-url> .` (direct mode) or
-`docker build -f frontend/Dockerfile --build-arg API_PROXY_TARGET=<api-url> --build-arg NEXT_PUBLIC_API_URL= .` (proxy mode). Building
+`docker build -f frontend/Dockerfile --build-arg NEXT_PUBLIC_API_PROXY_TARGET=<api-url> --build-arg NEXT_PUBLIC_API_URL= .` (proxy mode). Building
 behind a TLS-intercepting proxy, or where huggingface.co is blocked, is covered in
 [docker/README.md](../docker/README.md).
 
@@ -147,7 +147,7 @@ behind your own ingress policy if that is not what you want.
 1. `terraform apply -target=google_project_service.apis -target=google_artifact_registry_repository.images`
    — breaks the image/registry circular dependency.
 2. Build and push the API image (`backend/Dockerfile`). Build the web image (`frontend/Dockerfile`)
-   with `API_PROXY_TARGET` set to the API's URL and `NEXT_PUBLIC_API_URL` empty (both build-time
+   with `NEXT_PUBLIC_API_PROXY_TARGET` set to the API's URL and `NEXT_PUBLIC_API_URL` empty (both build-time
    constants), which means the API's URL must exist first. The full commands are in the runbook's §2.
 3. Full `terraform apply`.
 4. Run migrations against Cloud SQL through the Auth Proxy:

@@ -22,15 +22,15 @@ afterEach(() => {
 });
 
 describe("next.config.mjs", () => {
-  it("keeps a proxied stream open for up to an hour even when API_PROXY_TARGET is unset at runtime", async () => {
+  it("keeps a proxied stream open for up to an hour even when NEXT_PUBLIC_API_PROXY_TARGET is unset at runtime", async () => {
     // A stream silent for 40 s was cut at exactly 30 s through `next start` when this value
     // was only set alongside the rewrites.
-    const config = await loadConfig({ API_PROXY_TARGET: "" });
+    const config = await loadConfig({ NEXT_PUBLIC_API_PROXY_TARGET: "" });
     expect(config.experimental?.proxyTimeout).toBeGreaterThanOrEqual(3_600_000);
   });
 
   it("proxies /api/* to the API, uncompressed, in same-origin mode", async () => {
-    const config = await loadConfig({ API_PROXY_TARGET: "https://api.example.test/" });
+    const config = await loadConfig({ NEXT_PUBLIC_API_PROXY_TARGET: "https://api.example.test/" });
     expect(config.compress).toBe(false);
     expect(config.experimental?.proxyTimeout).toBeGreaterThanOrEqual(3_600_000);
     await expect(config.rewrites?.()).resolves.toEqual([
@@ -38,8 +38,8 @@ describe("next.config.mjs", () => {
     ]);
   });
 
-  it("adds no rewrite without API_PROXY_TARGET", async () => {
-    const config = await loadConfig({ API_PROXY_TARGET: "" });
+  it("adds no rewrite without NEXT_PUBLIC_API_PROXY_TARGET", async () => {
+    const config = await loadConfig({ NEXT_PUBLIC_API_PROXY_TARGET: "" });
     expect(config.rewrites).toBeUndefined();
   });
 });

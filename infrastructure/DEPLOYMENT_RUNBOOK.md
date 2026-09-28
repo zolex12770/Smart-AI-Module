@@ -50,13 +50,13 @@ docker build -f backend/Dockerfile -t <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-pl
 docker push <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/api:latest
 
 # The web image needs the API's URL baked in at build time: it proxies /api/* to it (same-origin
-# mode, API_PROXY_TARGET) and the browser never calls the API itself — the API's ingress is
+# mode, NEXT_PUBLIC_API_PROXY_TARGET) and the browser never calls the API itself — the API's ingress is
 # internal-only. NEXT_PUBLIC_API_URL stays EMPTY so the browser calls its own origin.
 # If this is the very first deploy, the API's URL isn't known yet: apply just the API service
 # first (step 4 below, without -target=...web), read its URL from the output, then come back
 # and build the web image with that URL before applying the web service.
 docker build -f frontend/Dockerfile \
-  --build-arg API_PROXY_TARGET=https://<api-service-url> \
+  --build-arg NEXT_PUBLIC_API_PROXY_TARGET=https://<api-service-url> \
   --build-arg NEXT_PUBLIC_API_URL= \
   -t <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/web:latest .
 docker push <REGION>-docker.pkg.dev/<PROJECT_ID>/ai-platform/web:latest
