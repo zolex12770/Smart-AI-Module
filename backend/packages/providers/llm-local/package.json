@@ -7,6 +7,6 @@
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "scripts": { "build": "tsc -b", "typecheck": "tsc --noEmit", "test": "vitest run" },
-  "dependencies": { "@ai-platform/shared": "*" },
+  "dependencies": { "@ai-platform/shared": "*", "undici": "^7.30.0" },
   "devDependencies": { "typescript": "^5.9.3", "vitest": "^4.1.11" }
 }

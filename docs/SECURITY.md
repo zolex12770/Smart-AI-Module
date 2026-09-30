@@ -360,6 +360,10 @@ address a failed login's audit row records at 0, 1 and 2 hops.
   `uuid` is 11.1.1. `npm audit fix` resolves none of them without `--force`, which would move
   `drizzle-kit` across a major version — a migration tool is the wrong place to take an unforced
   breaking change, so they are accepted and recorded here instead of silently carried.
+  On 2026-09-30, two **high** advisories published after the previous run (`fast-uri`, in Fastify's
+  URI handling, and `brace-expansion`, under the MCP filesystem server's `glob` and eslint) were
+  fixed by `npm audit fix` with patch and minor updates only (DL-28). The six moderate advisories
+  above are unchanged.
 - **Terraform grants `allUsers` invoker on the API service.** That is now an authenticated API, so
   it is no longer an open door — but it is still a public endpoint and should be reviewed against
   your own exposure requirements before `terraform apply`.

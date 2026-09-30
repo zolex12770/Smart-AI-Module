@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { ProviderError, stringToStream, type ChatStreamEvent } from "@ai-platform/shared";
 import { LocalEmbeddingProvider, LocalOpenAICompatibleProvider } from "./index.js";
 
@@ -317,6 +319,59 @@ describe("LocalOpenAICompatibleProvider request deadline", () => {
       if (event.type === "token") break; // the agent's node deadline or a cancel does this
     }
     expect(signals[0]!.aborted).toBe(true);
+  });
+});
+
+/**
+ * DL-27 — the default fetch, over a real socket. On a cold start the global fetch failed at
+ * 303.9 s whatever deadline the adapter had, because undici's own `headersTimeout` is 300 s. The
+ * adapter's deadline must be the one that governs: a runtime that takes longer than undici's
+ * defaults to send headers (a model still loading) is waited for, up to `requestTimeoutMs`.
+ */
+describe("LocalOpenAICompatibleProvider over a real connection", () => {
+  const withSlowServer = async (headerDelayMs: number, run: (baseUrl: string) => Promise<void>) => {
+    const server = createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(
+          `data: ${JSON.stringify({ choices: [{ delta: { content: "ready" } }] })}\n\n` +
+            `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 1 } })}\n\n` +
+            "data: [DONE]\n\n"
+        );
+      }, headerDelayMs);
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as { port: number };
+    try {
+      await run(`http://127.0.0.1:${port}/v1`);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+    }
+  };
+
+  it("waits for a runtime that is slow to send headers, whatever the process-wide fetch limit is", async () => {
+    // Node's global fetch shares undici's global dispatcher. Shrinking its headers timeout to
+    // 500 ms makes, in one second, the failure that took 300 s on the cold start: the previous
+    // adapter used the global fetch and failed here with "fetch failed".
+    const previous = getGlobalDispatcher();
+    setGlobalDispatcher(new Agent({ headersTimeout: 500, bodyTimeout: 500 }));
+    try {
+      await withSlowServer(1500, async (baseUrl) => {
+        const provider = new LocalOpenAICompatibleProvider({ baseUrl, model: "m", requestTimeoutMs: 4000 });
+        const events = await collect(provider, { messages: [{ role: "user", content: "hi" }] });
+        expect(events.find((e) => e.type === "done")).toBeTruthy();
+      });
+    } finally {
+      setGlobalDispatcher(previous);
+    }
+  });
+
+  it("gives up at its own deadline, with its own message rather than a bare 'fetch failed'", async () => {
+    await withSlowServer(1500, async (baseUrl) => {
+      const provider = new LocalOpenAICompatibleProvider({ baseUrl, model: "m", requestTimeoutMs: 700 });
+      await expect(collect(provider, { messages: [{ role: "user", content: "hi" }] })).rejects.toThrow(/stopped sending for 700ms/);
+    });
   });
 });
 

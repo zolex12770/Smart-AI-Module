@@ -8,6 +8,7 @@ import {
   type ProviderCapabilities,
   type ToolCall,
 } from "@ai-platform/shared";
+import { Agent, fetch as undiciFetch } from "undici";
 
 /**
  * A provider for any server that speaks the OpenAI `/v1/chat/completions` wire format —
@@ -60,6 +61,26 @@ interface CompletionChunk {
   error?: { message?: string };
 }
 
+/**
+ * `fetch` whose connection-level timeouts are `idleMs`, not undici's 300-second defaults — DL-27.
+ *
+ * Node's global `fetch` gives up waiting for response headers after 300 s (`headersTimeout`) and
+ * between body chunks after 300 s (`bodyTimeout`), whatever deadline the caller sets. Found on a
+ * real cold start: the warm-up's 20-minute load deadline (DL-22) never applied, because the
+ * fetch itself failed at 303.9 s ("fetch failed"), Ollama logged the request as 500 at 5m3s and
+ * cancelled the load, and the model never became ready. This adapter's own silence timer is the
+ * deadline; the connection's timeouts sit just above it, so that timer is what fires, with its
+ * own message.
+ */
+function patientFetch(idleMs: number): typeof fetch {
+  const dispatcher = new Agent({ headersTimeout: idleMs, bodyTimeout: idleMs });
+  return ((input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+    undiciFetch(input as Parameters<typeof undiciFetch>[0], {
+      ...(init as Parameters<typeof undiciFetch>[1]),
+      dispatcher,
+    })) as unknown as typeof fetch;
+}
+
 export class LocalOpenAICompatibleProvider implements LLMProvider {
   readonly name: string;
   readonly isMock = false;
@@ -76,10 +97,10 @@ export class LocalOpenAICompatibleProvider implements LLMProvider {
     this.model = options.model;
     this.baseUrl = options.baseUrl.replace(/\/+$/, "");
     this.apiKey = options.apiKey;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 300_000;
+    this.fetchImpl = options.fetchImpl ?? patientFetch(this.requestTimeoutMs + 5_000);
     this.contextWindow = options.contextWindow ?? null;
     this.supportsTools = options.supportsTools ?? true;
-    this.requestTimeoutMs = options.requestTimeoutMs ?? 300_000;
   }
 
   /**

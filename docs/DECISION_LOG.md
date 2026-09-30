@@ -763,3 +763,40 @@ over a real socket. In one process, the client's writes and the server's reads s
 loop, and the race never happens. The keep-alive case fails against the previous handler (10 of
 15 resets). `attacks.mjs` now reads the raw socket too, so it reports what the server sent
 rather than which side of the race the client landed on.
+
+## DL-27: The local model adapter is no longer bound by `fetch`'s 300-second defaults
+
+**Context.** This was the first cold start after a machine restart, the case DL-22 was meant to
+fix but which had never been observed live. The API's warm-up failed after 303.9 s with "Could not
+reach the local model runtime: fetch failed". Ollama logged the request as 500 at 5m3s and
+cancelled the load. The warm-up's own deadline was 20 minutes, so something else had cut it.
+
+That was Node's global `fetch` (undici): it waits at most 300 s for response headers
+(`headersTimeout`) and 300 s between body chunks (`bodyTimeout`), whatever the caller sets.
+Reproduced directly: a server withholding headers for 310 s made `fetch` fail after 301 s with
+`UND_ERR_HEADERS_TIMEOUT`. So DL-22 never worked in a real runtime. Its unit test used a stubbed
+`fetch`, which cannot hit undici's limits.
+
+**Decision.** The adapter's default `fetch` is undici's own `fetch`, with an `Agent` whose headers
+and body timeouts sit 5 s above the adapter's silence deadline (`requestTimeoutMs`). The adapter's
+timer is therefore the deadline that governs, with its own message. `undici` 7 (the major Node 24
+bundles) is now a dependency of `@ai-platform/llm-local`. The embedding call is unaffected: its
+deadline is 90 s.
+
+**Test.** `llm-local/src/index.test.ts` runs a real HTTP server that withholds headers for 1.5 s.
+The test shrinks the process-wide dispatcher's headers timeout to 500 ms, reproducing in one
+second what took 300 s on the cold start. The previous adapter fails there with the exact
+cold-start error ("Could not reach the local model runtime … fetch failed"), and the fixed adapter
+succeeds. A second test checks that the adapter's own deadline gives its own message.
+
+**Runtime.** Re-verified by a cold start of the rebuilt stack (below, and in the final report).
+
+## DL-28: Two high dependency advisories published since the last run
+
+`npm audit --audit-level=high` failed on the unchanged tree:
+- **`fast-uri`** 3.1.6 / 4.1.3 (through Fastify and ajv): authority injection and host confusion.
+- **`brace-expansion`** (through the MCP filesystem server's `glob`, and eslint): CPU denial of
+  service.
+
+`npm audit fix`, with no `--force`, resolved both with patch and minor updates. The six moderate
+advisories accepted in SECURITY.md are unchanged.
