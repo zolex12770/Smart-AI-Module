@@ -1,0 +1,46 @@
+{
+  "api": "http://127.0.0.1:8787",
+  "startedAt": "2026-09-30T11:52:14.244Z",
+  "counts": {
+    "PASS": 5,
+    "FAIL": 0,
+    "BLOCKED_EXTERNAL": 0
+  },
+  "results": [
+    {
+      "id": "LLM-DOWN",
+      "title": "Model runtime stopped: chat and RAG fail fast with a clear error, then recover",
+      "status": "PASS",
+      "seconds": 20,
+      "detail": "chat failed in 1s with \"The model provider failed to respond. Please try again.\"; RAG → 502; nothing charged; chat answered again after restart"
+    },
+    {
+      "id": "DB-DOWN",
+      "title": "Postgres stopped: readiness says so, requests fail fast, and the API recovers without a restart",
+      "status": "PASS",
+      "seconds": 6,
+      "detail": "authenticated read → 503 in 0s; liveness stayed 200; recovered without restarting the API"
+    },
+    {
+      "id": "WORKER-DOWN",
+      "title": "Worker stopped: queued work waits, durably, and completes when a worker returns",
+      "status": "PASS",
+      "seconds": 27,
+      "detail": "pending for 20 s with no worker; succeeded after the worker restarted"
+    },
+    {
+      "id": "MEDIA-CRASH",
+      "title": "The image process killed mid-generation: the image fails honestly and is not charged",
+      "status": "PASS",
+      "seconds": 9,
+      "detail": "settled \"failed\" with \"Image generation failed. The server log records why, against this id.\"; not charged"
+    },
+    {
+      "id": "MCP-CRASH",
+      "title": "The MCP server process killed: it is marked down and its tools removed; reconnect restores it",
+      "status": "PASS",
+      "seconds": 6,
+      "detail": "marked \"failed\" with 0 tools (\"Not connected\"); reconnect restored 14 tools"
+    }
+  ]
+}

@@ -1,0 +1,505 @@
+{
+  "api": "http://127.0.0.1:8787",
+  "startedAt": "2026-09-30T11:09:07.613Z",
+  "seconds": 1558.2,
+  "counts": {
+    "PASS": 24,
+    "FAIL": 0,
+    "BLOCKED_EXTERNAL": 0
+  },
+  "results": [
+    {
+      "id": "AUTH-SIGNUP",
+      "title": "Create an account",
+      "status": "PASS",
+      "seconds": 0.9,
+      "detail": "signed up journey-1790766547673-986995@example.com; default project b55961b6…, role admin",
+      "evidence": null
+    },
+    {
+      "id": "AUTH-SESSION",
+      "title": "Logout revokes the session; login restores it",
+      "status": "PASS",
+      "seconds": 0.4,
+      "detail": "logout 200; the old cookie replayed -> 401 (401 = revoked server-side); login again -> /auth/me 200",
+      "evidence": null
+    },
+    {
+      "id": "PROJECT-CREATE",
+      "title": "Create a project and work in it",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "created project 54b672c3…; the account now lists 2 project(s); all later checks run in it",
+      "evidence": null
+    },
+    {
+      "id": "PROVIDERS",
+      "title": "The platform states what it runs",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "chat models: local/qwen2.5:7b; default local/qwen2.5:7b; image stable-diffusion.cpp, video image-motion, speech piper",
+      "evidence": {
+        "models": {
+          "models": [
+            {
+              "provider": "local",
+              "model": "qwen2.5:7b",
+              "isMock": false,
+              "capabilities": {
+                "streaming": true,
+                "toolCalling": true,
+                "structuredOutput": true,
+                "vision": false,
+                "contextWindow": 16384
+              },
+              "qualityTier": 3,
+              "costHint": 1,
+              "latencyHint": 1,
+              "isDefault": true
+            }
+          ],
+          "default": "local"
+        },
+        "media": {
+          "providers": {
+            "chat": [
+              {
+                "name": "local",
+                "model": "qwen2.5:7b",
+                "isMock": false,
+                "selfHosted": true,
+                "toolCalling": true
+              }
+            ],
+            "embeddings": {
+              "name": "local:nomic-embed-text",
+              "semantic": true,
+              "note": "Retrieval matches meaning."
+            },
+            "image": {
+              "available": true,
+              "name": "stable-diffusion.cpp",
+              "isMock": false
+            },
+            "video": {
+              "available": true,
+              "name": "image-motion",
+              "isMock": false,
+              "technique": "a generated still (stable-diffusion.cpp) animated by ffmpeg — motion, not a video model"
+            },
+            "speech": {
+              "available": true,
+              "name": "piper",
+              "isMock": false
+            },
+            "malwareScanner": {
+              "available": false,
+              "name": null
+            },
+            "sandbox": {
+              "isolation": "process"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "CHAT-STREAM",
+      "title": "A real model answers, streamed progressively",
+      "status": "PASS",
+      "seconds": 31.9,
+      "detail": "local/qwen2.5:7b: 33 token events, first at 23900 ms, last at 31537 ms (spread 7637 ms); 39 in / 34 out; \"A unit test is a type of software testing where individual units or components o\"",
+      "evidence": {
+        "answer": "A unit test is a type of software testing where individual units or components of a software application are tested to validate that they meet their specified requirements and behave as expected.",
+        "provider": "local",
+        "model": "qwen2.5:7b",
+        "firstTokenMs": 23900,
+        "lastTokenMs": 31537,
+        "tokenEvents": 33
+      }
+    },
+    {
+      "id": "CHAT-HISTORY",
+      "title": "The conversation is stored and continues",
+      "status": "PASS",
+      "seconds": 23.2,
+      "detail": "6 messages persisted in conversation 39690edc…; continued from the stored history, asked for the word planted two turns earlier (vermilion-392), it answered \"vermilion-392\"",
+      "evidence": null
+    },
+    {
+      "id": "MEMORY-FORMATION",
+      "title": "A fact told in one conversation is remembered without being filed by hand",
+      "status": "PASS",
+      "seconds": 32.2,
+      "detail": "the model extracted \"The user's project codename is NIGHTHAWK-736477.\" (scope user) from the turn",
+      "evidence": null
+    },
+    {
+      "id": "MEMORY-RECALL",
+      "title": "A NEW conversation answers from memory",
+      "status": "PASS",
+      "seconds": 5.8,
+      "detail": "new conversation (no conversationId) answered \"NIGHTHAWK-736477\" — expected NIGHTHAWK-736477",
+      "evidence": null
+    },
+    {
+      "id": "MEMORY-DELETE",
+      "title": "A deleted memory is no longer recalled",
+      "status": "PASS",
+      "seconds": 0.1,
+      "detail": "deleted 1 memory item(s) holding the codename; 0 remain",
+      "evidence": null
+    },
+    {
+      "id": "RAG-INGEST",
+      "title": "Upload a document; it is parsed, chunked and embedded",
+      "status": "PASS",
+      "seconds": 2.3,
+      "detail": "document 71ec7678… reached \"ready\" (scan: skipped_no_scanner)",
+      "evidence": null
+    },
+    {
+      "id": "RAG-ANSWER",
+      "title": "A grounded answer, with a real citation",
+      "status": "PASS",
+      "seconds": 18.4,
+      "detail": "grounded=true outcome=grounded; \"An engineer receives 27 days of paid leave per calendar year. [1]\"; 1 source(s), the handbook's excerpt cited: true",
+      "evidence": {
+        "question": "How many days of paid leave does an engineer receive?",
+        "answer": "An engineer receives 27 days of paid leave per calendar year. [1]",
+        "sources": [
+          {
+            "marker": "[1]",
+            "documentId": "71ec7678-f739-4ae4-a188-a5ce8e7ef7f5",
+            "filename": "handbook.txt",
+            "chunkIndex": 0,
+            "distance": 0.14,
+            "excerpt": "Employee Handbook\n\nAn engineer receives 27 days of paid leave per calendar year.\nLeave requests go to the people team at least two weeks in advance.\n\nThe on-call rotation is weekly and begins each Wednesday at 10:00 UTC."
+          }
+        ],
+        "grounded": true,
+        "outcome": "grounded",
+        "retrievedCount": 1,
+        "model": "qwen2.5:7b",
+        "provider": "local"
+      }
+    },
+    {
+      "id": "RAG-REFUSAL",
+      "title": "No evidence, no answer — and a refusal is never called grounded",
+      "status": "PASS",
+      "seconds": 4,
+      "detail": "grounded=false outcome=refused; \"The provided documents do not contain the answer to this question.\"",
+      "evidence": {
+        "question": "What is the company's policy on adopting a pet at the office?",
+        "answer": "The provided documents do not contain the answer to this question.",
+        "sources": [
+          {
+            "marker": "[1]",
+            "documentId": "71ec7678-f739-4ae4-a188-a5ce8e7ef7f5",
+            "filename": "handbook.txt",
+            "chunkIndex": 0,
+            "distance": 0.549,
+            "excerpt": "Employee Handbook\n\nAn engineer receives 27 days of paid leave per calendar year.\nLeave requests go to the people team at least two weeks in advance.\n\nThe on-call rotation is weekly and begins each Wednesday at 10:00 UTC."
+          }
+        ],
+        "grounded": false,
+        "outcome": "refused",
+        "retrievedCount": 1,
+        "model": "qwen2.5:7b",
+        "provider": "local"
+      }
+    },
+    {
+      "id": "IMAGE",
+      "title": "Generate a 512×512 image of a red apple on a wooden table",
+      "status": "PASS",
+      "seconds": 681.9,
+      "detail": "stable-diffusion.cpp in 681.9 s: image/png, 369699 bytes, 512×512; luminance stddev 75.9, 420 distinct colours, red-dominant pixels 3%",
+      "evidence": {
+        "png": {
+          "ok": true,
+          "width": 512,
+          "height": 512,
+          "bitDepth": 8,
+          "colorType": 2,
+          "interlace": 0,
+          "pixelsMeasured": true,
+          "luminanceMean": 103,
+          "luminanceStddev": 75.9,
+          "distinctColours": 420,
+          "reddishShare": 0.029
+        },
+        "bytes": 369699
+      }
+    },
+    {
+      "id": "AUDIO",
+      "title": "Synthesise speech and play it back",
+      "status": "PASS",
+      "seconds": 3.1,
+      "detail": "piper in 3.1 s: audio/wav, 130348 bytes, 16000 Hz, 4.07 s, RMS 0.149 (0 = silence)",
+      "evidence": {
+        "wav": {
+          "ok": true,
+          "audioFormat": 1,
+          "channels": 1,
+          "sampleRate": 16000,
+          "bitsPerSample": 16,
+          "durationSeconds": 4.07,
+          "rms": 0.149
+        }
+      }
+    },
+    {
+      "id": "VIDEO",
+      "title": "Prompt → script → storyboard → narration → subtitles → visuals → MP4",
+      "status": "PASS",
+      "seconds": 491.8,
+      "detail": "succeeded in 491.8 s: 2 scene(s), 2 narrated, storyboard model; MP4 376849 bytes, 8.0 s, streams [video:h264, audio:aac, subtitle:mov_text]; WebVTT valid",
+      "evidence": {
+        "probe": {
+          "programs": [],
+          "streams": [
+            {
+              "codec_name": "h264",
+              "codec_type": "video",
+              "width": 640,
+              "height": 360,
+              "duration": "8.000000"
+            },
+            {
+              "codec_name": "aac",
+              "codec_type": "audio",
+              "duration": "8.000000"
+            },
+            {
+              "codec_name": "mov_text",
+              "codec_type": "subtitle",
+              "duration": "6.360000"
+            }
+          ],
+          "format": {
+            "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+            "duration": "8.000000"
+          }
+        },
+        "scenes": [
+          {
+            "index": 0,
+            "status": "succeeded",
+            "narration": "Bees gather flowers' sweet nectar."
+          },
+          {
+            "index": 1,
+            "status": "succeeded",
+            "narration": "Later, they turn it into golden honey."
+          }
+        ]
+      }
+    },
+    {
+      "id": "CODING-AGENT",
+      "title": "The agent fixes the SOURCE so the test passes, and the fix is verified independently",
+      "status": "PASS",
+      "seconds": 246.4,
+      "detail": "task COMPLETED in 246.4 s; source changed: true; test file untouched: true; independent run: ok (exit 0)",
+      "evidence": {
+        "task": {
+          "id": "25b4fa7a-1e2c-481a-b203-62365bd8722e",
+          "projectId": "54b672c3-93e8-4704-8b2a-ee785770f7f9",
+          "createdByUserId": "6ccca59d-cc9c-4aef-80d9-b9f1350b233c",
+          "taskType": "fix_failing_test",
+          "state": "COMPLETED",
+          "input": {
+            "testFile": "sum.test.cjs"
+          },
+          "output": {
+            "usage": {
+              "inputTokens": 14986,
+              "outputTokens": 611
+            },
+            "content": "The test now passes with an exit code of 0. The issue was that `sum.js` was incorrectly defined to return `a - b`, which caused the test to fail. I fixed this by changing the line to `return a + b;` in `sum.js`. The test now correctly verifies that `sum(2, 3) === 5` and `sum(-1, 1) === 0`.",
+            "activity": [
+              {
+                "kind": "tool_call",
+                "name": "terminal.run_command",
+                "callId": "SqNnxcrvToKEgWPFFeMaas7eCzS1OciG",
+                "arguments": {
+                  "cwd": ".",
+                  "args": [
+                    "sum.test.cjs"
+                  ],
+                  "command": "node"
+                },
+                "iteration": 1
+              },
+              {
+                "ok": true,
+                "kind": "tool_result",
+                "callId": "SqNnxcrvToKEgWPFFeMaas7eCzS1OciG",
+                "content": "{\"exitCode\":1,\"stdout\":\"\",\"stderr\":\"node:assert:152\\n  throw new AssertionError(obj);\\n  ^\\n\\nAssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\\n\\n-1 !== 5\\n\\n    at Object.<anonymous> (/data/sandbox/54b672c3-93e8-4704-8b2a-ee785770f7f9/sum.test.cjs:3:8)\\n    at Module._compile (node:internal/modules/cjs/loader:1929:14)\\n    at Object..js (node:internal/modules/cjs/loader:2060:10)\\n    at Module.load (node:internal/modules/cjs/loader:1651:32)\\n    at Module._load (node:internal/modules/cjs/loader:1443:12)\\n    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)\\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\\n    at node:internal/main/run_main_module:33:47 {\\n  generatedMessage: true,\\n  code: 'ERR_ASSERTION',\\n  actual: -1,\\n  expected: 5,\\n  operator: 'strictEqual',\\n  diff: 'simple'\\n}\\n\\nNode.js v24.21.0\\n\",\"truncated\":false,\"isolation\":\"process\"}",
+                "iteration": 1
+              },
+              {
+                "kind": "tool_call",
+                "name": "code.read_lines",
+                "callId": "7e8BhcTPV5ee2r5YNeIMFsuHQE5rMQFG",
+                "arguments": {
+                  "path": "sum.test.cjs",
+                  "endLine": 4,
+                  "startLine": 2
+                },
+                "iteration": 2
+              },
+              {
+                "ok": true,
+                "kind": "tool_result",
+                "callId": "7e8BhcTPV5ee2r5YNeIMFsuHQE5rMQFG",
+                "content": "{\"path\":\"sum.test.cjs\",\"startLine\":2,\"endLine\":4,\"totalLines\":6,\"content\":\"2\\tconst { sum } = require('./sum.js');\\n3\\tassert.strictEqual(sum(2, 3), 5);\\n4\\tassert.strictEqual(sum(-1, 1), 0);\"}",
+                "iteration": 2
+              },
+              {
+                "kind": "tool_call",
+                "name": "code.read_lines",
+                "callId": "DntbkMiEAm5ueHf9f22vShc0vIVxqEb7",
+                "arguments": {
+                  "path": "sum.js",
+                  "endLine": 3,
+                  "startLine": 1
+                },
+                "iteration": 3
+              },
+              {
+                "ok": true,
+                "kind": "tool_result",
+                "callId": "DntbkMiEAm5ueHf9f22vShc0vIVxqEb7",
+                "content": "{\"path\":\"sum.js\",\"startLine\":1,\"endLine\":3,\"totalLines\":6,\"content\":\"1\\tfunction sum(a, b) {\\n2\\t  return a - b;\\n3\\t}\"}",
+                "iteration": 3
+              },
+              {
+                "kind": "tool_call",
+                "name": "code.replace_text",
+                "callId": "YnxohlKiIK0uIHcg2OOiURM7XOi8NnER",
+                "arguments": {
+                  "path": "sum.js",
+                  "newText": "return a + b;",
+                  "oldText": "return a - b;"
+                },
+                "iteration": 4
+              },
+              {
+                "ok": true,
+                "kind": "tool_result",
+                "callId": "YnxohlKiIK0uIHcg2OOiURM7XOi8NnER",
+                "content": "{\"path\":\"sum.js\",\"replacedAtLine\":2,\"linesRemoved\":1,\"linesAdded\":1}",
+                "iteration": 4
+              },
+              {
+                "kind": "tool_call",
+                "name": "terminal.run_command",
+                "callId": "5v60g26MhUoOF4w9PsyS2yICOM5TvpfC",
+                "arguments": {
+                  "cwd": ".",
+                  "args": [
+                    "sum.test.cjs"
+                  ],
+                  "command": "node"
+                },
+                "iteration": 5
+              },
+              {
+                "ok": true,
+                "kind": "tool_result",
+                "callId": "5v60g26MhUoOF4w9PsyS2yICOM5TvpfC",
+                "content": "{\"exitCode\":0,\"stdout\":\"ok\\n\",\"stderr\":\"\",\"truncated\":false,\"isolation\":\"process\"}",
+                "iteration": 5
+              },
+              {
+                "ok": true,
+                "kind": "verification"
+              }
+            ],
+            "iterations": 6,
+            "verification": {
+              "ok": true
+            },
+            "toolCallCount": 5
+          },
+          "errorMessage": null,
+          "leaseOwner": null,
+          "leaseExpiresAt": null,
+          "version": 4,
+          "cancelRequestedAt": null,
+          "createdAt": 1790767843873,
+          "updatedAt": 1790768085580
+        },
+        "source": "function sum(a, b) {\n  return a + b;\n}\n\nmodule.exports = { sum };\n"
+      }
+    },
+    {
+      "id": "MCP",
+      "title": "A tool served by a real MCP server runs inside an agent task, in this project only",
+      "status": "PASS",
+      "seconds": 12.6,
+      "detail": "task COMPLETED: reference-filesystem (stdio) read \"The keeper's code word is lantern-777.\"; the model answered \"lantern-777\" (expected lantern-777); a path outside the workspace: refused",
+      "evidence": null
+    },
+    {
+      "id": "USAGE",
+      "title": "Tokens spent are metered",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "this project spent 18775 tokens today across the calls above (scope organization)",
+      "evidence": null
+    },
+    {
+      "id": "QUOTA",
+      "title": "A request over a configured limit is refused before any work, and says why",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "limit 60 s/month, 8 s used; asked for 56 s -> 429 QUOTA_EXCEEDED: \"Monthly video-seconds limit of 60 would be exceeded (8s used so far this month).\"; video projects before/after: 1/1",
+      "evidence": null
+    },
+    {
+      "id": "AUDIT",
+      "title": "The project's audit trail records what happened in it",
+      "status": "PASS",
+      "seconds": 0,
+      "detail": "10 entries, all in this project: true; actions: tool.call.mcp, tool.call, project.create",
+      "evidence": null
+    },
+    {
+      "id": "TENANT-ISOLATION",
+      "title": "Another tenant cannot read this one's data",
+      "status": "PASS",
+      "seconds": 0.8,
+      "detail": "victim's conversation, document and workspace file -> 404, 404, 404; the intruder's own workspace has no sum.js -> 404",
+      "evidence": null
+    },
+    {
+      "id": "METRICS",
+      "title": "Prometheus metrics carry real values",
+      "status": "PASS",
+      "seconds": 0.4,
+      "detail": "API 200, http://127.0.0.1:9464/metrics 200; summed: http_requests_total 640, provider_request_count 20, token_usage_total 18775, generation_total 4, job_processed_total 7, tool_call_count 9",
+      "evidence": null
+    },
+    {
+      "id": "PERSISTENCE",
+      "title": "Log out, log back in: everything is still there",
+      "status": "PASS",
+      "seconds": 0.5,
+      "detail": "after a fresh login: 3 conversation(s) in the project; the handbook -> 200",
+      "evidence": null
+    },
+    {
+      "id": "RATE-LIMIT",
+      "title": "A route's limit is enforced and says when to retry",
+      "status": "PASS",
+      "seconds": 1.2,
+      "detail": "429 RATE_LIMITED; retry-after 59 s; limit 30",
+      "evidence": null
+    }
+  ]
+}
