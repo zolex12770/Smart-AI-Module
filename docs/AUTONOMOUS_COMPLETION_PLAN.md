@@ -69,6 +69,8 @@ regression test that fails without it.
 | 40 | A cancel before the WebM step orphaned the stored MP4 and captions | Assets are stored after the last ffmpeg step (DL-24) |
 | 41 | `code.replace_text` answered "not found" five times to an indentation-only mismatch, and the coding run failed | It quotes the file's own text and line (DL-25) |
 | 42 | About 20% of oversized uploads lost their 413 to a TCP reset | The upload is drained before the 413 is sent (DL-26) |
+| 43 | The first real cold start: the warm-up died at 303.9 s, bound by `fetch`'s 300 s header timeout, and Ollama cancelled the load | The adapter sets its own connection timeouts; a load forced past 300 s now succeeds (DL-27) |
+| 44 | Two high npm advisories published after the last run | Non-breaking updates (DL-28) |
 
 The acceptance script had its own defects, fixed the same way. It asked for chat history without
 sending it, although the API takes history from the client as OpenAI's does. It also read metric
@@ -82,9 +84,9 @@ evidence says why.
 
 ```json
 {
-  "date": "2026-09-28",
+  "date": "2026-09-30",
   "branch": "claude/zen-brahmagupta-6l5o4u",
-  "verified_code_commit": "16d352b",
+  "verified_code_commit": "14c94f9",
   "states": [
     "NOT_STARTED",
     "IN_PROGRESS",
@@ -119,12 +121,12 @@ evidence says why.
     {
       "id": "gate.unit",
       "state": "LOCALLY_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/verify.md UNIT 1001 passed, 2 skipped (final run); CI 36444462653"
+      "evidence": "docs/evidence/2026-09-30/verify.md UNIT 1003 passed, 2 skipped; CI 36703750342"
     },
     {
       "id": "gate.integration",
       "state": "LOCALLY_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/verify.md INTEGRATION 276 passed (final run)"
+      "evidence": "docs/evidence/2026-09-30/verify.md INTEGRATION 276 passed"
     },
     {
       "id": "gate.api_contract",
@@ -134,12 +136,12 @@ evidence says why.
     {
       "id": "gate.security",
       "state": "E2E_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/verify.md SECURITY PASS (final run); docs/evidence/2026-09-28/attacks-compose-final.md 11/11 twice"
+      "evidence": "docs/evidence/2026-09-30/verify.md SECURITY PASS (two new high advisories fixed, DL-28); docs/evidence/2026-09-30/attacks.md 11/11"
     },
     {
       "id": "gate.e2e_playwright",
       "state": "E2E_VERIFIED",
-      "evidence": "verify E2E 14 passed; CI e2e job"
+      "evidence": "docs/evidence/2026-09-30/verify.md E2E 14 passed; CI e2e job"
     },
     {
       "id": "gate.database",
@@ -154,92 +156,92 @@ evidence says why.
     {
       "id": "real.chat_streaming",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md CHAT-STREAM; browser CHAT-STREAMING"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md CHAT-STREAM; docs/evidence/2026-09-30/browser.md CHAT-STREAMING"
     },
     {
       "id": "real.chat_cancel_multiturn_refresh",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/browser-compose-final.md CHAT-CANCEL, CHAT-MULTI-TURN"
+      "evidence": "docs/evidence/2026-09-30/browser.md CHAT-CANCEL, CHAT-MULTI-TURN"
     },
     {
       "id": "real.memory",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md MEMORY-*; browser MEMORY-UI"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md MEMORY-*; docs/evidence/2026-09-30/browser.md MEMORY-UI"
     },
     {
       "id": "real.rag",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md RAG-*; browser RAG-UI; attacks RAG-INJECTION"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md RAG-*; docs/evidence/2026-09-30/browser.md RAG-UI; docs/evidence/2026-09-30/attacks.md RAG-INJECTION"
     },
     {
       "id": "real.coding_agent.first_task",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md CODING-AGENT, COMPLETED 301 s (4 of 5 acceptance runs this pass; the failure led to DL-25)"
+      "evidence": "docs/evidence/2026-09-30/verify.md: COMPLETED 246.4 s; audit-log tool calls listed"
     },
     {
       "id": "real.coding_agent.bad_patch",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/extra-scenarios-run3.md CODING-BAD-PATCH"
+      "evidence": "docs/evidence/2026-09-30/extra-scenarios.md CODING-BAD-PATCH (verdict agrees with the test)"
     },
     {
       "id": "real.coding_agent.second_task",
       "state": "IMPLEMENTED",
-      "evidence": "docs/evidence/2026-09-28/extra-scenarios-run3.md CODING-SECOND FAIL in all 3 runs (model); reported honestly each time"
+      "evidence": "docs/evidence/2026-09-30/extra-scenarios.md: FAIL in all 4 runs; run 4 on the final image was the model patching a non-existent file for 30 min (model limitation; platform verdict correct)"
     },
     {
       "id": "real.image",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md IMAGE (SDXL)"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md IMAGE; docs/evidence/2026-09-30/browser.md IMAGE-UI"
     },
     {
       "id": "real.image.negative",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/extra-scenarios-run3.md IMAGE-NEGATIVE"
+      "evidence": "docs/evidence/2026-09-30/extra-scenarios.md IMAGE-NEGATIVE"
     },
     {
       "id": "real.image.reproducible",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/extra-scenarios-run3.md IMAGE-REPRODUCIBLE"
+      "evidence": "docs/evidence/2026-09-30/extra-scenarios.md IMAGE-REPRODUCIBLE"
     },
     {
       "id": "real.audio",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md AUDIO; browser AUDIO-UI"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md AUDIO; docs/evidence/2026-09-30/browser.md AUDIO-UI"
     },
     {
       "id": "real.video",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md VIDEO; docs/evidence/2026-09-28/browser-video-webm.md"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md VIDEO; docs/evidence/2026-09-30/browser.md VIDEO-UI (WebM in a browser without H.264)"
     },
     {
       "id": "real.mcp",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md MCP; failure-injection-run2.md MCP-CRASH"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md MCP; docs/evidence/2026-09-30/failure-injection.md MCP-CRASH"
     },
     {
       "id": "real.quota_usage",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md USAGE, QUOTA"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md USAGE, QUOTA"
     },
     {
       "id": "real.tenant_isolation",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md TENANT-ISOLATION; attacks TENANT-IDOR"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md TENANT-ISOLATION; docs/evidence/2026-09-30/attacks.md TENANT-IDOR"
     },
     {
       "id": "real.metrics",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/acceptance-compose-final.md METRICS"
+      "evidence": "docs/evidence/2026-09-30/acceptance-compose.md METRICS"
     },
     {
       "id": "real.failure_injection",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/failure-injection-run2.md 5/5"
+      "evidence": "docs/evidence/2026-09-30/failure-injection.md 5/5"
     },
     {
       "id": "real.browser_routes",
       "state": "REAL_RUNTIME_VERIFIED",
-      "evidence": "docs/evidence/2026-09-28/browser-compose-final.md ROUTES"
+      "evidence": "docs/evidence/2026-09-30/browser.md ROUTES"
     },
     {
       "id": "performance.measured",
@@ -264,17 +266,17 @@ evidence says why.
     {
       "id": "terraform.plan_apply",
       "state": "BLOCKED_EXTERNAL",
-      "evidence": "docs/PRODUCTION_DEPLOYMENT_BLOCKER.md: GCP project and credentials"
+      "evidence": "docs/PRODUCTION_DEPLOYMENT_BLOCKER.md: on 2026-09-30 the environment's token was rejected (401 CREDENTIALS_MISSING); no project or key"
     },
     {
       "id": "cloud.deployment",
       "state": "BLOCKED_EXTERNAL",
-      "evidence": "docs/PRODUCTION_DEPLOYMENT_BLOCKER.md"
+      "evidence": "docs/PRODUCTION_DEPLOYMENT_BLOCKER.md (status on 2026-09-30)"
     },
     {
       "id": "ci",
       "state": "E2E_VERIFIED",
-      "evidence": "ci.yml five jobs green: 36444462653 (16d352b)"
+      "evidence": "ci.yml five jobs green: 36703750342 (14c94f9)"
     },
     {
       "id": "audit.independent",
@@ -285,6 +287,16 @@ evidence says why.
       "id": "real.oversized_upload_413",
       "state": "REAL_RUNTIME_VERIFIED",
       "evidence": "DL-26: 40/40 raw-socket 8 MiB uploads answered 413 through the compose port; oversized-body.test.ts"
+    },
+    {
+      "id": "real.cold_model_load",
+      "state": "REAL_RUNTIME_VERIFIED",
+      "evidence": "docs/evidence/2026-09-30/cold-model-load.md: load forced past 300 s, warmed up in 383.1 s (DL-27)"
+    },
+    {
+      "id": "repo.github_sync",
+      "state": "E2E_VERIFIED",
+      "evidence": "delivery branch and main point at the same final commit; verified with git ls-remote (report §0)"
     }
   ]
 }

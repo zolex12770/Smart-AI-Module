@@ -1,7 +1,18 @@
 # Project status
 
-**Last verified:** 2026-09-28, branch `claude/zen-brahmagupta-6l5o4u`.
-The commits for each run are in [FINAL_PRODUCTION_READINESS_REPORT.md](FINAL_PRODUCTION_READINESS_REPORT.md).
+**Last verified:** 2026-09-30, final application code `14c94f9`, branch
+`claude/zen-brahmagupta-6l5o4u`; `main` was fast-forwarded to the same history. On that image:
+
+- `npm run verify` 19/19;
+- acceptance 24/24;
+- attacks 11/11;
+- browser 11/11;
+- failure injection 5/5;
+- a cold model load forced past 300 s succeeded.
+
+[FINAL_PRODUCTION_READINESS_REPORT.md](FINAL_PRODUCTION_READINESS_REPORT.md) §0 has the details,
+and the evidence is in `evidence/2026-09-30/`. Rows below citing `evidence/2026-09-28/` are the
+earlier runs; every one was repeated on the final image except latency.
 
 ## States
 

@@ -12,7 +12,7 @@ ffmpeg. Nothing answers with fake output: mock providers exist only for tests, o
 `ALLOW_MOCK_PROVIDERS=true`, and production refuses them. When a capability is not configured,
 it says so.
 
-**Status (2026-09-28):** [docs/FINAL_PRODUCTION_READINESS_REPORT.md](docs/FINAL_PRODUCTION_READINESS_REPORT.md)
+**Status (2026-09-30, final code `14c94f9`):** [docs/FINAL_PRODUCTION_READINESS_REPORT.md](docs/FINAL_PRODUCTION_READINESS_REPORT.md)
 has the verified status and its evidence. On the Docker Compose stack with real models:
 
 - `npm run verify`: 19/19 gates, including the full-system acceptance (24/24);
@@ -88,7 +88,7 @@ npm run verify        # every gate, PASS / FAIL / BLOCKED_EXTERNAL; non-zero on 
 
 `npm run verify` runs build, typecheck, lint, unit, integration, the API contract, security,
 Playwright, database, boundary, boot, the real-runtime gates (against a running stack at
-`ACCEPT_API_URL`), Docker and Terraform. On the final tree the automated tests stand at 1282
+`ACCEPT_API_URL`), Docker and Terraform. On the final tree the automated tests stand at 1284
 passed, 0 failed, 2 skipped, and every gate passes (19/19). The runtime scripts in `scripts/acceptance/` (browser, attacks,
 failure injection, extra scenarios, latency) run against a running stack.
 

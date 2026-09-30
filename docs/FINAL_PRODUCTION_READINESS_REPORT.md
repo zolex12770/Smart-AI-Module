@@ -1,8 +1,108 @@
 # Final production-readiness report
 
-**Date:** 2026-09-28 · **Branch:** `claude/zen-brahmagupta-6l5o4u` · **Code verified at:** `16d352b`
-(the API image for the final runs, and CI run 36444462653). The commits after it change evidence
-and documentation only.
+**Current final verification: 2026-09-30.**
+- **Branch:** `claude/zen-brahmagupta-6l5o4u`.
+- **Final application code:** `14c94f9`, which is the API image every result in §0 ran against
+  (CI run 36703750342).
+- **Later commits:** they change only the attack script (a Retry-After wait) and documentation.
+
+Sections 1–29 are the 2026-09-28 record. Where §0 gives a newer result, §0 is current.
+
+## 0. Final verification, 2026-09-30 (current)
+
+### Git and GitHub
+
+- **Repository:** `origin` = `https://github.com/zolex12770/Smart-AI-Module`.
+- **Where the code was:** all work since the initial commit is on `claude/zen-brahmagupta-6l5o4u`.
+  The default branch, `main`, still held only `a8dac11` "Initial commit". That is why GitHub's
+  front page showed an old commit.
+- **The change:** `main` was 66+ commits behind the delivery branch and 0 ahead, so it was
+  fast-forwarded to the final commit. Nothing was rewritten and nothing was lost.
+- **Final hashes:** listed in the closing summary of this pass, and recorded by `git ls-remote`.
+
+### What this pass found and fixed
+
+- **DL-27:** the first cold start after a machine restart showed that the local model adapter was
+  bound by Node `fetch`'s 300-second header timeout. The warm-up failed at 303.9 s and Ollama
+  cancelled the load. The adapter now sets its own connection timeouts.
+  - Before the fix: the warm-up failed at 303.9 s.
+  - After the fix: with the load deliberately forced past 300 s (page cache dropped, disk reads
+    limited to 12 MiB/s), the warm-up waited 383.1 s and succeeded
+    (`evidence/2026-09-30/cold-model-load.md`).
+- **DL-28:** two high npm advisories published since the last run (`fast-uri`, `brace-expansion`)
+  were fixed by non-breaking updates.
+- **The attack script** now waits out a 429 once. Run straight after the acceptance, two checks
+  met the rate-limit bucket that the acceptance empties on purpose. The server was not changed.
+
+### Results on the final image (`14c94f9`), all in `evidence/2026-09-30/`
+
+| Suite | Result |
+|---|---|
+| `npm run verify` | **19 PASS · 0 FAIL · 0 BLOCKED_EXTERNAL**, exit 0 |
+| Automated tests | **1284 passed, 0 failed, 2 skipped**: 1003 unit, 276 integration, 5 contract. The 2 skips are the model-file SD suites, which CI runs |
+| Playwright | 14/14 |
+| Full-system acceptance (real qwen2.5:7b, SDXL, Piper, ffmpeg, Postgres) | **24/24** |
+| Attack suite | **11/11**. The first run was 9/11 because of the rate-limit bucket (above), and is kept as `attacks-run1-rate-limited.md` |
+| Browser suite (real Chromium) | **11/11**, including video playback through the WebM rendition in a browser without H.264 |
+| Failure injection | **5/5**: LLM, DB, worker, media process and MCP server each killed |
+| Extra scenarios | 3 PASS · 1 FAIL: IMAGE-REPRODUCIBLE (seed 4242 twice byte-identical, seed 777 different), IMAGE-NEGATIVE and CODING-BAD-PATCH pass; CODING-SECOND fails, a model limitation (below) |
+| Cold model load past 300 s | PASS, 383.1 s |
+
+**Media, on the final image:**
+- **Image:** SDXL 512×512 PNG, decoded, with measured pixel variety; retrieved through the asset
+  route.
+- **Audio:** Piper WAV, 4.07 s, RMS 0.149; played in the browser (3.06 s clip).
+- **Video:** MP4 with `h264` video, `aac` audio and a `mov_text` subtitle track, 8.0 s. A WebVTT
+  track, and a VP9/Opus WebM that the browser decoded.
+
+**Coding agent, final controlled run:**
+- **The acceptance task:** COMPLETED in 246.4 s. The audit log shows the complete loop: it ran
+  the failing test, read the test, read the correct source file (`sum.js`), made one exact edit
+  (`a - b` → `a + b`), and re-ran the test. The independent re-run exited 0, and the test file
+  was untouched.
+- **The second, unrelated task (`slugify`) failed again. This is a model-quality limitation, not
+  a platform bug.** For 30 minutes the model kept patching `slugify.cjs`, a file that does not
+  exist, and twice tried to edit the read-only test. Every refusal was correct and named the real
+  files ("Files in ".": slugify.js, slugify.test.cjs"). It never read `slugify.js`. The platform
+  ended the node at its deadline, reported `FAILED`, and left the test untouched, and the
+  independent run agreed. The platform was not weakened to turn that into a success.
+
+### Production
+
+**BLOCKED_EXTERNAL.** On 2026-09-30, this environment's `CLOUDSDK_AUTH_ACCESS_TOKEN` was rejected
+by Google (401 `CREDENTIALS_MISSING`). No project, service-account key or `gcloud` exists here.
+[PRODUCTION_DEPLOYMENT_BLOCKER.md](PRODUCTION_DEPLOYMENT_BLOCKER.md) names the variables to provide
+and the commands to run. Terraform `fmt`, `init` and `validate` pass. `plan` and `apply` were not
+run.
+
+### Final matrix (PASS / FAIL / BLOCKED_EXTERNAL / NOT_IMPLEMENTED)
+
+| Capability | Code | Local | E2E | Real Runtime | Production | Status |
+|---|---|---|---|---|---|---|
+| Auth and sessions | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Multi-tenancy and authorization | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Chat and streaming | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Memory | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| RAG | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Tool calling and agent | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Coding agent: acceptance task | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Coding agent: second, unrelated task | PASS | PASS | PASS | FAIL | BLOCKED_EXTERNAL | FAIL: model-quality limitation (the platform verdict is correct) |
+| Image | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Audio | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Video | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| MCP | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Usage, quota, rate limits | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Security | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Resilience | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Observability | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Frontend | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Backend and database | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Docker | PASS | PASS | PASS | PASS | BLOCKED_EXTERNAL | PASS locally; production BLOCKED_EXTERNAL |
+| Terraform | PASS | PASS | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | validate PASS; plan/apply BLOCKED_EXTERNAL |
+| CI/CD | PASS | PASS | PASS | PASS | NOT_IMPLEMENTED | CI PASS; no CD pipeline, by decision |
+| Cloud deployment | PASS | PASS | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL | BLOCKED_EXTERNAL |
+
+---
 
 The state vocabulary is the one in [PROJECT_STATUS.md](PROJECT_STATUS.md):
 `NOT_STARTED` → `IN_PROGRESS` → `IMPLEMENTED` → `LOCALLY_VERIFIED` → `E2E_VERIFIED` →
