@@ -10,6 +10,37 @@ without them has been:
 
 This page lists exactly what is missing, and what each missing piece unblocks.
 
+## Status on 2026-09-30
+
+- **Final verified code:** commit `14c94f9` on branch `claude/zen-brahmagupta-6l5o4u` of
+  `github.com/zolex12770/Smart-AI-Module`. Later commits change documentation and evidence only.
+- **Checked on this date, and not available:**
+  - This environment sets `CLOUDSDK_AUTH_ACCESS_TOKEN`, but it is not a Google credential.
+    `cloudresourcemanager.googleapis.com/v1/projects` answered **401 `CREDENTIALS_MISSING`**, and
+    `oauth2.googleapis.com/tokeninfo` answered `invalid_token`.
+  - There is no `GOOGLE_APPLICATION_CREDENTIALS`, no `~/.config/gcloud`, no `gcloud` binary and no
+    project id.
+- **Everything short of a real deployment passes:**
+  - `terraform fmt -check`, `init` and `validate`;
+  - both images build, and the API image boots in every role;
+  - the whole stack runs under Docker Compose against real models, and `npm run verify` passes
+    19/19 on the final code.
+
+### Exactly what unblocks it
+
+Provide both of these to the environment the deployment runs from. For this cloud workspace, add
+them as environment variables in the environment's settings, and a new session picks them up.
+Never paste them into a chat.
+
+| Variable | Value |
+|---|---|
+| `GOOGLE_APPLICATION_CREDENTIALS` | path to a key file of a deploy service account with the roles in #2 below. Alternatively, a real `CLOUDSDK_AUTH_ACCESS_TOKEN` (an OAuth access token, `ya29.…`) for a user with those roles |
+| `TF_VAR_project_id` | the GCP project id (#1) |
+
+Also provide `TF_VAR_db_password` (#3) and either `TF_VAR_llm_base_url` + `TF_VAR_llm_model` or a
+hosted-model key (#4). With those set, the commands below run unchanged. `gcloud` must be installed
+where they run.
+
 ## What is missing
 
 | # | Missing | Kind | Where it goes | Why it cannot be produced here |
@@ -79,7 +110,7 @@ cloud-sql-proxy $(terraform output -raw database_connection_name) &
 DATABASE_URL="postgresql://ai_platform:<PASSWORD>@127.0.0.1:5432/ai_platform" npm run db:migrate -w @ai-platform/database
 ```
 
-Expected: the migrations are listed as applied, the last being `0005`; a second run applies
+Expected: the migrations are listed as applied, the last being `0006`; a second run applies
 nothing.
 
 ```bash
