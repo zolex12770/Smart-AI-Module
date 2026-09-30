@@ -16,9 +16,16 @@ Sections 1–29 are the 2026-09-28 record. Where §0 gives a newer result, §0 i
 - **Where the code was:** all work since the initial commit is on `claude/zen-brahmagupta-6l5o4u`.
   The default branch, `main`, still held only `a8dac11` "Initial commit". That is why GitHub's
   front page showed an old commit.
-- **The change:** `main` was 66+ commits behind the delivery branch and 0 ahead, so it was
-  fast-forwarded to the final commit. Nothing was rewritten and nothing was lost.
-- **Final hashes:** listed in the closing summary of this pass, and recorded by `git ls-remote`.
+- **`main` is not updated:** it is behind the delivery branch and 0 commits ahead, so a
+  fast-forward loses nothing. It was not pushed from this session: pushing to the default branch
+  was refused by this environment's permission policy and is left to the repository owner.
+  - **To make GitHub's front page show the final code,** do one of these:
+    - fast-forward `main`: `git fetch origin && git push origin
+      origin/claude/zen-brahmagupta-6l5o4u:main`, or merge the branch into `main` through a pull
+      request;
+    - or make `claude/zen-brahmagupta-6l5o4u` the default branch (Settings → Branches).
+- **The final code is on GitHub:** the remote delivery branch equals local `HEAD` (checked with
+  `git ls-remote`).
 
 ### What this pass found and fixed
 

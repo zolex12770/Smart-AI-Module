@@ -1,7 +1,8 @@
 # Project status
 
 **Last verified:** 2026-09-30, final application code `14c94f9`, branch
-`claude/zen-brahmagupta-6l5o4u`; `main` was fast-forwarded to the same history. On that image:
+`claude/zen-brahmagupta-6l5o4u`. The default branch `main` still holds only the initial commit
+until the owner fast-forwards it (report §0). On that image:
 
 - `npm run verify` 19/19;
 - acceptance 24/24;

@@ -295,8 +295,8 @@ evidence says why.
     },
     {
       "id": "repo.github_sync",
-      "state": "E2E_VERIFIED",
-      "evidence": "delivery branch and main point at the same final commit; verified with git ls-remote (report §0)"
+      "state": "IN_PROGRESS",
+      "evidence": "the delivery branch on GitHub equals local HEAD (git ls-remote). main (default) still holds only the initial commit: pushing it was refused by the environment's permission policy, so the owner must fast-forward it or change the default branch (report §0)"
     }
   ]
 }
