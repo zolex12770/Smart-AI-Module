@@ -75,6 +75,10 @@ services:
       # Ollama serves 4096 tokens unless told otherwise, and truncates a longer prompt silently.
       OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-16384}
       OLLAMA_KEEP_ALIVE: 30m
+      # Ollama's own limit on a model load, 5 minutes by default (DL-29). On a machine's first
+      # boot the 4.7 GB model read past it ("timed out waiting for llama-server to start"), so
+      # the API's 20-minute warm-up (LLM_LOAD_TIMEOUT_MS) still got a 500. Keep the two aligned.
+      OLLAMA_LOAD_TIMEOUT: ${OLLAMA_LOAD_TIMEOUT:-20m}
     volumes:
       - ollama:/root/.ollama
     ports:

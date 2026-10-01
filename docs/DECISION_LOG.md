@@ -800,3 +800,22 @@ succeeds. A second test checks that the adapter's own deadline gives its own mes
 
 `npm audit fix`, with no `--force`, resolved both with patch and minor updates. The six moderate
 advisories accepted in SECURITY.md are unchanged.
+
+## DL-29: Ollama's own load limit, aligned with the warm-up's
+
+**Context.** This was the next genuinely cold boot, on 2026-10-01, with DL-27 in place. The warm-up
+no longer failed on the client side. Ollama itself answered 500 after 5m5s: "timed out waiting for
+llama-server to start". That is Ollama's `OLLAMA_LOAD_TIMEOUT`, 5 minutes by default. The API side
+waits up to 20 minutes (`LLM_LOAD_TIMEOUT_MS`, DL-22), but the compose stack never raised Ollama's
+matching limit, so a load slower than 5 minutes still could not complete.
+
+**Reproduced.** Ollama's disk reads were limited to 6 MiB/s and the page cache dropped, so the
+load takes about 13 minutes.
+- With the previous compose file, `/api/generate` answered **500 after 301.7 s** with the same
+  error as the cold boot.
+- With the change, the same load completes. The time is in
+  `evidence/2026-10-01/ollama-load-timeout.md`.
+
+**Decision.** `docker-compose.yml` sets `OLLAMA_LOAD_TIMEOUT` to `20m`, which can be overridden,
+and its comment says to keep it aligned with the API's. TROUBLESHOOTING says the same for an
+Ollama run outside compose.

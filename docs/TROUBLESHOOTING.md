@@ -34,7 +34,9 @@ that took more than five minutes. `LLM_WARMUP` (on by default) makes the API loa
 waits up to `LLM_LOAD_TIMEOUT_MS` (20 minutes) for it. Look for `chat model warmed up` in the log
 before testing. Requests sent before then may fail; the load continues regardless. Do not lower
 `LLM_LOAD_TIMEOUT_MS` below the load time: Ollama cancels a load whose request gives up, so the
-model would never become ready (DL-22). Keep Ollama's `OLLAMA_KEEP_ALIVE` long enough that the
+model would never become ready (DL-22). Ollama has its own limit too, `OLLAMA_LOAD_TIMEOUT` (5 minutes by default),
+which fails a slow load with "timed out waiting for llama-server to start". The compose file sets it
+to 20 minutes to match (DL-29); set it as well wherever you run Ollama yourself. Keep Ollama's `OLLAMA_KEEP_ALIVE` long enough that the
 model is not evicted between uses.
 
 **The agent ignores the task on long runs, or loses the thread.**
