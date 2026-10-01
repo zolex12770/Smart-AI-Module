@@ -819,3 +819,21 @@ load takes about 13 minutes.
 **Decision.** `docker-compose.yml` sets `OLLAMA_LOAD_TIMEOUT` to `20m`, which can be overridden,
 and its comment says to keep it aligned with the API's. TROUBLESHOOTING says the same for an
 Ollama run outside compose.
+
+## DL-30: Three more advisories, published on 2026-10-01
+
+CI's dependency audit failed on `main` overnight, on code that had passed it the day before. New
+advisories had been published:
+
+| Package | Severity | Advisory | Update |
+|---|---|---|---|
+| `next` | critical | remote code execution in `next/og` `ImageResponse` | 16.3.3 → 16.3.8 |
+| `fastify` | high | denial of service via an unhandled exception; request-body replacement via an async validation | 5.12.1 → 5.12.5 |
+| `hono` | moderate | — | 4.13.5 → 4.13.12 |
+
+- **Exposure:** the web app does not import `next/og`, so the critical advisory was not reachable
+  here. It was still fixed, because the audit gate must pass.
+- **Fix:** `npm audit fix` without `--force`; only `package-lock.json` changed. The six moderate
+  advisories accepted in SECURITY.md are unchanged.
+- **Verification:** both images were rebuilt, and the full verify, attacks, browser suite and
+  failure injection were re-run on them.
