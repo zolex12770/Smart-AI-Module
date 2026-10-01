@@ -837,3 +837,21 @@ advisories had been published:
   advisories accepted in SECURITY.md are unchanged.
 - **Verification:** both images were rebuilt, and the full verify, attacks, browser suite and
   failure injection were re-run on them.
+
+## DL-31: `grep -q` under `pipefail` made a CI step fail on a healthy image
+
+**Context.** CI on `9fcfde8` failed at "Assert the API image boots against a real Postgres". The log
+shows that the image booted: the worker registered all six queues against real Postgres. The step
+still ended with **exit code 141**, which is SIGPIPE.
+
+**Cause.** The step runs `set -euo pipefail` and then `docker logs … | grep -q "job workers
+registered"`. `grep -q` exits at the first match, and that line is the second-to-last of the log.
+When `docker logs` still had the last line to write, it died of SIGPIPE, and `pipefail` made the
+pipeline fail. Whether it fails depends on timing, so it is a latent defect in the check, not a
+flake to re-run. Demonstrated: under `pipefail`, `seq 1 200000 | grep -q "^5$"` exits 141, and
+`… | grep "^5$" >/dev/null` exits 0.
+
+**Fix.** Every `| grep -q` in `ci.yml` (the two boot checks and their running-container checks)
+became `| grep … >/dev/null`, which reads all of its input. `scripts/verify-migrations.sh` had the
+same shape inside `|| MISSING=…`, where a SIGPIPE would report a table missing although it exists.
+It now uses a here-string.
