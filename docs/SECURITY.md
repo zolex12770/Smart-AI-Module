@@ -365,6 +365,9 @@ address a failed login's audit row records at 0, 1 and 2 hops.
   fixed by `npm audit fix` with patch and minor updates only (DL-28). The six moderate advisories
   above are unchanged. On 2026-10-01, `next` (critical, in `next/og`, which the web app does
   not use), `fastify` (high) and `hono` (moderate) were updated the same way (DL-30).
+  On 2026-10-11, `proxy-addr`, `shell-quote` and `concurrently` (critical) and
+  `@modelcontextprotocol/sdk`, `sharp` and `source-map-js` (high) were updated the same way; none
+  was in a path this repository calls (DL-32).
 - **Terraform grants `allUsers` invoker on the API service.** That is now an authenticated API, so
   it is no longer an open door — but it is still a public endpoint and should be reviewed against
   your own exposure requirements before `terraform apply`.

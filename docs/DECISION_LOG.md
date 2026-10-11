@@ -855,3 +855,28 @@ flake to re-run. Demonstrated: under `pipefail`, `seq 1 200000 | grep -q "^5$"` 
 became `| grep … >/dev/null`, which reads all of its input. `scripts/verify-migrations.sh` had the
 same shape inside `|| MISSING=…`, where a SIGPIPE would report a table missing although it exists.
 It now uses a here-string.
+
+## DL-32: Six more advisories, published by 2026-10-11
+
+`npm audit` on 2026-10-11 reported three critical and three high advisories that had been
+published since DL-30. None of them is in code this repository calls:
+
+| Package | Severity | Advisory | Update | Reached through |
+|---|---|---|---|---|
+| `proxy-addr` | critical | IP spoofing via an IPv4-mapped IPv6 trust subnet (GHSA-jqcg-44mw-7w3h) | 2.0.7 → 2.0.8 | `@modelcontextprotocol/sdk` → `express` only |
+| `shell-quote` | critical | `quote()` command injection after a `{ comment }` token (GHSA-pqg4-j6r4-53mv) | 1.9.0 → 1.12.0 | `concurrently`, a dev dependency |
+| `concurrently` | critical | through `shell-quote` | 10.0.5 → 10.0.6 | root dev dependency |
+| `@modelcontextprotocol/sdk` | high | the OAuth client could send credentials to a server-chosen authorization server (GHSA-6qxp-vccf-f47h) | 1.30.0 → 1.32.1 | `backend/packages/mcp` |
+| `sharp` | high | librsvg CVE-2026-96889 (GHSA-wq5f-xc86-pv6w) | 0.35.4 → 0.35.5 | `next` (web image) |
+| `source-map-js` | high | event-loop denial of service via indexed source-map offsets (GHSA-68fv-2mgg-jv7q) | 1.2.1 → 1.2.2 | `next` → `postcss`, at build time |
+
+- **Exposure:**
+  - The API's `trustProxy` goes through Fastify's own `@fastify/proxy-addr`, not `proxy-addr`.
+  - The MCP client never uses the SDK's `authProvider` (OAuth) hook; see
+    `backend/packages/mcp/src/client.ts`.
+  - The web app does not use `next/image`.
+  - `shell-quote` and `concurrently` are absent from `npm ls --omit=dev`.
+- **Fix:** `npm audit fix` without `--force`; only `package-lock.json` changed. The six moderate
+  advisories accepted in SECURITY.md are unchanged.
+- **Risk:** the one minor-version update is the MCP SDK. The MCP package's 39 tests (stdio,
+  Streamable HTTP, SSE fallback, loopback) pass on 1.32.1.

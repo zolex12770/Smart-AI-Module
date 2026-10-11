@@ -1,31 +1,55 @@
 # Final production-readiness report
 
-**Current final verification: 2026-09-30.**
-- **Branch:** `claude/zen-brahmagupta-6l5o4u`.
-- **Final application code:** `14c94f9`, which is the API image every result in §0 ran against
-  (CI run 36703750342).
-- **Later commits:** they change only the attack script (a Retry-After wait) and documentation.
+**Current final verification: 2026-10-01.**
+- **Final application code:** `9fcfde8` (dependency updates, DL-30), plus `4d44b7d` (CI and a
+  verification script, DL-31). The commits after it, up to `c77ca29`, are documentation and evidence.
+- **GitHub:** `main` (the default branch) is fast-forwarded to `claude/zen-brahmagupta-6l5o4u`
+  after a verified pass; on 2026-10-01 it reached `75cbf42`, checked with `git ls-remote` and the
+  GitHub API.
+- **2026-10-11:** six more advisories were fixed in `package-lock.json` (DL-32). §0 records the
+  verification of that update once it has run.
 
-Sections 1–29 are the 2026-09-28 record. Where §0 gives a newer result, §0 is current.
+Sections 1–29 are the 2026-09-28 record, and §0 below the 2026-10-01 update has the 2026-09-30
+runs. Where a newer result exists, the newer one is current.
 
-## 0. Final verification, 2026-09-30 (current)
+## 0. Final verification (current)
 
-### Git and GitHub
+### 2026-10-01 update
 
-- **Repository:** `origin` = `https://github.com/zolex12770/Smart-AI-Module`.
-- **Where the code was:** all work since the initial commit is on `claude/zen-brahmagupta-6l5o4u`.
-  The default branch, `main`, still held only `a8dac11` "Initial commit". That is why GitHub's
-  front page showed an old commit.
-- **`main` is not updated:** it is behind the delivery branch and 0 commits ahead, so a
-  fast-forward loses nothing. It was not pushed from this session: pushing to the default branch
-  was refused by this environment's permission policy and is left to the repository owner.
-  - **To make GitHub's front page show the final code,** do one of these:
-    - fast-forward `main`: `git fetch origin && git push origin
-      origin/claude/zen-brahmagupta-6l5o4u:main`, or merge the branch into `main` through a pull
-      request;
-    - or make `claude/zen-brahmagupta-6l5o4u` the default branch (Settings → Branches).
-- **The final code is on GitHub:** the remote delivery branch equals local `HEAD` (checked with
-  `git ls-remote`).
+**Git and GitHub.**
+- **Why GitHub looked old:** `main`, the default branch, held only the initial commit (`a8dac11`),
+  while all work was on `claude/zen-brahmagupta-6l5o4u`.
+- **The fix:** with the owner's explicit authorization, `main` was fast-forwarded (no force, no
+  history rewritten, 0 commits lost): `a8dac11..b155887`, then `b155887..75cbf42`.
+- **Confirmed:** through the GitHub API, the default branch's latest commit and tree contain the
+  full project (`frontend/`, `backend/`, `docs/`, `infrastructure/`).
+
+**What the second cold boot and the overnight advisories found:**
+- **DL-29:** Ollama's own `OLLAMA_LOAD_TIMEOUT` (5 min) failed a cold load. The compose file now
+  sets it to 20m. Reproduced: the old configuration answered 500 at 301.7 s; the new one 200 at
+  772.6 s (`evidence/2026-10-01/ollama-load-timeout.md`).
+- **DL-30:** new advisories for `next` (critical), `fastify` (high) and `hono` (moderate) were
+  fixed with patch updates, and both images were rebuilt.
+- **DL-31:** a CI step failed with exit 141 although the image booted. `grep -q` under `pipefail`
+  is a SIGPIPE race; it was fixed, as was the same shape in `verify-migrations.sh`.
+
+**Results on the rebuilt images (`9fcfde8`), all in `evidence/2026-10-01/`:**
+
+| Suite | Result |
+|---|---|
+| `npm run verify` | 18 PASS · 1 FAIL. The failure was MEMORY-FORMATION: the model miscopied the codename (NIGHTHAWK-8189 for NIGHTHAWK-818789), and the grounding guard correctly refused to store it |
+| Full-system acceptance, run again | **24/24** (MEMORY-FORMATION exact, in 27.6 s; CODING-AGENT COMPLETED in 255.8 s) |
+| Automated tests (in verify) | 1003 unit + 276 integration + 5 contract = **1284 passed, 0 failed**, 2 skipped |
+| Playwright | 14/14 |
+| Attacks | **11/11** |
+| Failure injection | **5/5** |
+| Real-browser suite | **11/11**, including WebM playback in a browser without H.264 |
+| Security | `npm audit` has no high or critical findings; the secret scan finds 617 tracked files clean; gitleaks passes in CI |
+
+**Production:** still **BLOCKED_EXTERNAL** on 2026-10-01. Google answered 401
+`CREDENTIALS_MISSING` to the environment's token; no project, key or `gcloud` exists.
+
+### 2026-09-30
 
 ### What this pass found and fixed
 
