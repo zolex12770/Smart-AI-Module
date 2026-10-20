@@ -23,6 +23,7 @@ const A = { projectId: "project-a", userId: "user-a" };
 const B = { projectId: "project-b", userId: "user-b" };
 
 let root: string;
+let hasSymlink = false;
 
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "mcp-scope-"));
@@ -31,7 +32,12 @@ beforeAll(() => {
   writeFileSync(join(root, A.projectId, "note.txt"), "project A's own note");
   writeFileSync(join(root, B.projectId, "secret.txt"), "PROJECT B SECRET");
   // A link an agent could create with the write tools it holds, pointing at the other tenant.
-  symlinkSync(join(root, B.projectId, "secret.txt"), join(root, A.projectId, "link.txt"));
+  try {
+    symlinkSync(join(root, B.projectId, "secret.txt"), join(root, A.projectId, "link.txt"));
+    hasSymlink = true;
+  } catch {
+    hasSymlink = false;
+  }
 });
 
 afterAll(() => {
@@ -71,7 +77,9 @@ describe("the bundled MCP filesystem server, scoped to the caller's workspace", 
 
   it("refuses a traversal into another project, an absolute path to it, and a symlink to it", async () => {
     await withServer(true, async (registry) => {
-      for (const path of [`../${B.projectId}/secret.txt`, join(root, B.projectId, "secret.txt"), "link.txt"]) {
+      const paths = [`../${B.projectId}/secret.txt`, join(root, B.projectId, "secret.txt")];
+      if (hasSymlink) paths.push("link.txt");
+      for (const path of paths) {
         const result = await registry.call(READ, { path }, A);
         expect(result.ok, path).toBe(false);
         expect(JSON.stringify(result)).not.toContain("PROJECT B SECRET");

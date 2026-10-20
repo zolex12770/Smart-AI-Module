@@ -189,6 +189,10 @@ describe("pickChatModel", () => {
 describe("probeFfmpeg", () => {
   it("waits for a binary that is present but slow to start, instead of calling it absent", async () => {
     // A stand-in for ffmpeg on a cold, overloaded machine: it answers after 6 s, past the old 5 s ceiling.
+    if (process.platform === "win32") {
+      // Direct execution of .sh scripts requires POSIX execve
+      return;
+    }
     const slow = join(tmpdir(), `slow-ffmpeg-${process.pid}.sh`);
     writeFileSync(slow, "#!/bin/sh\nsleep 6\necho ffmpeg version fake\n");
     chmodSync(slow, 0o755);
