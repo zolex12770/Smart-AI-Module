@@ -83,6 +83,7 @@ import {
   createFilesystemTools,
   createSearchTools,
   createWebTools,
+  createWebSearchTools,
   createTerminalTools,
   projectWorkspace,
   resolveSandboxedPath,
@@ -592,6 +593,7 @@ async function main() {
         ? config.WEB_FETCH_ALLOWLIST.split(",").map((h) => h.trim()).filter(Boolean)
         : undefined,
     }),
+    ...createWebSearchTools(),
     // Metered: this is the path an AGENT takes, and an agent can search in a loop (ADR-131).
     // The RAG route meters its own question separately and therefore passes no meter, so one
     // question is never charged twice.

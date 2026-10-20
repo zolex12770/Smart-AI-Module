@@ -7,5 +7,6 @@ export * from "./native/search.js";
 export * from "./native/patch.js";
 export * from "./native/workspace.js";
 export * from "./native/web.js";
+export * from "./native/web-search.js";
 export * from "./native/read-only.js";
 export * from "./native/missing-file.js";
