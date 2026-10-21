@@ -151,4 +151,104 @@ describe("AgentTeam — Multi-Agent Autonomous Teamwork", () => {
     const result = await team.execute({ goal: "Refactor core module" });
     expect(result.ok).toBe(true);
   });
+
+  it("overrides reviewer model approval when static security audit detects hardcoded secrets", async () => {
+    // Reviewer hallucinated "APPROVED", but Coder proposal contains an AWS secret key
+    const responses = [
+      "ARCHITECT BLUEPRINT: Deploy Sentry credentials.",
+      'CODER IMPLEMENTATION: const secret = "AKIA1234567890EXAMPLE"; // hardcoded aws key',
+      "REVIEWER VERDICT: Code is clean and readable. APPROVED.",
+      "FINAL SYNTHESIS: Architect summary acknowledging security verification issues.",
+    ];
+
+    const events: TeamProgressEvent[] = [];
+    const team = new AgentTeam({
+      streamChat: mockStreamChat(responses),
+      tools: [],
+      executeTool: async () => ({ content: "ok", ok: true }),
+    });
+
+    const result = await team.execute({
+      goal: "Configure AWS credentials",
+      maxRounds: 1,
+      onProgress: (ev) => events.push(ev),
+    });
+
+    // Verification must override approval
+    expect(result.approvedByReviewer).toBe(false);
+    expect(result.evidenceHistory).toHaveLength(1);
+    expect(result.evidenceHistory[0].reviewerApproved).toBe(true);
+    expect(result.evidenceHistory[0].securityAudit.safe).toBe(false);
+    expect(result.evidenceHistory[0].consensusOverridden).toBe(true);
+    expect(result.evidenceHistory[0].overrideReason).toContain("Security findings");
+
+    const rejectionEvent = events.find((e) => e.type === "review_rejected_by_evidence");
+    expect(rejectionEvent).toBeDefined();
+    expect(rejectionEvent?.reason).toContain("Security findings");
+  });
+
+  it("overrides reviewer model approval when injected QA test runner reports test failures", async () => {
+    // Reviewer model says APPROVED, but injected QA runner reports 2 failing assertions
+    const responses = [
+      "ARCHITECT BLUEPRINT: Matrix inversion function.",
+      "CODER IMPLEMENTATION: function invert(m) { return m; } // flawed",
+      "REVIEWER VERDICT: LGTM! Beautiful syntax. APPROVED.",
+      "FINAL SYNTHESIS: Workflow finished after QA failure check.",
+    ];
+
+    const team = new AgentTeam({
+      streamChat: mockStreamChat(responses),
+      tools: [],
+      executeTool: async () => ({ content: "ok", ok: true }),
+    });
+
+    const result = await team.execute({
+      goal: "Build matrix invert function",
+      maxRounds: 1,
+      runQaTests: async (_proposal, _round) => ({
+        passed: false,
+        testsRun: 5,
+        failures: ["invert([[1,0],[0,1]]) expected identity but got mock", "det == 0 unhandled"],
+        output: "Test suite: 3 passed, 2 failed",
+      }),
+    });
+
+    expect(result.approvedByReviewer).toBe(false);
+    expect(result.evidenceHistory[0].reviewerApproved).toBe(true);
+    expect(result.evidenceHistory[0].qaTestResult?.passed).toBe(false);
+    expect(result.evidenceHistory[0].consensusOverridden).toBe(true);
+    expect(result.evidenceHistory[0].overrideReason).toContain("QA Failures");
+  });
+
+  it("approves proposal when reviewer, security audit, and QA test runner all verify success", async () => {
+    const responses = [
+      "ARCHITECT BLUEPRINT: Robust sanitization.",
+      "CODER IMPLEMENTATION: function sanitize(input) { return validator.escape(input); }",
+      "REVIEWER VERDICT: Passes all security bounds. APPROVED.",
+      "FINAL SYNTHESIS: Module verified with 100% QA pass rate.",
+    ];
+
+    const team = new AgentTeam({
+      streamChat: mockStreamChat(responses),
+      tools: [],
+      executeTool: async () => ({ content: "ok", ok: true }),
+    });
+
+    const result = await team.execute({
+      goal: "Build sanitizer",
+      maxRounds: 1,
+      runQaTests: async (_proposal, _round) => ({
+        passed: true,
+        testsRun: 12,
+        failures: [],
+        output: "12 tests passed",
+      }),
+    });
+
+    expect(result.approvedByReviewer).toBe(true);
+    expect(result.evidenceHistory[0].reviewerApproved).toBe(true);
+    expect(result.evidenceHistory[0].securityAudit.safe).toBe(true);
+    expect(result.evidenceHistory[0].qaTestResult?.passed).toBe(true);
+    expect(result.evidenceHistory[0].consensusOverridden).toBe(false);
+  });
 });

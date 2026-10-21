@@ -33,7 +33,7 @@ import { UNTRUSTED_CONTENT_SYSTEM_PROMPT, wrapUntrustedContent } from "./trust-b
 import { verifyNodeOutput, type TestSuiteSpec, type VerificationContext } from "./verify.js";
 import { withSpan } from "@ai-platform/observability";
 
-const TERMINAL_TASK_STATES = ["COMPLETED", "FAILED", "CANCELLED"] as const;
+const TERMINAL_TASK_STATES = ["COMPLETED", "PARTIALLY_COMPLETED", "FAILED", "BLOCKED", "CANCELLED"] as const;
 const TERMINAL_NODE_STATUSES = ["completed", "failed", "cancelled", "skipped"] as const;
 
 /**
@@ -1793,8 +1793,22 @@ export class AgentEngine {
   private async finalizeTask(taskId: string, nodes: TaskNodeRecord[]): Promise<void> {
     const failed = nodes.find((n) => n.status === "failed");
     if (failed) {
-      await this.transitionTask(taskId, "FAILED", "engine", { errorMessage: failed.errorMessage });
-      this.emit(taskId, { type: "failed", taskId, error: failed.errorMessage ?? "Task failed." });
+      const anyCompleted = nodes.some((n) => n.status === "completed");
+      const targetState = anyCompleted ? "PARTIALLY_COMPLETED" : "FAILED";
+      await this.transitionTask(taskId, targetState, "engine", { errorMessage: failed.errorMessage });
+      if (anyCompleted) {
+        this.emit(taskId, {
+          type: "partially_completed",
+          taskId,
+          error: failed.errorMessage ?? "Task partially completed with node failures.",
+        });
+      } else {
+        this.emit(taskId, {
+          type: "failed",
+          taskId,
+          error: failed.errorMessage ?? "Task failed.",
+        });
+      }
       return;
     }
 

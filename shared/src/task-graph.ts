@@ -22,7 +22,9 @@ export const taskStateSchema = z.enum([
   "VERIFYING",
   "RETRYING",
   "PAUSED",
+  "BLOCKED",
   "CANCELLED",
+  "PARTIALLY_COMPLETED",
   "COMPLETED",
   "FAILED",
 ]);
@@ -201,6 +203,7 @@ export type TaskEvent =
   | { type: "node"; taskId: string; node: TaskNode }
   | { type: "transition"; taskId: string; transition: TaskTransition }
   | { type: "completed"; taskId: string; output: Record<string, unknown> }
+  | { type: "partially_completed"; taskId: string; error?: string }
   | { type: "failed"; taskId: string; error: string }
   /**
    * What the model is DOING inside a reasoning node — docs/26_DECISIONS.md ADR-134.

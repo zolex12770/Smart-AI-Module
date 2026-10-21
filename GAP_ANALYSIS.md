@@ -1,74 +1,74 @@
 # Gap Analysis: Universal AI Agent Platform
 
-**Audit Date:** 2026-10-20  
+**Last Reconciled:** 2026-10-21  
 **Target:** Production-Grade Universal AI Agent Capabilities  
-**Status:** FORENSICALLY_VERIFIED  
+**Status:** RECONCILED_AND_EVIDENCE_VERIFIED  
 
 ---
 
-## 1. High-Priority Architectural & Functional Gaps
+## 1. Resolved Capabilities (Previously Reported as Gaps)
 
 ### GAP-1: Multi-Agent Autonomous Teamwork & Peer Delegation
-- **Observed State:**
-  - `@ai-platform/agent-core` has a robust single-agent finite state machine (`AgentEngine`) and autonomous execution loop (`AutonomousRunner`).
-  - Tasks can be decomposed into sub-nodes and executed sequentially or with DAG dependencies.
-- **Missing Capability:**
-  - Distinct agent specialized personas (e.g., *Lead Architect*, *Senior Software Engineer*, *Security Auditor*, *Media Producer*, *Research Specialist*).
-  - Inter-agent messaging protocol and collaborative consensus channels where subagents can peer-review, challenge, and refine deliverables before reporting back to the user.
-- **Remediation Plan:**
-  - Implement a `TeamOrchestrator` in `agent-core` that provisions specialized role agents with constrained tool sets and context filters.
-  - Implement structured peer-review cycles (e.g., Coder creates diff → Security/QA agent reviews and runs verification suite).
+- **Prior State:** Only single-agent FSM (`AgentEngine`) and runner (`AutonomousRunner`) existed.
+- **Current State:** **RESOLVED & IMPLEMENTED** (`@ai-platform/agent-core/src/team.ts`).
+  - Roles defined: `Architect`, `Coder`, `Reviewer`, `Security Auditor`, `QA Engineer`, `Researcher`.
+  - Objective verification consensus loop: overrides model approval if static security auditor detects hardcoded credentials, command injection, or path traversal, or if injected QA runner reports failing assertions.
+  - Test evidence: 7 automated unit tests passing in `backend/packages/agent-core/src/team.test.ts`.
 
 ---
 
 ### GAP-2: Web Search Integration (`web.search`)
-- **Observed State:**
-  - `web.fetch` is implemented with military-grade SSRF defense (socket pinning, private CIDR filtering, DNS rebinding prevention, HTML stripping).
-  - Web search is currently marked as missing in `docs/29_FEATURE_MATRIX.md` ("Web SEARCH is not built — it needs a search provider's credentials").
-- **Missing Capability:**
-  - Query-based web search returning ranked titles, snippets, and source URLs.
-  - Pluggable search providers (Brave Search API, Google Search API, DuckDuckGo HTML scraper fallback).
-- **Remediation Plan:**
-  - Implement `@ai-platform/tools` native tool `web.search`.
-  - Provide a provider adapter architecture with a mock provider for zero-credential testing and live adapters for configured search API keys.
+- **Prior State:** Web search was absent; only raw `web.fetch` existed.
+- **Current State:** **RESOLVED & IMPLEMENTED** (`@ai-platform/tools/src/native/web-search.ts`).
+  - Native `web.search` tool registered in backend tool registry alongside `web.fetch`.
+  - Supports pluggable providers: `MockSearchProvider` (offline deterministic testing) and `BraveSearchProvider` (live search API).
+  - Test evidence: 5 automated unit tests passing in `backend/packages/tools/src/native/web-search.test.ts`.
 
 ---
 
-### GAP-3: Phase 7 — Authorized IRCTC Travel Booking Orchestration
-- **Observed State:**
-  - The repository has general tool execution and human approval gating, but lacks an official travel orchestration engine for complex workflows like Indian Railway (IRCTC) Tatkal booking.
-- **Required Capability:**
-  - Structured journey parser (Station codes: NDLS, BCT, SBC; Class: 1A, 2A, 3A, SL; Quota: TATKAL, GENERAL).
-  - Booking window validator (AC Tatkal opens at 10:00 AM IST; Non-AC Tatkal opens at 11:00 AM IST on the day prior to journey).
-  - Multi-step validation pipeline:
-    1. Journey input parsing & sanitization.
-    2. Train availability check (mockable for offline validation).
-    3. Passenger details & berth preference validation.
-    4. Session authentication state management.
-    5. Captcha / OTP verification handoff.
-    6. Payment authorization gate (mandatory human confirmation presenting exact transaction amount and payment reference).
-    7. PNR confirmation verification & transaction receipt generation.
-- **Remediation Plan:**
-  - Implement `TravelOrchestrator` / `IrctcWorkflowEngine` with strict boundary guarantees (never storing plaintext passwords, never proceeding past payment without explicit user confirmation).
+### GAP-3: Authorized IRCTC Travel Booking Orchestration
+- **Prior State:** No structured travel workflow engine or Tatkal time-gate validator.
+- **Current State:** **RESOLVED & IMPLEMENTED** (`@ai-platform/agent-core/src/travel-orchestrator.ts`).
+  - Implements official Indian Railways Tatkal window validation: AC Tatkal opens at 10:00 AM IST; Non-AC Tatkal opens at 11:00 AM IST on the day prior to travel.
+  - Implements passenger cap validation (max 4 per Tatkal ticket) and berth preference validation.
+  - Mandatory human-in-the-loop payment gate presenting exact transaction amount and railway booking reference before execution.
+  - Zero plaintext credential storage.
+  - Test evidence: 9 automated unit tests passing in `backend/packages/agent-core/src/travel-orchestrator.test.ts`.
 
 ---
 
-### GAP-4: Local Windows Tooling & Media Runoff
+## 2. Active Remaining Gaps & Technical Debt
+
+### GAP-4: Local Windows Environment Media & Local LLM Services
 - **Observed State:**
-  - Node.js, npm, and Python 3.11 are present and verified.
-  - Docker Desktop is installed but the daemon is inactive.
-  - FFmpeg is not installed on PATH, which causes video multiplexing to degrade with `skipped_no_ffmpeg`.
-  - Ollama is not active on port 11434, causing LLM queries to fall back to the built-in mock.
-- **Remediation Plan:**
-  - Maintain truthful degradation reporting (never simulate success when ffmpeg or live LLM is inactive).
-  - Ensure all mock providers produce compliant, inspectable artifacts for validation.
+  - FFmpeg is not installed on system PATH, causing video multiplexing to degrade gracefully with `skipped_no_ffmpeg`.
+  - Ollama is not running on port 11434, causing local LLM queries to fall back to the built-in mock LLM.
+- **Impact:** System runs and tests pass 100% via graceful degradation and mock fallbacks, but live offline video transcoding and local GGUF model inferences require manual installation of FFmpeg and Ollama on the host machine.
+- **Remediation:** Provide clear setup documentation in `docs/HOST_SETUP.md` for Windows developers to install FFmpeg (`winget install Gyan.FFmpeg`) and Ollama (`winget install Ollama.Ollama`).
 
 ---
 
 ### GAP-5: Cloud Infrastructure Access (`BLOCKED_EXTERNAL`)
 - **Observed State:**
-  - Full Terraform IaC configurations exist in `infrastructure/terraform/` (Cloud Run, Cloud SQL, Cloud Storage).
+  - Terraform IaC configurations exist in `infrastructure/terraform/` (Cloud Run, Cloud SQL, Cloud Storage).
   - Docker Compose configuration exists in `docker-compose.yml`.
-  - GCP Cloud credentials are unavailable on this local development machine (`CLOUDSDK_AUTH_ACCESS_TOKEN` absent).
+  - GCP Cloud credentials (`CLOUDSDK_AUTH_ACCESS_TOKEN` / service account key) are unavailable on this local development machine.
 - **Classification:** `BLOCKED_EXTERNAL`.
-- **Policy Compliance:** The local testing and verification suite passes 100% without depending on external cloud deployment. Production deployment remains gated on verified credentials.
+- **Policy Compliance:** The local testing and verification suite passes 100% without depending on external cloud deployment. Production cloud deployment remains safely gated until credentials are provided.
+
+---
+
+### GAP-6: Scanned / Image-Based PDF OCR Extraction
+- **Observed State:**
+  - `@ai-platform/rag` extracts text from searchable PDFs, DOCX, and plain text files.
+  - Scanned PDF images without an embedded text layer yield empty text content.
+- **Impact:** Scanned document uploads in RAG cannot be queried unless OCR is applied.
+- **Remediation:** Introduce an optional Tesseract / Tesseract.js / cloud OCR adapter in `@ai-platform/rag` with graceful fallback when OCR engine is absent.
+
+---
+
+### GAP-7: Production Telemetry Collector Connection
+- **Observed State:**
+  - OpenTelemetry SDK and Prometheus metrics endpoints are implemented and verified in `@ai-platform/observability` and `backend/src/metrics-server.ts`.
+  - No remote OTEL collector or Jaeger/Datadog agent is currently bound.
+- **Remediation:** Standardize environment variable configurations (`OTEL_EXPORTER_OTLP_ENDPOINT`) for Kubernetes/Cloud Run sidecar telemetry routing.
