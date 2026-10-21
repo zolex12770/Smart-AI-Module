@@ -30,6 +30,49 @@ export const taskStateSchema = z.enum([
 ]);
 export type TaskState = z.infer<typeof taskStateSchema>;
 
+export const TERMINAL_TASK_STATES = [
+  "COMPLETED",
+  "PARTIALLY_COMPLETED",
+  "FAILED",
+  "BLOCKED",
+  "CANCELLED",
+] as const;
+
+export const LEGAL_TASK_TRANSITIONS: Record<TaskState, readonly TaskState[]> = {
+  IDLE: ["UNDERSTANDING", "PLANNING", "EXECUTING", "CANCELLED", "BLOCKED"],
+  UNDERSTANDING: ["PLANNING", "EXECUTING", "FAILED", "CANCELLED", "BLOCKED"],
+  PLANNING: ["WAITING_FOR_APPROVAL", "EXECUTING", "FAILED", "CANCELLED", "BLOCKED"],
+  WAITING_FOR_APPROVAL: ["EXECUTING", "PAUSED", "CANCELLED", "BLOCKED", "FAILED"],
+  EXECUTING: [
+    "WAITING_FOR_APPROVAL",
+    "WAITING_FOR_MODEL",
+    "WAITING_FOR_TOOL",
+    "VERIFYING",
+    "RETRYING",
+    "PAUSED",
+    "BLOCKED",
+    "PARTIALLY_COMPLETED",
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+  ],
+  WAITING_FOR_MODEL: ["EXECUTING", "WAITING_FOR_TOOL", "RETRYING", "FAILED", "CANCELLED", "BLOCKED"],
+  WAITING_FOR_TOOL: ["EXECUTING", "WAITING_FOR_APPROVAL", "RETRYING", "FAILED", "CANCELLED", "BLOCKED"],
+  VERIFYING: ["EXECUTING", "COMPLETED", "PARTIALLY_COMPLETED", "FAILED", "RETRYING", "CANCELLED"],
+  RETRYING: ["EXECUTING", "FAILED", "PARTIALLY_COMPLETED", "CANCELLED", "BLOCKED"],
+  PAUSED: ["EXECUTING", "CANCELLED", "FAILED"],
+  BLOCKED: ["EXECUTING", "CANCELLED", "FAILED"],
+  COMPLETED: [],
+  PARTIALLY_COMPLETED: [],
+  FAILED: [],
+  CANCELLED: [],
+};
+
+export function isValidTaskTransition(from: TaskState, to: TaskState): boolean {
+  if (from === to) return true;
+  return LEGAL_TASK_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
 export const nodeStatusSchema = z.enum([
   "pending",
   "ready",

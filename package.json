@@ -29,6 +29,7 @@
     "setup": "node scripts/setup.mjs",
     "doctor": "node scripts/doctor.mjs",
     "test:e2e": "npm run test:e2e --workspace=@ai-platform/web",
+    "benchmark": "node scripts/benchmark-suite.mjs",
     "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {

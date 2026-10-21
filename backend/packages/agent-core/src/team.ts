@@ -32,9 +32,21 @@ export interface TeamMessage {
   metadata?: Record<string, unknown>;
 }
 
+export type FindingSeverity = "critical" | "high" | "medium" | "low";
+
+export interface StructuredSecurityFinding {
+  ruleId: string;
+  severity: FindingSeverity;
+  description: string;
+  line?: number;
+  matchedText?: string;
+  remediation: string;
+}
+
 export interface SecurityAuditResult {
   safe: boolean;
   findings: string[];
+  structuredFindings?: StructuredSecurityFinding[];
 }
 
 export interface QaTestResult {
@@ -140,34 +152,75 @@ Avoid hallucinations; state uncertainties explicitly.`,
  */
 export function defaultSecurityAudit(proposal: string): SecurityAuditResult {
   const findings: string[] = [];
+  const structuredFindings: StructuredSecurityFinding[] = [];
 
   // Check 1: Secret / API Key / Cloud Credential Leakage
-  if (
-    /\b(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|gho_[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16,}|ASIA[0-9A-Z]{16,}|AIzaSy[a-zA-Z0-9_-]{33}|bearer\s+[a-zA-Z0-9._-]{30,}|xox[baprs]-[a-zA-Z0-9-]{10,})\b/i.test(
-      proposal
-    )
-  ) {
+  const secretMatch = proposal.match(
+    /\b(sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|gho_[a-zA-Z0-9]{20,}|AKIA[0-9A-Z]{16,}|ASIA[0-9A-Z]{16,}|AIzaSy[a-zA-Z0-9_-]{33}|bearer\s+[a-zA-Z0-9._-]{30,}|xox[baprs]-[a-zA-Z0-9-]{10,})\b/i
+  );
+  if (secretMatch) {
     findings.push("Exposed API key, token, or bearer credential in proposed code");
+    structuredFindings.push({
+      ruleId: "CWE-798-HARDCODED-CREDENTIALS",
+      severity: "critical",
+      description: "Hardcoded API key, access token, or cloud credential detected in proposal",
+      matchedText: secretMatch[0].slice(0, 10) + "...",
+      remediation: "Use environment variables or a secure key manager instead of committing secrets into source.",
+    });
   }
 
   // Check 2: Unsafe command execution
-  if (/\b(child_process\.exec\s*\(|eval\s*\(|new\s+Function\s*\(|spawn\s*\([^,]+,[^,]+,\s*\{[^}]*shell:\s*true)/.test(proposal)) {
+  const cmdMatch = proposal.match(
+    /\b(child_process\.exec\s*\(|eval\s*\(|new\s+Function\s*\(|spawn\s*\([^,]+,[^,]+,\s*\{[^}]*shell:\s*true)/
+  );
+  if (cmdMatch) {
     findings.push("Unsafe command execution detected (eval, Function, child_process.exec, or shell: true)");
+    structuredFindings.push({
+      ruleId: "CWE-78-COMMAND-INJECTION",
+      severity: "critical",
+      description: "Potentially vulnerable command evaluation mechanism detected",
+      matchedText: cmdMatch[0],
+      remediation: "Avoid string-based shell invocation. Use execFile or spawn with argument arrays and shell: false.",
+    });
   }
 
   // Check 3: Direct unsanitized path traversal
   if (/\.\.\/(\.\.\/)+/.test(proposal) && !proposal.includes("resolveSandboxedPath")) {
     findings.push("Potential unconstrained path traversal (../../) without sandboxed path resolution");
+    structuredFindings.push({
+      ruleId: "CWE-22-PATH-TRAVERSAL",
+      severity: "high",
+      description: "Path traversal pattern found without sandboxed root validation",
+      remediation: "Always use resolveSandboxedPath to ensure path cannot escape tenant workspace.",
+    });
   }
 
   // Check 4: Hardcoded private network addresses / cloud metadata
   if (/\b(169\.254\.169\.254|metadata\.google\.internal)\b/.test(proposal)) {
     findings.push("Hardcoded cloud metadata IP/endpoint reference detected");
+    structuredFindings.push({
+      ruleId: "CWE-918-SSRF-CLOUD-METADATA",
+      severity: "critical",
+      description: "Cloud metadata instance endpoint detected (potential SSRF escalation)",
+      remediation: "Filter private network addresses and enforce strict domain allowlisting.",
+    });
+  }
+
+  // Check 5: Adversarial prompt injection trying to instruct the auditor to ignore rules
+  if (/(SYSTEM\s*:\s*OVERRIDE|IGNORE\s+ALL\s+SECURITY|APPROVE_WITHOUT_REVIEW|BYPASS_AUDIT)\b/i.test(proposal)) {
+    findings.push("Adversarial prompt injection attempt detected in code proposal");
+    structuredFindings.push({
+      ruleId: "SEC-PROMPT-INJECTION-DETECTED",
+      severity: "critical",
+      description: "Proposal contains adversarial tokens attempting to deceive automated verification",
+      remediation: "Reject proposal and flag for human review.",
+    });
   }
 
   return {
     safe: findings.length === 0,
     findings,
+    structuredFindings,
   };
 }
 

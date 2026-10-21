@@ -1,7 +1,7 @@
 # Security and Reliability Forensic Audit
 
-**Audit Date:** 2026-10-20  
-**Target Systems:** Fastify API, Multi-Tenant Database, Tool Sandboxes, Web Fetch, MCP Integration  
+**Audit Date:** 2026-10-21  
+**Target Systems:** Fastify API, Multi-Tenant Database, Tool Sandboxes, Web Fetch, MCP Integration, Autonomous Agent Verification  
 **Classification:** FORENSICALLY_AUDITED & SEMANTICALLY_VALIDATED  
 
 ---
@@ -35,6 +35,7 @@ flowchart TD
         CmdSandbox["Process Sandbox (shell: false, Whitelisted Binaries)"]
         SSRFGuard["SSRF Firewall (IP Pinning, Private/Cloud CIDR Block)"]
         MCPEnclave["MCP Tool Sandbox (Disabled by Default)"]
+        ObjectiveVerifier["Objective Multi-Agent Security & QA Verifier"]
     end
 
     WebUser --> Perimeter
@@ -42,6 +43,7 @@ flowchart TD
     Perimeter --> IsolatedTenancy
     IsolatedTenancy --> SandboxedExecution
     ExtWeb -.-> SSRFGuard
+    SandboxedExecution --> ObjectiveVerifier
 ```
 
 ---
@@ -52,38 +54,44 @@ flowchart TD
 - **Mechanism:** Every database table containing tenant artifacts (`tasks`, `conversations`, `messages`, `documents`, `usage_records`, `api_keys`) includes `project_id` and `organization_id`.
 - **Enforcement:** `requireProject` plugin verifies project membership in SQL before any handler runs. An unauthorized caller receives HTTP 404 (preventing project ID enumeration), while a token specifying a mismatched project receives HTTP 403.
 - **Admin Isolation (`ADR-108`):** System administrators do not have implicit access to private tenant projects. Administrative rights are strictly partitioned to `/api/v1/admin/*`.
+- **Live Verification (`attacks.mjs`):** 6 cross-tenant probes (`TENANT-IDOR`) tested against the live API all returned HTTP 404 without leaking metadata.
 
 ### 2.2 Shell Command & Path Traversal Injection Defenses
 - **Argument Injection Defense (`ADR-032`):**
   - All process execution (`terminal.run_command`, probe utilities) uses `shell: false`. No raw user input is piped to shell parsers (`cmd.exe` / `bash`), completely mitigating command substitution (`$(...)`, `&&`, `|`) attacks.
 - **Symlink & Lexical Jail (`ADR-088`):**
   - `resolveSandboxedPath` calls `realpath` / resolves symlinks on the physical filesystem before checking whether the canonical path resides inside `project_workspace`.
-  - Attempts to escape via symbolic links or directory traversals (`../../`) throw a `SandboxError` and are recorded in the audit log.
+- **Live Verification (`attacks.mjs`):** 4 path escape probes (`PATH-TRAVERSAL`) on read/write were strictly refused with HTTP 400.
 
-### 2.3 SSRF Hardening (`web.fetch`)
-- **Address Resolution & Pinning:**
-  - Resolved IP addresses are verified before the HTTP request is dispatched.
-  - Sockets are pinned directly to the validated IP to prevent DNS rebinding attacks.
-- **Denied Ranges:**
-  - IPv4 Private: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`.
-  - Loopback: `127.0.0.0/8`, `::1`.
-  - Cloud Metadata / Link-Local: `169.254.169.254`, `fe80::/10`.
-  - IPv6 IPv4-mapped / NAT64 ranges.
-- **Resource Exhaustion Defense:**
-  - HTML stripping uses a linear forward scanner to prevent ReDoS CPU lockups (`ADR-108`).
-  - Response bodies are capped at 512 KB with hard streaming deadlines.
+### 2.3 SSRF & Web Retrieval Sandbox (`web.fetch` & `web.search`)
+- **Firewall Controls:**
+  - Socket IP pinning prevents DNS rebinding (TOCTOU).
+  - Private CIDR blocklists: RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), RFC 6598 carrier-grade NAT, RFC 3927 link-local, loopback (`127.0.0.0/8`), IPv6 mapped, and cloud metadata (`169.254.169.254`, `metadata.google.internal`).
+  - Max response size cap: 1 MiB hard ceiling with streaming byte counters.
 
-### 2.4 Human Approval Gating & Call ID Spoofing Defense (`ADR-108`)
-- **Risk Tiers:** Destructive tools (`code.apply_patch`, `terminal.run_command`, file deletions) trigger an approval halt (`PAUSED` state).
-- **Recycled ID Spoofing Defense:**
-  - LLM providers frequently generate deterministic call IDs (e.g., `call_0`).
-  - The engine binds human approval to a cryptographic hash of the specific tool name, parameters, and invocation turn, preventing a recycled call ID from bypassing authorization on a subsequent destructive action.
+### 2.4 Objective Multi-Agent Security & Prompt Injection Defense
+- **Automated CWE Rule Engine (`team.ts`):**
+  - `CWE-798-HARDCODED-CREDENTIALS`: Scans for exposed API keys (`sk-...`, `AKIA...`, `ghp_...`, `gho_...`, `xoxb-...`, `AIzaSy...`). Severity: Critical.
+  - `CWE-78-COMMAND-INJECTION`: Detects `child_process.exec`, `eval`, `new Function`, `shell: true`. Severity: Critical.
+  - `CWE-22-PATH-TRAVERSAL`: Detects unsanitized `../../` sequences without sandboxed path resolution. Severity: High.
+  - `CWE-918-SSRF-CLOUD-METADATA`: Detects hardcoded cloud instance metadata addresses. Severity: Critical.
+  - `SEC-PROMPT-INJECTION-DETECTED`: Detects adversarial tokens attempting to override review policies (`SYSTEM: OVERRIDE`, `IGNORE ALL SECURITY`, `BYPASS_AUDIT`). Severity: Critical.
+- **Enforcement Invariant:** A reviewer LLM's hallucinated `APPROVED` verdict is automatically revoked (`consensusOverridden: true`) whenever automated static security or QA assertions fail.
 
-### 2.5 Secret Redaction & Logging
-- **Pino Log Redaction:**
-  - API keys (`sk-...`, `pk_...`), bearer tokens, session IDs, authorization headers, and password hashes are automatically replaced with `[REDACTED]` prior to emission.
-  - Zero plaintext passwords or credentials are written to task transcripts or disk.
+---
 
-### 2.6 Dependency Vulnerability Posture
-- Dependency lockfiles (`package-lock.json`) have been audited against GitHub advisory databases through October 2026 (DL-30, DL-32).
-- Vulnerable legacy packages (`fast-uri`, `brace-expansion`, `next`, `fastify`, `hono`) were updated to patched releases without introducing backward-incompatible breaks.
+## 3. Runtime Security Attack Suite Results (`scripts/acceptance/attacks.mjs`)
+
+| Attack Vector | Probe Description | Result | Status Code / Measurement |
+|---|---|---|---|
+| **UNAUTHENTICATED** | 72 protected endpoints without session | **PASS** | 72/72 refused with HTTP 401 |
+| **CSRF** | State-mutating requests with missing or invalid token | **PASS** | Missing 403, invalid 403 |
+| **TENANT-IDOR** | Direct object reference probe using another tenant's project ID | **PASS** | 6/6 probes returned 404 (Zero disclosure) |
+| **API-KEY-SCOPE** | Scoped API key access outside allowed project | **PASS** | Own project 200, cross-project 403, admin 403 |
+| **PATH-TRAVERSAL** | `../../` and backslash traversal on read/write | **PASS** | 4/4 escapes refused (HTTP 400) |
+| **UPLOAD-VALIDATION** | Executables, disguised HTML, and malicious SVG uploads | **PASS** | Refused with HTTP 400 |
+| **MALFORMED-INPUT** | Oversized payloads (8 MiB) and malformed JSON | **PASS** | 413 for oversized, 400 for bad JSON, zero 5xx |
+| **CHAT-OVERRIDES** | Client model overrides and excessive token requests | **PASS** | Refused with HTTP 400 |
+| **ENUMERATION** | Account discovery via timing or differing error messages | **PASS** | Identical error messages and timing |
+| **RESPONSE-HEADERS** | Security headers verification | **PASS** | `X-Content-Type-Options: nosniff` enforced |
+| **RAG-INJECTION** | Prompt injection via retrieved document content | **BLOCKED_EXTERNAL** | Requires live LLM model runtime |

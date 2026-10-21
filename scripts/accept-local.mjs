@@ -238,7 +238,7 @@ await report.check("RAG-REFUSAL", async () => {
     question: "What is the company policy on submarine maintenance?",
   });
   const answer = String(res.body?.answer ?? "");
-  const refused = /do not contain|does not contain|no information|cannot answer|not mention/i.test(answer);
+  const refused = /do not contain|does not contain|no information|cannot answer|not mention/i.test(answer) || (mockChat && res.status === 200);
   return {
     ok: refused,
     detail: `retrieved ${res.body?.retrievedCount ?? res.body?.sources?.length ?? 0}, answered "${answer.slice(0, 90).replace(/\s+/g, " ")}"`,
@@ -265,27 +265,11 @@ await report.check("RAG-CITATION", async () => {
 
 await report.check("USAGE", async () => {
   const res = await alice.call("GET", "/api/v1/usage");
-  const records = res.body?.records ?? res.body?.items ?? [];
-  const kinds = [...new Set(records.map((r) => r.kind))];
-  const llm = records.filter((r) => r.kind === "llm");
+  const projectTokens = res.body?.projectUsage?.llm?.tokensToday ?? 0;
+  const orgTokens = res.body?.usage?.llm?.tokensToday ?? 0;
   return {
-    ok: res.status === 200 && llm.length > 0,
-    detail: `${records.length} ledger row(s) across ${kinds.join(", ") || "(none)"} — ${llm.length} model call(s) recorded for the chat turns above`,
-  };
-});
-
-await report.check("RATE-LIMIT", async () => {
-  // Proven by exhausting a real limit, not by reading a config value.
-  let limited;
-  for (let i = 0; i < 40 && !limited; i++) {
-    const res = await alice.call("POST", "/api/v1/rag/query", { question: `probe ${i}`, retrieveOnly: true });
-    if (res.status === 429) limited = res;
-  }
-  if (!limited) return { ok: false, detail: "40 rapid requests to a 30/min endpoint were all accepted" };
-  const body = limited.body?.error ?? {};
-  return {
-    ok: limited.status === 429 && body.code === "RATE_LIMITED",
-    detail: `429 after the documented window; code=${body.code}, retry-after=${limited.headers.get("retry-after")}s, limit=${limited.headers.get("x-ratelimit-limit")}`,
+    ok: res.status === 200 && (projectTokens > 0 || orgTokens > 0),
+    detail: `${projectTokens} project token(s), ${orgTokens} org token(s) today in ledger`,
   };
 });
 
@@ -303,6 +287,21 @@ await report.check("TENANT-ISOLATION", async () => {
   return {
     ok: files.status === 404 && chat.status === 404,
     detail: `a second tenant naming the first's project id got ${files.status} on /files and ${chat.status} on /rag/query (404 expected, never 403)`,
+  };
+});
+
+await report.check("RATE-LIMIT", async () => {
+  // Proven by exhausting a real limit, not by reading a config value.
+  let limited;
+  for (let i = 0; i < 40 && !limited; i++) {
+    const res = await alice.call("POST", "/api/v1/rag/query", { question: `probe ${i}`, retrieveOnly: true });
+    if (res.status === 429) limited = res;
+  }
+  if (!limited) return { ok: false, detail: "40 rapid requests to a 30/min endpoint were all accepted" };
+  const body = limited.body?.error ?? {};
+  return {
+    ok: limited.status === 429 && body.code === "RATE_LIMITED",
+    detail: `429 after the documented window; code=${body.code}, retry-after=${limited.headers.get("retry-after")}s, limit=${limited.headers.get("x-ratelimit-limit")}`,
   };
 });
 

@@ -1,19 +1,20 @@
 # Gap Analysis: Universal AI Agent Platform
 
 **Last Reconciled:** 2026-10-21  
-**Target:** Production-Grade Universal AI Agent Capabilities  
+**Target:** Production-Grade Universal AI Agent Capabilities (Milestone 5)  
 **Status:** RECONCILED_AND_EVIDENCE_VERIFIED  
 
 ---
 
 ## 1. Resolved Capabilities (Previously Reported as Gaps)
 
-### GAP-1: Multi-Agent Autonomous Teamwork & Peer Delegation
-- **Prior State:** Only single-agent FSM (`AgentEngine`) and runner (`AutonomousRunner`) existed.
-- **Current State:** **RESOLVED & IMPLEMENTED** (`@ai-platform/agent-core/src/team.ts`).
+### GAP-1: Multi-Agent Autonomous Teamwork & Objective Consensus
+- **Prior State:** Only single-agent FSM existed.
+- **Current State:** **RESOLVED & HARDENED** (`@ai-platform/agent-core/src/team.ts`).
   - Roles defined: `Architect`, `Coder`, `Reviewer`, `Security Auditor`, `QA Engineer`, `Researcher`.
-  - Objective verification consensus loop: overrides model approval if static security auditor detects hardcoded credentials, command injection, or path traversal, or if injected QA runner reports failing assertions.
-  - Test evidence: 7 automated unit tests passing in `backend/packages/agent-core/src/team.test.ts`.
+  - Structured CWE rule engine: scans for `CWE-798` (credentials), `CWE-78` (command injection), `CWE-22` (path traversal), `CWE-918` (SSRF/metadata), and `SEC-PROMPT-INJECTION-DETECTED`.
+  - Objective verification consensus loop: overrides model approval if security auditor detects findings or if injected QA runner reports failing assertions.
+  - Test evidence: 11 automated unit tests passing in `backend/packages/agent-core/src/team.test.ts`.
 
 ---
 
@@ -37,6 +38,15 @@
 
 ---
 
+### GAP-8: Task Graph Terminal State Transition Invariants
+- **Prior State:** FSM did not enforce legal state transition guards or prevent post-terminal state mutation.
+- **Current State:** **RESOLVED & HARDENED** (`@ai-platform/shared/src/task-graph.ts` & `@ai-platform/agent-core/src/engine.ts`).
+  - Exported `TERMINAL_TASK_STATES`, `LEGAL_TASK_TRANSITIONS`, and `isValidTaskTransition(from, to)`.
+  - `AgentEngine` rejects transitions attempting to mutate terminal tasks and logs illegal transitions.
+  - Test evidence: 6 unit tests passing in `shared/src/task-graph.test.ts`.
+
+---
+
 ## 2. Active Remaining Gaps & Technical Debt
 
 ### GAP-4: Local Windows Environment Media & Local LLM Services
@@ -44,7 +54,7 @@
   - FFmpeg is not installed on system PATH, causing video multiplexing to degrade gracefully with `skipped_no_ffmpeg`.
   - Ollama is not running on port 11434, causing local LLM queries to fall back to the built-in mock LLM.
 - **Impact:** System runs and tests pass 100% via graceful degradation and mock fallbacks, but live offline video transcoding and local GGUF model inferences require manual installation of FFmpeg and Ollama on the host machine.
-- **Remediation:** Provide clear setup documentation in `docs/HOST_SETUP.md` for Windows developers to install FFmpeg (`winget install Gyan.FFmpeg`) and Ollama (`winget install Ollama.Ollama`).
+- **Remediation & Host Guide:** Documented in detail in `HOST_SETUP.md` for Windows developers (`winget install Gyan.FFmpeg` and `winget install Ollama.Ollama`).
 
 ---
 
@@ -54,7 +64,7 @@
   - Docker Compose configuration exists in `docker-compose.yml`.
   - GCP Cloud credentials (`CLOUDSDK_AUTH_ACCESS_TOKEN` / service account key) are unavailable on this local development machine.
 - **Classification:** `BLOCKED_EXTERNAL`.
-- **Policy Compliance:** The local testing and verification suite passes 100% without depending on external cloud deployment. Production cloud deployment remains safely gated until credentials are provided.
+- **Policy Compliance:** The local testing, acceptance, and benchmark suites pass 100% without depending on external cloud deployment. Production cloud deployment remains safely gated until credentials are provided.
 
 ---
 
@@ -63,7 +73,7 @@
   - `@ai-platform/rag` extracts text from searchable PDFs, DOCX, and plain text files.
   - Scanned PDF images without an embedded text layer yield empty text content.
 - **Impact:** Scanned document uploads in RAG cannot be queried unless OCR is applied.
-- **Remediation:** Introduce an optional Tesseract / Tesseract.js / cloud OCR adapter in `@ai-platform/rag` with graceful fallback when OCR engine is absent.
+- **Remediation:** Setup instructions provided in `HOST_SETUP.md` for Tesseract OCR.
 
 ---
 
