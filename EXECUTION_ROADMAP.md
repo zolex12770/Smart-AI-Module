@@ -1,7 +1,7 @@
 # Execution Roadmap: Universal AI Agent Platform
 
-**Plan Version:** 1.2.0  
-**Status:** MILESTONE 5 COMPLETED  
+**Plan Version:** 1.3.0  
+**Status:** MILESTONE 6 COMPLETED  
 **Prioritization Standard:** P0 (Security/Corrupted State) → P1 (Core Workflows/Failures) → P2 (Architectural Foundations) → P3 (Advanced Capabilities & Tools) → P4 (UI/UX) → P5 (Benchmarks & Polish)
 
 ---
@@ -68,29 +68,37 @@
 ---
 
 ### Milestone 5: Evidence-Driven Validation, Capability Benchmarking & Production Hardening (COMPLETED)
-- [x] **Task Graph State Machine Invariants:**
-  - Exported `TERMINAL_TASK_STATES`, `LEGAL_TASK_TRANSITIONS`, and `isValidTaskTransition(from, to)` in `@ai-platform/shared`.
-  - Added illegal transition guards in `AgentEngine.execute()` preventing mutation on terminal tasks.
-  - Implemented `blockTask()` handler in `AgentEngine`.
-  - Added unit test suite `shared/src/task-graph.test.ts` (6/6 tests passing).
-- [x] **Objective Multi-Agent Security & Consensus Hardening:**
-  - Implemented structured CWE taxonomy scanner (`CWE-798`, `CWE-78`, `CWE-22`, `CWE-918`).
-  - Added adversarial prompt injection detection (`SEC-PROMPT-INJECTION-DETECTED`).
-  - Implemented resilient reviewer verdict parsing to prevent bypass on non-standard model responses.
-  - Expanded `backend/packages/agent-core/src/team.test.ts` to 11 passing tests.
-- [x] **Live End-to-End API Acceptance Suite:**
-  - Verified 15/15 acceptance checks against live Fastify backend on `:8787` (`scripts/accept-local.mjs`).
-  - Verified auth, permissions, session revocation, streaming SSE token intervals (66 events, 2026ms spread), cancellation, memory, RAG ingest/answer/refusal/citations, usage ledger, 404 tenant isolation, and 429 rate limiting.
-- [x] **Live Security Attack & Vulnerability Testing:**
-  - Ran `scripts/acceptance/attacks.mjs`: 10 passed, 0 failed, 1 BLOCKED_EXTERNAL.
-  - Tested 72 routes for unauthenticated 401s, CSRF tampering 403s, tenant IDOR 404s, and path traversal 400s.
-- [x] **Live Latency & Profiling:**
-  - Profiled live API with `scripts/acceptance/latency.mjs`: health p50 6.5ms, read p50 21.9ms, streaming TTFT p50 66ms, token interval p50 31ms.
-- [x] **Reproducible Capability Benchmark Suite:**
-  - Implemented `scripts/benchmark-suite.mjs` and registered `"benchmark": "node scripts/benchmark-suite.mjs"` in `package.json`.
-  - Evaluated 10 core capabilities with measured latency, token usage, cost accounting, and error recovery.
-  - Generates JSON and Markdown benchmark reports in `benchmark-results/`.
-- [x] **Host Developer Setup Guide:**
-  - Authored `HOST_SETUP.md` with setup instructions for Windows developers (Ollama, FFmpeg, SAPI/Piper TTS, SDXL GGUF, Tesseract OCR, GCP credentials).
-- [x] **Monorepo Test Accounting Reconciled:**
-  - 161 test files, 1,006 unique unit and integration tests passing 100%.
+- [x] **Task Graph State Machine Invariants:** Exported `TERMINAL_TASK_STATES`, `LEGAL_TASK_TRANSITIONS`, and `isValidTaskTransition(from, to)`.
+- [x] **Objective Multi-Agent Security & Consensus Hardening:** Implemented structured CWE taxonomy scanner (`CWE-798`, `CWE-78`, `CWE-22`, `CWE-918`) and `SEC-PROMPT-INJECTION-DETECTED`.
+- [x] **Live End-to-End API Acceptance Suite:** 15/15 acceptance checks against live Fastify backend on `:8787`.
+- [x] **Live Latency & Profiling:** Profiled live API with `scripts/acceptance/latency.mjs`.
+- [x] **Reproducible Capability Benchmark Suite:** Implemented `scripts/benchmark-suite.mjs` with token accounting and cost reporting.
+- [x] **Host Developer Setup Guide:** Authored `HOST_SETUP.md`.
+
+---
+
+### Milestone 6: Full Product Completion, Live Capability Validation & Release Readiness (COMPLETED)
+- [x] **RAG Indirect Prompt Injection Vulnerability Remediation:**
+  - Implemented delimiter sanitization (`sanitizeChunkContent`) escaping context tags in `backend/src/routes/v1/rag.ts`.
+  - Implemented tool directive stripping (`stripUntrustedContent`) in `@ai-platform/llm-mock`.
+  - Added injection detection and violation reporting in `@ai-platform/rag` grounding engine.
+  - Authored 7-vector adversarial test suite in `backend/packages/rag/src/adversarial-rag.test.ts` (8/8 tests passed).
+  - Validated live attack suite: `node scripts/acceptance/attacks.mjs` upgraded to **11 PASS · 0 FAIL · 0 BLOCKED_EXTERNAL in 49s**.
+- [x] **Browser E2E Automation Integration & Verification:**
+  - Configured `frontend/playwright.config.ts` and `scripts/doctor.mjs` to auto-detect system Google Chrome on Windows.
+  - `npm run doctor` verified: `Browser (Playwright)` now reports `PASS`.
+  - Executed and verified 11 tests across 4 Playwright E2E suites: `account-security.spec.ts` (2 passed), `chat-and-history.spec.ts` (1 passed), `auth-and-isolation.spec.ts` (7 passed), `autonomous-agent.spec.ts` (1 passed).
+- [x] **Capability Benchmark Suite Realism Audit:**
+  - Hardened `scripts/benchmark-suite.mjs` to drive real provider instances, measure streaming TTFT, account for token usage, and evaluate image/video artifact outputs.
+  - Executed benchmark suite across all 10 scenarios with honest classification (6 PASS, 3 DEGRADED, 1 BLOCKED_EXTERNAL, 0 FAIL).
+- [x] **Monorepo Baseline Re-Validation:**
+  - `npm run build:packages`: 100% PASS (`tsc -b`).
+  - `npm run build:backend`: 100% PASS (`tsc -b`).
+  - `npm run typecheck`: 100% PASS across all 27 workspaces (0 TypeScript errors).
+  - `npm run lint`: 100% PASS (0 errors, 5 console warnings).
+  - `node scripts/check-boundary.mjs`: 100% PASS (7/7 architectural rules passed across 377 source files).
+  - `npm run test:frontend`: 100% PASS (20 test files, 124 unit tests passed).
+  - `npm test -w @ai-platform/rag`: 100% PASS (11 test files, 76 tests passed).
+  - `node scripts/accept-local.mjs`: 100% PASS (15/15 checks passed in 28s).
+- [x] **Authoritative Documentation Synchronization:**
+  - Synchronized `CURRENT_STATUS.md`, `FEATURE_COMPLETION_MATRIX.md`, `GAP_ANALYSIS.md`, `SECURITY_AND_RELIABILITY_AUDIT.md`, `TESTING_AND_VERIFICATION_REPORT.md`, `EXECUTION_ROADMAP.md`, and authored `MILESTONE_6_REPORT.md`.

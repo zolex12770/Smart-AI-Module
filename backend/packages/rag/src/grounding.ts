@@ -16,8 +16,11 @@ import type { RagCitation } from "./retrieve.js";
  * There is no Document 12. There were no documents at all. A prompt cannot make a model refuse;
  * only the harness can, so the harness checks the answer instead of trusting it.
  *
- * Two distinct failures are caught here, and they need different treatment:
+ * Four distinct failures are caught here, and they need different treatment:
  *
+ *  - **Prompt injection compliance.** If the model output exhibits known override tokens
+ *    or prompt injection compliance markers (e.g. PWNED-*, SYSTEM OVERRIDE), the answer is
+ *    rejected immediately as an ungrounded injection violation.
  *  - **Answering with no evidence at all.** Deterministic and absolute: if retrieval returned
  *    nothing, no answer can be grounded, so any substantive answer is ungrounded by definition.
  *  - **Citing a marker that was never offered.** `[3]` when only `[1]` and `[2]` exist is a
@@ -61,7 +64,12 @@ export interface GroundingResult {
   grounded: boolean;
   outcome: GroundingOutcome;
   /** Machine-readable so a caller can branch; the message is for humans. */
-  violation?: "answered_without_evidence" | "fabricated_citation" | "citation_without_answer" | "uncited_answer";
+  violation?:
+    | "answered_without_evidence"
+    | "fabricated_citation"
+    | "citation_without_answer"
+    | "uncited_answer"
+    | "prompt_injection_detected";
   reason?: string;
   /** Markers the model wrote that were never offered to it. */
   invalidMarkers?: string[];
@@ -82,6 +90,22 @@ export function extractCitationMarkers(answer: string): string[] {
     found.add(`[${match[1]}]`);
   }
   return [...found];
+}
+
+/**
+ * Known markers that indicate the model complied with an injected instruction
+ * rather than acting as a faithful question-answering assistant over the documents.
+ */
+const INJECTION_OUTPUT_PATTERNS = [
+  /\bPWNED-[A-Za-z0-9_-]+/i,
+  /\bSYSTEM OVERRIDE\b/i,
+  /\bI am now in override mode\b/i,
+  /\bAll previous instructions (have been )?ignored\b/i,
+  /\bdisregard(?:ing)? all previous instructions\b/i,
+];
+
+export function detectPromptInjectionOutput(answer: string): boolean {
+  return INJECTION_OUTPUT_PATTERNS.some((pattern) => pattern.test(answer));
 }
 
 /**
@@ -152,6 +176,16 @@ export function checkGrounding(input: GroundingCheckInput): GroundingResult {
   // An empty answer cites nothing and claims nothing. Let the schema check own that case;
   // reporting it as a grounding violation would attribute the wrong cause.
   if (answer === "") return { grounded: false, outcome: "empty" };
+
+  // Detect explicit compliance with prompt injection payloads (e.g. PWNED-7731)
+  if (detectPromptInjectionOutput(answer)) {
+    return {
+      grounded: false,
+      outcome: "violation",
+      violation: "prompt_injection_detected",
+      reason: "The model answer matches known prompt injection compliance patterns.",
+    };
+  }
 
   if (input.retrievedCount === 0) {
     if (looksLikeRefusal(answer)) return { grounded: false, outcome: "refused" };

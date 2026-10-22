@@ -291,9 +291,16 @@ await check("Malware scanning", async () => {
 await check("Browser (Playwright)", async () => {
   try {
     const { chromium } = await import("playwright");
-    const path = chromium.executablePath();
-    return existsSync(path)
-      ? { status: "PASS", detail: "Chromium installed" }
+    const candidates = [
+      process.env.PLAYWRIGHT_CHROMIUM_PATH,
+      chromium.executablePath(),
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    ].filter(Boolean);
+    const path = candidates.find((p) => existsSync(p));
+    return path
+      ? { status: "PASS", detail: `browser available at ${path}` }
       : { status: "UNAVAILABLE", detail: "playwright is installed, its browser is not", missing: "npx playwright install chromium" };
   } catch {
     return { status: "UNAVAILABLE", detail: "playwright not installed", missing: "npm install at the repo root" };

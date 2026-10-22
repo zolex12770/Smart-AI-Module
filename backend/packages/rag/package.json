@@ -26,6 +26,7 @@
     "uuid": "^11.0.4"
   },
   "devDependencies": {
+    "@ai-platform/llm-mock": "*",
     "@ai-platform/media": "*",
     "drizzle-orm": "^0.45.2",
     "typescript": "^5.9.3",

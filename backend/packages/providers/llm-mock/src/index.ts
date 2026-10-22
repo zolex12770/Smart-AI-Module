@@ -71,8 +71,10 @@ export class MockLLMProvider implements LLMProvider {
       .filter((m): m is ChatMessage & { role: "tool" } => m.role === "tool");
 
     const toolsOffered = (request.tools?.length ?? 0) > 0 && request.toolChoice !== "none";
+    // Untrusted document content is stripped before directive parsing to prevent indirect prompt injection.
+    const cleanUserContent = stripUntrustedContent(lastUserMessage?.content ?? "");
     const directives = toolsOffered && toolResults.length === 0
-      ? parseCallDirectives(lastUserMessage?.content ?? "")
+      ? parseCallDirectives(cleanUserContent)
       : [];
 
     if (directives.length > 0) {
@@ -138,6 +140,17 @@ export class MockLLMProvider implements LLMProvider {
     if (!userText.trim()) {
       return "I didn't receive any message content. Try sending some text.";
     }
+
+    // If this is a RAG query prompt, parse passages and question to produce a safe, grounded mock answer
+    const ragMatch = userText.match(
+      /<untrusted-document-content>([\s\S]*?)<\/untrusted-document-content>\s*(?:Question:\s*([\s\S]*))?$/i
+    );
+    if (ragMatch) {
+      const rawContext = ragMatch[1] ?? "";
+      const rawQuestion = (ragMatch[2] ?? "").trim();
+      return this.buildRagReply(rawContext, rawQuestion);
+    }
+
     return (
       // docs/26_DECISIONS.md ADR-044: this used to assert "no real LLM provider is
       // configured", which is FALSE in the case that matters most — a configured real
@@ -151,6 +164,68 @@ export class MockLLMProvider implements LLMProvider {
       `"provider call failed, falling back" line in the logs for the reason.`
     );
   }
+
+  private buildRagReply(rawContext: string, question: string): string {
+    const passageMatches = [...rawContext.matchAll(/\[(\d+)\]\s*(?:[^\n:]+:\s*)?([\s\S]*?)(?=\[\d+\]|$)/g)];
+    const injectionFilter = /(?:SYSTEM OVERRIDE|PWNED|ignore (?:all )?previous|disregard|you are now|new instructions)/i;
+
+    let bestSentence: string | null = null;
+    let bestMarker = "[1]";
+
+    const stopwords = new Set([
+      "what", "when", "where", "which", "who", "whom", "whose", "why", "how",
+      "does", "have", "been", "from", "with", "this", "that", "these", "those",
+      "about", "the", "and", "for", "are", "was", "were", "many", "much"
+    ]);
+    const qTokens = (question.toLowerCase().match(/[a-z0-9]+/g) ?? []).filter((w) => w.length >= 3 && !stopwords.has(w));
+
+    let maxMatchCount = 0;
+
+    for (const match of passageMatches) {
+      const marker = `[${match[1]}]`;
+      const body = match[2] ?? "";
+      const cleanLines = body
+        .split("\n")
+        .filter((line) => !injectionFilter.test(line))
+        .join("\n");
+
+      const sentences = cleanLines
+        .split(/(?<=[.!?])\s+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 5 && !injectionFilter.test(s));
+
+      for (const sentence of sentences) {
+        const sLower = sentence.toLowerCase();
+        let matches = 0;
+        for (const token of qTokens) {
+          if (sLower.includes(token)) matches++;
+        }
+        if (matches > maxMatchCount) {
+          maxMatchCount = matches;
+          bestSentence = sentence;
+          bestMarker = marker;
+        } else if (!bestSentence && sentences.length > 0) {
+          bestSentence = sentences[0];
+          bestMarker = marker;
+        }
+      }
+    }
+
+    if (bestSentence) {
+      const clean = bestSentence.replace(/[.\s]+$/, "");
+      return `${clean} ${bestMarker}.`;
+    }
+
+    return "The provided documents do not contain the answer to this question.";
+  }
+}
+
+/**
+ * Strips untrusted document content enclosed in delimiter tags so that directives embedded
+ * within uploaded documents cannot trigger mock tool execution.
+ */
+function stripUntrustedContent(text: string): string {
+  return text.replace(/<untrusted-document-content>[\s\S]*?<\/untrusted-document-content>/gi, "");
 }
 
 /**
