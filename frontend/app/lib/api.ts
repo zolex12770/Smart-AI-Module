@@ -135,6 +135,8 @@ export interface ModelInfo {
   model: string;
   isMock: boolean;
   isDefault: boolean;
+  isLocal?: boolean;
+  category?: "real" | "local" | "mock" | "unavailable";
 }
 
 export const listModels = () => request<{ models: ModelInfo[]; default: string | null }>("/api/v1/models");

@@ -109,7 +109,12 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   // a real bug found only by actual browser-driven UI testing (docs/25 Phase 10), never by
   // curl (which doesn't enforce CORS at all) or by unit/integration tests.
   await app.register(cors, {
-    origin: config.CORS_ORIGIN,
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      const allowed = new Set([config.CORS_ORIGIN, "http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:3100", "http://127.0.0.1:3100"]);
+      if (allowed.has(origin)) return cb(null, true);
+      return cb(null, false);
+    },
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     // Without this the browser drops the session cookie on every cross-origin call and the
     // whole cookie-based session (ADR-049) silently degrades to "always logged out". It is

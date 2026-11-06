@@ -274,22 +274,99 @@ export default function ChatView({
               {manageError}
             </p>
           ) : null}
-          {chatModel ? (
-            <p>
-              Answers come from <strong>{chatModel.provider}</strong> ({chatModel.model})
-              {chatModel.isMock ? (
-                <>
-                  {" "}
-                  — <strong>a mock</strong>: its replies are canned text for testing, not a model&apos;s
-                </>
-              ) : null}
-              .
-            </p>
+          {chatModel && !chatModel.isMock && !chatModel.isLocal ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+              <span
+                style={{
+                  background: "#059669",
+                  color: "#ffffff",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                REAL MODEL
+              </span>
+              <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                Connected to genuine hosted provider: <strong>{chatModel.provider}</strong> ({chatModel.model})
+              </span>
+            </div>
+          ) : chatModel && !chatModel.isMock && chatModel.isLocal ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+              <span
+                style={{
+                  background: "#2563eb",
+                  color: "#ffffff",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                LOCAL MODEL
+              </span>
+              <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                Connected to local runtime: <strong>{chatModel.model}</strong> ({chatModel.provider})
+              </span>
+            </div>
+          ) : chatModel && chatModel.isMock ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+              <span
+                style={{
+                  background: "#d97706",
+                  color: "#ffffff",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                MOCK / SIMULATION
+              </span>
+              <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                Simulation mode only: replies are canned mock text for testing, not a real AI model.
+              </span>
+            </div>
           ) : chatModel === null ? (
-            <p className="error-text" role="status">
-              No language model is configured on this deployment, so chat will report that instead of answering. An
-              operator can start Ollama or set LLM_BASE_URL and LLM_MODEL — see docs/PROVIDERS.md.
-            </p>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                margin: "8px 0",
+                padding: "8px 12px",
+                borderRadius: "6px",
+                background: "color-mix(in srgb, #dc2626 10%, transparent)",
+                border: "1px solid #dc2626",
+              }}
+              role="alert"
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    background: "#dc2626",
+                    color: "#ffffff",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    letterSpacing: "0.05em",
+                  }}
+                >
+                  PROVIDER UNAVAILABLE
+                </span>
+                <span style={{ fontSize: "13px", fontWeight: 600, color: "#dc2626" }}>
+                  No language model is configured on this deployment.
+                </span>
+              </div>
+              <p style={{ margin: "4px 0 0", fontSize: "12px", color: "var(--fg)" }}>
+                To chat with a real AI, configure an API key (e.g. <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>, or <code>ANTHROPIC_API_KEY</code>) in <code>backend/.env</code> or start a local Ollama / OpenAI-compatible runtime on <code>127.0.0.1:11434</code>.
+              </p>
+            </div>
           ) : null}
         </header>
 
@@ -306,8 +383,8 @@ export default function ChatView({
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Say something…"
-            disabled={isStreaming}
+            placeholder={chatModel === null ? "No language model configured (see instructions above)" : "Say something…"}
+            disabled={isStreaming || chatModel === null}
           />
           {isStreaming ? (
             // The AbortController existed and nothing could reach it, so a long or wrong answer
@@ -317,7 +394,7 @@ export default function ChatView({
               Stop
             </button>
           ) : (
-            <button type="submit" disabled={!input.trim()}>
+            <button type="submit" disabled={!input.trim() || chatModel === null}>
               Send
             </button>
           )}

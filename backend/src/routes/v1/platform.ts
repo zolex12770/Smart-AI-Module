@@ -35,6 +35,8 @@ export function registerPlatformRoutes(app: FastifyInstance, ctx: AppContext): v
         provider: d.provider.name,
         model: d.provider.model,
         isMock: d.provider.isMock,
+        isLocal: d.provider.name === "local",
+        category: d.provider.isMock ? "mock" : d.provider.name === "local" ? "local" : "real",
         capabilities: d.capabilities,
         qualityTier: d.qualityTier,
         costHint: d.costHint,
