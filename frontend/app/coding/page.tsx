@@ -3,14 +3,16 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { Task } from "@ai-platform/shared";
-import { createTask, listTasks } from "../lib/api";
+import { createTask, listTasks, listWorkspaceFiles, writeWorkspaceFile, type WorkspaceFile } from "../lib/api";
 import { StatusBadge } from "../lib/status-badge";
 import { RequireSession, useSession } from "../lib/session-context";
 
 export default function CodingAgentPage() {
   const { projectId } = useSession();
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -19,6 +21,12 @@ export default function CodingAgentPage() {
   const [testDir, setTestDir] = useState("coding-demo");
   const [testFile, setTestFile] = useState("math.test.js");
   const [goal, setGoal] = useState("");
+
+  const refreshFiles = useCallback(() => {
+    listWorkspaceFiles()
+      .then((r) => setWorkspaceFiles(r.files))
+      .catch(() => {});
+  }, []);
 
   const refresh = useCallback(() => {
     setLoading(true);
@@ -33,7 +41,27 @@ export default function CodingAgentPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(refresh, [refresh, projectId]);
+  useEffect(() => {
+    refresh();
+    refreshFiles();
+  }, [refresh, refreshFiles, projectId]);
+
+  async function handleSeedDemo() {
+    setSeeding(true);
+    setError(null);
+    try {
+      await writeWorkspaceFile("coding-demo/math.js", "const ANSWER = 41;\nmodule.exports = { ANSWER };\n");
+      await writeWorkspaceFile(
+        "coding-demo/math.test.js",
+        'const assert = require("assert");\nconst { ANSWER } = require("./math");\nassert.strictEqual(ANSWER, 42, "Expected ANSWER to be 42");\nconsole.log("PASS");\n'
+      );
+      refreshFiles();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSeeding(false);
+    }
+  }
 
   async function handleLaunchCodingAgent(e: React.FormEvent) {
     e.preventDefault();
@@ -46,6 +74,10 @@ export default function CodingAgentPage() {
       if (codingMode === "fix_test") {
         taskType = "fix_failing_test";
         input = { testDir, testFile };
+        // If targeting coding-demo and files not yet present, ensure seeded
+        if (testDir === "coding-demo" && !workspaceFiles.some((f) => f.path.includes("math.test.js"))) {
+          await handleSeedDemo();
+        }
       } else {
         taskType = "autonomous";
         input = { goal: goal || "Inspect codebase, diagnose issues, and apply safe unit-tested fixes." };
@@ -99,54 +131,105 @@ export default function CodingAgentPage() {
               fontSize: "13px",
               marginBottom: 16,
             }}
-            role="alert"
           >
             {error}
           </div>
         )}
 
-        {/* Coding Task Launcher */}
-        <section
+        {/* Workspace Fixture Status Bar */}
+        <div
           style={{
-            padding: 20,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "12px 16px",
             borderRadius: 8,
             border: "1px solid var(--border)",
             background: "var(--card-bg, #ffffff)",
             marginBottom: 24,
           }}
         >
-          <h2 style={{ fontSize: "17px", margin: "0 0 12px", fontWeight: 600 }}>Launch Coding Agent Job</h2>
+          <div>
+            <div style={{ fontSize: "13px", fontWeight: 600 }}>Project Workspace Sandbox</div>
+            <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: 2 }}>
+              {workspaceFiles.length === 0
+                ? "No files seeded yet in this project workspace."
+                : `${workspaceFiles.length} file(s) present: ${workspaceFiles.map((f) => f.path).join(", ")}`}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleSeedDemo}
+            disabled={seeding}
+            style={{
+              background: "#059669",
+              color: "#ffffff",
+              border: "none",
+              padding: "6px 12px",
+              borderRadius: 4,
+              fontSize: "12px",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {seeding ? "Seeding Fixture..." : "Seed Demo Fixture (math.test.js)"}
+          </button>
+        </div>
+
+        {/* Dispatch Form */}
+        <section
+          style={{
+            background: "var(--card-bg, #ffffff)",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: 20,
+            marginBottom: 32,
+          }}
+        >
+          <h2 style={{ fontSize: "17px", marginTop: 0, marginBottom: 16, fontWeight: 600 }}>
+            Dispatch Autonomous Coding Agent
+          </h2>
+
           <form onSubmit={handleLaunchCodingAgent}>
-            <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "14px", cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="codingMode"
-                  value="fix_test"
-                  checked={codingMode === "fix_test"}
-                  onChange={() => setCodingMode("fix_test")}
-                />
-                <strong>Automated Test Fixer</strong> (Runs tests, locates failure, applies patch)
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 6 }}>
+                Execution Mode
               </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "14px", cursor: "pointer" }}>
-                <input
-                  type="radio"
-                  name="codingMode"
-                  value="autonomous_code"
-                  checked={codingMode === "autonomous_code"}
-                  onChange={() => setCodingMode("autonomous_code")}
-                />
-                <strong>Autonomous Engineering Agent</strong> (Multi-step goal execution)
-              </label>
+              <div style={{ display: "flex", gap: 16 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "14px", cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="mode"
+                    value="fix_test"
+                    checked={codingMode === "fix_test"}
+                    onChange={() => setCodingMode("fix_test")}
+                  />
+                  Fix Failing Test (TDD Loop: Run &rarr; Parse Failure &rarr; Patch &rarr; Re-verify)
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "14px", cursor: "pointer" }}>
+                  <input
+                    type="radio"
+                    name="mode"
+                    value="autonomous_code"
+                    checked={codingMode === "autonomous_code"}
+                    onChange={() => setCodingMode("autonomous_code")}
+                  />
+                  Autonomous Goal Driven
+                </label>
+              </div>
             </div>
 
             {codingMode === "fix_test" ? (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 }}>
                 <div>
-                  <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 4 }}>
-                    Workspace Directory
+                  <label
+                    htmlFor="testDir"
+                    style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 6 }}
+                  >
+                    Test Directory (Workspace Relative)
                   </label>
                   <input
+                    id="testDir"
                     type="text"
                     value={testDir}
                     onChange={(e) => setTestDir(e.target.value)}
@@ -156,16 +239,22 @@ export default function CodingAgentPage() {
                       padding: "8px 10px",
                       borderRadius: 6,
                       border: "1px solid var(--border)",
+                      background: "var(--input-bg, transparent)",
+                      color: "inherit",
                       fontSize: "13px",
                     }}
                     required
                   />
                 </div>
                 <div>
-                  <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 4 }}>
-                    Test File Name
+                  <label
+                    htmlFor="testFile"
+                    style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 6 }}
+                  >
+                    Target Test File
                   </label>
                   <input
+                    id="testFile"
                     type="text"
                     value={testFile}
                     onChange={(e) => setTestFile(e.target.value)}
@@ -175,6 +264,8 @@ export default function CodingAgentPage() {
                       padding: "8px 10px",
                       borderRadius: 6,
                       border: "1px solid var(--border)",
+                      background: "var(--input-bg, transparent)",
+                      color: "inherit",
                       fontSize: "13px",
                     }}
                     required
@@ -183,19 +274,22 @@ export default function CodingAgentPage() {
               </div>
             ) : (
               <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 4 }}>
-                  Engineering Goal / Task Description
+                <label htmlFor="goal" style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: 6 }}>
+                  Autonomous Coding Goal
                 </label>
                 <textarea
+                  id="goal"
+                  rows={3}
                   value={goal}
                   onChange={(e) => setGoal(e.target.value)}
-                  placeholder="Describe the software engineering task in detail..."
-                  rows={3}
+                  placeholder="e.g. Find where the tax calculation is defined, fix the negative rate bug, and verify unit tests pass."
                   style={{
                     width: "100%",
                     padding: "8px 10px",
                     borderRadius: 6,
                     border: "1px solid var(--border)",
+                    background: "var(--input-bg, transparent)",
+                    color: "inherit",
                     fontSize: "13px",
                     fontFamily: "inherit",
                   }}
@@ -206,7 +300,7 @@ export default function CodingAgentPage() {
 
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span style={{ fontSize: "12px", color: "var(--muted)" }}>
-                Policy: Read & patch permitted in sandbox. Consequential shell actions held for approval.
+                Policy: Read &amp; patch permitted in sandbox. Consequential shell actions held for approval.
               </span>
               <button
                 type="submit"
@@ -231,7 +325,7 @@ export default function CodingAgentPage() {
         {/* Coding Tasks History */}
         <section>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-            <h2 style={{ fontSize: "17px", margin: 0, fontWeight: 600 }}>Active & Recent Coding Tasks</h2>
+            <h2 style={{ fontSize: "17px", margin: 0, fontWeight: 600 }}>Active &amp; Recent Coding Tasks</h2>
             <button
               onClick={refresh}
               style={{
@@ -278,43 +372,40 @@ export default function CodingAgentPage() {
                   }}
                 >
                   <div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <Link
                         href={`/coding/${task.id}`}
-                        style={{ fontWeight: 600, fontSize: "15px", color: "var(--fg)", textDecoration: "none" }}
-                      >
-                        Task #{task.id.slice(0, 8)}
-                      </Link>
-                      <span
                         style={{
-                          fontSize: "11px",
-                          padding: "1px 6px",
-                          borderRadius: 4,
-                          background: "var(--border)",
+                          fontSize: "14px",
                           fontWeight: 600,
+                          color: "inherit",
+                          textDecoration: "none",
                         }}
                       >
-                        {task.taskType}
-                      </span>
+                        {task.taskType === "fix_failing_test" ? "Fix Failing Test" : "Autonomous Coding Task"}
+                      </Link>
+                      <StatusBadge status={task.state} />
                     </div>
                     <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: 4 }}>
-                      Created at {new Date(task.createdAt).toLocaleTimeString()}
+                      Task ID: <code>{task.id.slice(0, 8)}</code> &bull; Created:{" "}
+                      {new Date(task.createdAt).toLocaleTimeString()}
+                      {Boolean((task.input as Record<string, unknown>)?.testFile) && (
+                        <span> &bull; File: <code>{String((task.input as Record<string, unknown>).testFile)}</code></span>
+                      )}
                     </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                    <StatusBadge status={task.state} />
-                    <Link
-                      href={`/coding/${task.id}`}
-                      style={{
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: "#2563eb",
-                        textDecoration: "none",
-                      }}
-                    >
-                      View Diffs & Actions &rarr;
-                    </Link>
-                  </div>
+
+                  <Link
+                    href={`/coding/${task.id}`}
+                    style={{
+                      fontSize: "13px",
+                      color: "#2563eb",
+                      textDecoration: "none",
+                      fontWeight: 600,
+                    }}
+                  >
+                    View Workspace &rarr;
+                  </Link>
                 </div>
               ))}
             </div>

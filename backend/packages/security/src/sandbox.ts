@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync } from "node:fs";
+import { dirname } from "node:path";
 import { resolve, sep, win32 } from "node:path";
 
 /**
@@ -98,9 +99,33 @@ function baseEnv(): Record<string, string> {
 
 /** Rejects a workdir that escapes the sandbox root, following symlinks (docs/13 §11). */
 export function assertContained(root: string, workdir: string): string {
-  const resolvedRoot = realpathSync(resolve(root));
-  const resolvedDir = realpathSync(resolve(workdir));
-  if (resolvedDir !== resolvedRoot && !resolvedDir.startsWith(resolvedRoot + sep)) {
+  const resolvedRoot = existsSync(resolve(root)) ? realpathSync(resolve(root)) : resolve(root);
+  const target = resolve(workdir);
+  const rootWithSep = resolvedRoot.endsWith(sep) ? resolvedRoot : resolvedRoot + sep;
+
+  if (target !== resolvedRoot && !target.startsWith(rootWithSep)) {
+    throw new Error(`Workspace "${workdir}" resolves outside the sandbox root.`);
+  }
+
+  let current = target;
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  if (existsSync(current)) {
+    const realAncestor = realpathSync(current);
+    if (realAncestor !== resolvedRoot && !realAncestor.startsWith(rootWithSep)) {
+      throw new Error(`Workspace "${workdir}" resolves outside the sandbox root.`);
+    }
+  }
+
+  if (!existsSync(target)) {
+    mkdirSync(target, { recursive: true });
+  }
+
+  const resolvedDir = realpathSync(target);
+  if (resolvedDir !== resolvedRoot && !resolvedDir.startsWith(rootWithSep)) {
     throw new Error(`Workspace "${workdir}" resolves outside the sandbox root.`);
   }
   return resolvedDir;

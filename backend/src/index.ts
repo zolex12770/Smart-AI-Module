@@ -1634,7 +1634,7 @@ async function main() {
       },
       queue: async () => {
         try {
-          await jobQueue.getJob("document.ingest", "health-probe");
+          await jobQueue.getJob("document.ingest", "00000000-0000-0000-0000-000000000000");
           return true;
         } catch {
           return false;
