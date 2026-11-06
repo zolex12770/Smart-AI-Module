@@ -167,6 +167,27 @@ export default function AdminPage() {
   const [auditLogs] = useState<AuditEntry[]>(MOCK_AUDIT_LOGS);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
 
+  // Live backend statistics & health
+  const [liveStats, setLiveStats] = useState<Record<string, number> | null>(null);
+  const [liveHealth, setLiveHealth] = useState<{ status: string; checks: Record<string, unknown> } | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      apiFetch<{ stats: Record<string, number> }>("/api/v1/admin/stats").catch((e) => {
+        setHealthError(String(e));
+        return null;
+      }),
+      apiFetch<{ status: string; checks: Record<string, unknown> }>("/api/v1/admin/health").catch((e) => {
+        setHealthError(String(e));
+        return null;
+      }),
+    ]).then(([statsRes, healthRes]) => {
+      if (statsRes) setLiveStats(statsRes.stats);
+      if (healthRes) setLiveHealth(healthRes);
+    });
+  }, []);
+
   const toggleCapability = (id: string) => {
     setCapabilities((prev) =>
       prev.map((c) => (c.id === id ? { ...c, enabled: !c.enabled } : c))
@@ -238,6 +259,111 @@ export default function AdminPage() {
 
         {activeTab === "health" && (
           <section>
+            {liveStats && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                  gap: 16,
+                  marginBottom: 24,
+                }}
+              >
+                <div
+                  style={{
+                    padding: 16,
+                    borderRadius: 8,
+                    background: "var(--card-bg, #ffffff)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{ fontSize: "12px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 700 }}>
+                    Total Projects
+                  </div>
+                  <div style={{ fontSize: "28px", fontWeight: 700, marginTop: 4, color: "#2563eb" }}>
+                    {liveStats.projects ?? 0}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: 16,
+                    borderRadius: 8,
+                    background: "var(--card-bg, #ffffff)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{ fontSize: "12px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 700 }}>
+                    Registered Users
+                  </div>
+                  <div style={{ fontSize: "28px", fontWeight: 700, marginTop: 4, color: "#059669" }}>
+                    {liveStats.users ?? 0}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: 16,
+                    borderRadius: 8,
+                    background: "var(--card-bg, #ffffff)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{ fontSize: "12px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 700 }}>
+                    Active Model Providers
+                  </div>
+                  <div style={{ fontSize: "28px", fontWeight: 700, marginTop: 4, color: "#d97706" }}>
+                    {liveStats.providers ?? 1}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    padding: 16,
+                    borderRadius: 8,
+                    background: "var(--card-bg, #ffffff)",
+                    border: "1px solid var(--border)",
+                  }}
+                >
+                  <div style={{ fontSize: "12px", color: "var(--muted)", textTransform: "uppercase", fontWeight: 700 }}>
+                    Connected MCP Servers
+                  </div>
+                  <div style={{ fontSize: "28px", fontWeight: 700, marginTop: 4, color: "#7c3aed" }}>
+                    {liveStats.mcpServersConnected ?? 1}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {liveHealth && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  padding: "10px 16px",
+                  borderRadius: 8,
+                  marginBottom: 20,
+                  background: liveHealth.status === "ok" ? "#ecfdf5" : "#fef3c7",
+                  border: `1px solid ${liveHealth.status === "ok" ? "#a7f3d0" : "#fde68a"}`,
+                }}
+              >
+                <span style={{ fontSize: "13px", fontWeight: 600 }}>
+                  Backend Runtime Health: <strong>{liveHealth.status.toUpperCase()}</strong> &bull; Database:{" "}
+                  {String(liveHealth.checks?.database)} &bull; Sandbox Isolation:{" "}
+                  {String(liveHealth.checks?.sandbox)}
+                </span>
+                <span
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    padding: "2px 8px",
+                    borderRadius: 4,
+                    background: liveHealth.status === "ok" ? "#059669" : "#d97706",
+                    color: "#fff",
+                  }}
+                >
+                  LIVE BACKEND LINKED
+                </span>
+              </div>
+            )}
+
             <h2 style={{ fontSize: "18px", marginBottom: 12 }}>Component Runtimes & Hardware Profile</h2>
             <div style={{ display: "grid", gap: 12 }}>
               {DEFAULT_METRICS.map((m) => (

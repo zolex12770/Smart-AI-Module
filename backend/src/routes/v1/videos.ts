@@ -1,3 +1,8 @@
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
+const execFileAsync = promisify(execFile);
 import type { FastifyInstance } from "fastify";
 import { createPlanningVideoProject, orchestrateVideoProject, type VideoProjectScope } from "@ai-platform/media";
 import {
@@ -33,6 +38,46 @@ function scopeOf(authCtx: AuthContext): string {
 }
 
 export function registerVideoRoutes(app: FastifyInstance, ctx: AppContext): void {
+
+  /**
+   * Summarization and keyframe extraction of video assets via VideoEngine.
+   */
+  app.post(
+    "/api/v1/videos/summarize",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request) => {
+      const authCtx = await requireProject(request, ctx.auth, "project:read");
+      const projectId = scopeOf(authCtx);
+      const body = request.body as { assetId?: string; videoPath?: string } | undefined;
+      let targetPath: string | null = null;
+
+      if (body?.assetId) {
+        const asset = await ctx.assets.get(projectId, body.assetId);
+        if (!asset) throw new NotFoundError(`Asset "${body.assetId}" not found.`);
+        targetPath = asset.storagePath;
+      } else if (body?.videoPath) {
+        const p1 = resolve(body.videoPath);
+        const p2 = resolve(process.cwd(), "..", body.videoPath);
+        targetPath = existsSync(p1) ? p1 : existsSync(p2) ? p2 : p1;
+      }
+
+      if (!targetPath || !existsSync(targetPath)) {
+        throw new ValidationError("Valid assetId or existing videoPath required for video summarization.");
+      }
+
+      const pythonExe = process.platform === "win32" ? "python" : "python3";
+      const s1 = resolve("scripts/lib/video_engine.py");
+      const s2 = resolve(process.cwd(), "..", "scripts/lib/video_engine.py");
+      const scriptPath = existsSync(s1) ? s1 : s2;
+      try {
+        const { stdout } = await execFileAsync(pythonExe, [scriptPath, "--summarize", targetPath]);
+        return { ok: true, summary: JSON.parse(stdout) };
+      } catch (err) {
+        throw new ValidationError(`Video summarization failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  );
+
   app.post(
     "/api/v1/videos",
     // docs/13_SECURITY_ARCHITECTURE.md §4 Layer 2 — a long-form video fans out into many

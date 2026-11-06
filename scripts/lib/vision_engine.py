@@ -130,4 +130,11 @@ def run_verification():
 
 
 if __name__ == "__main__":
-    run_verification()
+    if len(sys.argv) > 2 and sys.argv[1] == "--analyze":
+        target = Path(sys.argv[2])
+        engine = VisionEngine()
+        result = engine.analyze_image(target)
+        import json
+        print(json.dumps(result))
+    else:
+        run_verification()

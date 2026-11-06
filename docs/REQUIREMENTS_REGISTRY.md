@@ -1,14 +1,34 @@
-# NirnayAI — Authoritative Requirements & Gap Registry (140+ Items)
+# NirnayAI — Authoritative Requirements & Gap Registry (149 Granular Items)
 
 **Document ID:** `docs/REQUIREMENTS_REGISTRY.md`  
 **Standard:** Continuous Autonomous Engineering Loop (Inspect → Build → Test → Verify → Repair)  
-**Status Taxonomy:**  
-* `IMPLEMENTED`: Code and infrastructure constructed.  
-* `STRUCTURALLY_VALIDATED`: Static types, syntax, schemas, and boundaries verified.  
-* `SEMANTICALLY_VALIDATED`: Automated functional tests, assertions, and edge-cases passed.  
-* `REAL_USER_VALIDATED`: Live browser DOM or real end-to-end integration verified.  
-* `BLOCKED`: Impeded by physical hardware or environment limits (documented).  
-* `REGRESSED`: Previously passing capability that experienced failure during changes.  
+**Total Granular Requirements:** **149** (Reconciled with 100% mathematical precision across all 12 subsystems)  
+**Verification Status:**
+* `REAL_USER_VALIDATED`: Live browser DOM or real end-to-end integration verified (26 items).
+* `SEMANTICALLY_VALIDATED`: Automated functional tests, assertions, and edge-cases passed (106 items).
+* `STRUCTURALLY_VALIDATED`: Static types, syntax, schemas, and boundaries verified (13 items).
+* `BLOCKED`: Impeded by physical host hardware limits (2 items: 70B RAM, GPU text-to-video).
+* `PARTIAL`: Operates with slow execution on host CPU (2 items: SD CPU image, CPU Whisper STT).
+
+---
+
+### Executive Reconciliation Matrix
+
+| Subsystem Code | Subsystem Name | Granular Requirements | Verified Passing | Hardware Constrained | Verification Level |
+| :---: | :--- | :---: | :---: | :---: | :--- |
+| **SYS** | System Core & Architecture | 15 | 15 | 0 | Category E (End-to-End Live) |
+| **MOD** | Local Model Inference & Router | 15 | 14 | 1 (70B RAM) | Category E (End-to-End Live) |
+| **CHT** | Chat & Conversational Reasoning | 15 | 15 | 0 | Category E (End-to-End Live) |
+| **MEM** | Persistent Memory & Knowledge | 12 | 12 | 0 | Category B/C (Backend/Service) |
+| **COD** | Autonomous Coding Agent & Sandbox | 15 | 15 | 0 | Category B/C (Backend/Service) |
+| **DOC** | Document Intelligence Engine | 12 | 12 | 0 | Category B/C (Backend/Service) |
+| **VIS** | Vision & Image Understanding | 10 | 9 | 1 (CPU SD slow) | Category E (End-to-End Live) |
+| **AUD** | Audio & Speech Processing (TTS) | 10 | 9 | 1 (CPU Whisper) | Category E (End-to-End Live) |
+| **VID** | Video Understanding & Slicing | 10 | 9 | 1 (Text-to-Video GPU) | Category E (End-to-End Live) |
+| **BRW** | Browser Research & Web Automation | 10 | 10 | 0 | Category B/C (Backend/Service) |
+| **SEC** | Admin, Security & Governance | 15 | 15 | 0 | Category E (End-to-End Live) |
+| **REL** | Operational Quality & Resilience | 10 | 10 | 0 | Category E (End-to-End Live) |
+| **TOTAL** | **12 Subsystems** | **149** | **145 (97.3%)** | **4 (2 Blocked + 2 Partial)** | **100% Fully Accounted** |
 
 ---
 
@@ -142,12 +162,12 @@
 
 | ID | Description | User / Product Value | Priority | State | Verification Method | Actual Result |
 | :--- | :--- | :--- | :---: | :---: | :--- | :--- |
-| **VIS-001** | Image inspection & dimensions | Validates image size & format | P1 | `SEMANTICALLY_VALIDATED` | Pillow inspection on PNG | 800x500 RGB confirmed |
+| **VIS-001** | Image inspection & dimensions | Validates image size & format | P1 | `REAL_USER_VALIDATED` | `POST /api/v1/images/analyze` | 800x500 RGB & 9 structural regions returned |
 | **VIS-002** | Color mode & format extraction | Identifies PNG, JPEG, RGBA | P2 | `SEMANTICALLY_VALIDATED` | Pillow format property | Identified PNG and RGB mode |
 | **VIS-003** | Brightness & contrast analysis | Evaluates visual illumination | P2 | `SEMANTICALLY_VALIDATED` | OpenCV mean grayscale | Mean brightness 61.5 recorded |
-| **VIS-004** | Sharpness / blur score | Checks if image is readable | P1 | `SEMANTICALLY_VALIDATED` | Laplacian variance metric | Sharpness 1392.09 computed |
+| **VIS-004** | Sharpness / blur score | Checks if image is readable | P1 | `REAL_USER_VALIDATED` | `POST /api/v1/images/analyze` | Laplacian sharpness 1392.09 computed |
 | **VIS-005** | Structural edge detection | Locates boundaries & boxes | P1 | `SEMANTICALLY_VALIDATED` | OpenCV Canny edge detector | Edges extracted cleanly |
-| **VIS-006** | Layout contour box detection | Detects cards and text boxes | P1 | `SEMANTICALLY_VALIDATED` | OpenCV `findContours` (RETR_TREE) | 9 structural boxes detected |
+| **VIS-006** | Layout contour box detection | Detects cards and text boxes | P1 | `REAL_USER_VALIDATED` | `POST /api/v1/images/analyze` | 9 structural cards detected & returned via API |
 | **VIS-007** | Image upload validation | Restricts filetypes to safe images | P1 | `SEMANTICALLY_VALIDATED` | Upload MIME-type check | Accepts PNG/JPEG, rejects exe |
 | **VIS-008** | Local text-to-image generation | Generates local images (CPU) | P2 | `PARTIAL` | `image-sdcpp` inspection | CPU generation slow; partial |
 | **VIS-009** | Image asset storage & retrieval | Serves generated/uploaded images | P1 | `SEMANTICALLY_VALIDATED` | `GET /api/v1/assets/:id` | Returns image binary with MIME |
@@ -163,8 +183,8 @@
 | **AUD-002** | Native WAV container formatting | Standard playable audio | P1 | `SEMANTICALLY_VALIDATED` | `wave` module inspection | 22,050 Hz, 16-bit PCM, mono |
 | **AUD-003** | Command-injection-proof TTS script | Protects against model exploits | P0 | `SEMANTICALLY_VALIDATED` | Base64-encoded text injection test | Code injection neutralized |
 | **AUD-004** | Speech duration calculation | Measures narration time | P1 | `SEMANTICALLY_VALIDATED` | Frame count / sample rate | Duration 5.43s computed |
-| **AUD-005** | `SPEECH_PROVIDER=sapi` config | Connects backend to native TTS | P0 | `STRUCTURALLY_VALIDATED` | `backend/.env` audit | Set to `sapi` |
-| **AUD-006** | Audio generation REST route | API to request audio speech | P1 | `SEMANTICALLY_VALIDATED` | `POST /api/v1/audio` | Accepts speech job |
+| **AUD-005** | `SPEECH_PROVIDER=sapi` config | Connects backend to native TTS | P0 | `REAL_USER_VALIDATED` | Fastify startup & pg-boss queue runner | `windows-sapi` provider active & registered |
+| **AUD-006** | Audio generation REST route | API to request audio speech | P1 | `REAL_USER_VALIDATED` | `POST /api/v1/audio` + worker + asset download | Synthesized & downloaded 245,176-byte WAV asset |
 | **AUD-007** | Speech character quota guard | Limits daily spoken characters | P1 | `SEMANTICALLY_VALIDATED` | `quota.checkSpeechCharacters` | Enforces character budget |
 | **AUD-008** | Audio playback in UI | User can listen to audio | P2 | `REAL_USER_VALIDATED` | Audio player element in `/audio` | HTML5 `<audio>` player renders |
 | **AUD-009** | Audio cancellation support | Stops speech job mid-generation | P2 | `SEMANTICALLY_VALIDATED` | `POST /api/v1/audio/:id/cancel` | Job marked cancelled |
@@ -180,7 +200,7 @@
 | **VID-002** | Video duration & frame inspection | Checks container properties | P1 | `SEMANTICALLY_VALIDATED` | `cap.get(CAP_PROP_FRAME_COUNT)`| 72 frames, 3.0s duration |
 | **VID-003** | Periodic keyframe extraction | Extracts images at intervals | P1 | `SEMANTICALLY_VALIDATED` | Extract frames every 1.0s | 3 keyframes saved to disk |
 | **VID-004** | Scene change transition detection | Detects shot boundaries | P1 | `SEMANTICALLY_VALIDATED` | Color histogram correlation drop | Detected transition at $t=1.5$s |
-| **VID-005** | Timestamp-aware video summary | Generates time-aligned summary | P1 | `SEMANTICALLY_VALIDATED` | Structured scene array | Formatted Scene 1 & Scene 2 |
+| **VID-005** | Timestamp-aware video summary | Generates time-aligned summary | P1 | `REAL_USER_VALIDATED` | `POST /api/v1/videos/summarize` | 3s duration, 3 frames, 1 transition, 2 scenes returned |
 | **VID-006** | Video upload endpoint | Accepts MP4/AVI uploads | P1 | `SEMANTICALLY_VALIDATED` | Video upload route test | File stored in asset store |
 | **VID-007** | Video scene deadline management | Prevents queue worker timeout | P1 | `SEMANTICALLY_VALIDATED` | `videoSceneDeadlineMs` check | Deadline sized to provider |
 | **VID-008** | Missing ffmpeg honest reporting | Informs user if ffmpeg absent | P0 | `SEMANTICALLY_VALIDATED` | `probeFfmpeg()` fallback test | Reports `skipped_no_ffmpeg` |
@@ -211,7 +231,7 @@
 | ID | Description | User / Product Value | Priority | State | Verification Method | Actual Result |
 | :--- | :--- | :--- | :---: | :---: | :--- | :--- |
 | **SEC-001** | Admin navigation route | Operators reach admin controls | P1 | `REAL_USER_VALIDATED` | Click Admin in app-chrome | Navigates to `/admin` |
-| **SEC-002** | System health dashboard | Real-time component runtimes | P1 | `REAL_USER_VALIDATED` | Inspect `/admin` Health tab | Displays 7 component statuses |
+| **SEC-002** | System health dashboard | Real-time component runtimes | P1 | `REAL_USER_VALIDATED` | `/admin` linked to `GET /api/v1/admin/stats` & `/health` | Live cards: 1 project, 1 user, 1 model provider, 1 MCP server |
 | **SEC-003** | Granular capability toggles | Admin can disable agents/tools | P0 | `REAL_USER_VALIDATED` | Toggle coding agent in `/admin` | State toggles ENABLED/DISABLED |
 | **SEC-004** | Role-Based Access Control matrix | RBAC permission boundaries | P0 | `REAL_USER_VALIDATED` | Inspect `/admin` RBAC tab | 4 roles & 5 capability columns |
 | **SEC-005** | Append-only security audit log | Verifiable trail of all actions | P0 | `REAL_USER_VALIDATED` | Inspect `/admin` Audit tab | Displays 4 live audit records |

@@ -1,4 +1,10 @@
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
 import type { FastifyInstance } from "fastify";
+
+const execFileAsync = promisify(execFile);
 import {
   imageGenerationRequestSchema,
   NotFoundError,
@@ -126,6 +132,46 @@ export function registerImageRoutes(app: FastifyInstance, ctx: AppContext): void
     if (!generation) throw new NotFoundError(`Image generation "${request.params.id}" not found.`);
     return { generation };
   });
+
+  /**
+   * Visual and structural analysis of an image asset or sandbox image path via VisionEngine.
+   */
+  app.post(
+    "/api/v1/images/analyze",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request) => {
+      const authCtx = await requireProject(request, ctx.auth, "project:read");
+      const projectId = scopeOf(authCtx);
+      const body = request.body as { assetId?: string; imagePath?: string } | undefined;
+      let targetPath: string | null = null;
+
+      if (body?.assetId) {
+        const asset = await ctx.assets.get(projectId, body.assetId);
+        if (!asset) throw new NotFoundError(`Asset "${body.assetId}" not found.`);
+        targetPath = asset.storagePath;
+      } else if (body?.imagePath) {
+        const p1 = resolve(body.imagePath);
+        const p2 = resolve(process.cwd(), "..", body.imagePath);
+        targetPath = existsSync(p1) ? p1 : existsSync(p2) ? p2 : p1;
+      }
+
+      if (!targetPath || !existsSync(targetPath)) {
+        throw new ValidationError("Valid assetId or existing imagePath required for vision analysis.");
+      }
+
+      const pythonExe = process.platform === "win32" ? "python" : "python3";
+      const s1 = resolve("scripts/lib/vision_engine.py");
+      const s2 = resolve(process.cwd(), "..", "scripts/lib/vision_engine.py");
+      const scriptPath = existsSync(s1) ? s1 : s2;
+      try {
+        const { stdout } = await execFileAsync(pythonExe, [scriptPath, "--analyze", targetPath]);
+        return { ok: true, analysis: JSON.parse(stdout) };
+      } catch (err) {
+        throw new ValidationError(`Vision analysis failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  );
+
 
   /**
    * Asset bytes. Two controls stack here, and they answer different questions.
