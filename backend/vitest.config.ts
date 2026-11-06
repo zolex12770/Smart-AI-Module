@@ -11,6 +11,14 @@ export default defineConfig({
   test: {
     // Sized for real infrastructure under load, not for fakes (ADR-100).
     ...TEST_TIMEOUTS,
+    /**
+     * Backend application tests create and migrate an embedded PGlite instance in each file.
+     * Running those fixtures in parallel makes the Windows native runtime compete for the same
+     * memory and CPU, turning otherwise passing setup hooks into nondeterministic 60-second
+     * timeouts (and then noisy cleanup failures because the fixture never finished). Package
+     * tests remain parallel-capable; only this process-wide integration harness is serialized.
+     */
+    fileParallelism: false,
     include: ["src/**/*.test.ts"],
   },
 });

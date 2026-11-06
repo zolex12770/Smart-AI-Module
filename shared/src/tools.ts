@@ -3,7 +3,7 @@ import { z } from "zod";
 
 /** Tool registry types — implements docs/10_TOOL_AND_MCP_ARCHITECTURE.md §3.1. */
 
-export const toolOriginKindSchema = z.enum(["native", "mcp"]);
+export const toolOriginKindSchema = z.enum(["native", "mcp"] as const);
 
 export const permissionLevelSchema = z.enum([
   "read_only",
@@ -21,13 +21,13 @@ export const permissionLevelSchema = z.enum([
   "write_external",
   "destructive",
   "financial",
-]);
+] as const);
 export type PermissionLevel = z.infer<typeof permissionLevelSchema>;
 
-export const riskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
+export const riskLevelSchema = z.enum(["low", "medium", "high", "critical"] as const);
 export type RiskLevel = z.infer<typeof riskLevelSchema>;
 
-export const requiresApprovalSchema = z.enum(["never", "first_use", "always", "risk_threshold"]);
+export const requiresApprovalSchema = z.enum(["never", "first_use", "always", "risk_threshold"] as const);
 export type RequiresApproval = z.infer<typeof requiresApprovalSchema>;
 
 /** Default timeout/retry/approval by permission level — docs/10 §3.1 table. Tunable per deployment. */
@@ -62,7 +62,7 @@ export const toolDefinitionSchema = z.object({
   timeoutMs: z.number().int().positive(),
   retryPolicy: z.object({
     maxAttempts: z.number().int().min(1),
-    backoff: z.enum(["none", "fixed", "exponential"]),
+    backoff: z.enum(["none", "fixed", "exponential"] as const),
     idempotencyRequired: z.boolean(),
   }),
   enabled: z.boolean(),

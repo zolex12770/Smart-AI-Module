@@ -23,7 +23,7 @@
     "@ai-platform/shared": "*",
     "@ai-platform/tools": "*",
     "pdfjs-dist": "^6.3.289",
-    "uuid": "^11.0.4"
+    "uuid": "^14.0.3"
   },
   "devDependencies": {
     "@ai-platform/llm-mock": "*",

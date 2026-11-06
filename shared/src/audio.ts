@@ -22,5 +22,5 @@ export const audioGenerationRequestSchema = z.object({
 });
 export type AudioGenerationRequest = z.infer<typeof audioGenerationRequestSchema>;
 
-export const audioGenerationStatusSchema = z.enum(["pending", "processing", "succeeded", "failed", "cancelled"]);
+export const audioGenerationStatusSchema = z.enum(["pending", "processing", "succeeded", "failed", "cancelled"] as const);
 export type AudioGenerationStatus = z.infer<typeof audioGenerationStatusSchema>;

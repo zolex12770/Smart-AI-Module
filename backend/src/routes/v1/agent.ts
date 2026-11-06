@@ -45,7 +45,7 @@ function scopedProjectId(authCtx: AuthContext): string {
  */
 const nodeDecisionSchema = z.object({ nodeId: z.string().min(1) });
 /** `retry` repeats the interrupted action; `abandon` gives up on it. There is no default. */
-const reconcileSchema = z.object({ nodeId: z.string().min(1), decision: z.enum(["retry", "abandon"]) });
+const reconcileSchema = z.object({ nodeId: z.string().min(1), decision: z.enum(["retry", "abandon"] as const) });
 
 /**
  * Cancel carries no fields of its own. `.strict()` so a stray `actor` is rejected loudly

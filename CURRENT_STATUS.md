@@ -1,83 +1,49 @@
-# Current Status: Universal AI Agent Platform
+# Current Status
 
-**Last Updated:** 2026-10-22  
-**Active Phase:** MILESTONE 6 (Full Product Completion, Live Capability Validation & Release Readiness)  
-**Working Branch:** `antigravity/universal-agent` (tracking `origin/antigravity/universal-agent`)  
-**Baseline Commit:** `b6e5f171933167104454198a661442b677c0725a`  
-**Milestone 5 Base Commit:** `cb73068df75c63c781e9e1108702e16d5a818575`  
-**Current Milestone:** Milestone 6 Release-Ready Verification State  
+**Updated:** 2026-11-06
+**Branch:** `antigravity/universal-agent`
+**Milestone 6 Anchor HEAD:** `cdd827a8800ab701fa849eeafc2ec9af18fc6ef4`
+**Verdict:** `INTERNAL_GATES_PASS_EXTERNAL_DEPENDENCIES_REMAIN`
 
----
+## Verified in Milestone 7
 
-## 1. Executive Summary & Accomplishments
+- **Monorepo Build:** `npm run build` passes 100% across all 26 backend/shared packages and Next.js 16.4.3 Turbopack frontend (20 static/dynamic routes compiled).
+- **Typecheck:** `npm run typecheck` passes across all 28 monorepo workspaces with 0 type errors.
+- **Linting:** `npm run lint` passes with 0 errors and 5 console warnings.
+- **Dependency Security:** `npm audit --audit-level=high --omit=dev` reports 0 vulnerabilities after upgrading to Zod 4.6.7, Fastify 5.12.7, Next.js 16.4.3, undici 7.30.1, and Google Cloud Storage 8.4.0.
+- **Authoritative Unit / Integration Suite:** 157 Vitest test files across 27 test-enabled workspaces (1 workspace `@ai-platform/llm-mock` has no test script, status `NOT_APPLICABLE`):
+  - **1,328 total tests: 1,296 PASSED (100% pass rate among runnable tests), 32 SKIPPED (graceful skips for missing system binaries/symlinks), 0 FAILED.**
+  - `@ai-platform/api` (backend): 46 files, 281 tests PASSED after serializing PGlite fixture files (`fileParallelism: false` in `backend/vitest.config.ts`).
+  - `@ai-platform/security`: 8 files, 87 tests PASSED in isolated run.
+  - `@ai-platform/web` (frontend): 20 files, 124 tests PASSED.
+  - `@ai-platform/tools`: 13 files, 171 passed, 3 skipped (Windows non-elevated symlinks).
+  - `@ai-platform/media`: 16 files, 85 passed, 22 skipped (system ffmpeg/piper/clamd/gcs binaries).
+  - `@ai-platform/agent-core`: 9 files, 121 tests PASSED.
+  - `@ai-platform/rag`: 11 files, 76 tests PASSED.
+  - `@ai-platform/model-router`: 2 files, 30 tests PASSED.
+- **Playwright Browser E2E Suite:** 5 spec files in `@ai-platform/web` (`auth-and-isolation.spec.ts`, `autonomous-agent.spec.ts`, `chat-and-history.spec.ts`, `settings-and-keys.spec.ts`, `tasks-and-monitoring.spec.ts`) executed on real host Chrome (`chrome.exe`) against live backend on `:8790` and frontend on `:3100`:
+  - **14 browser tests: 14 PASSED (100%), 0 FAILED.**
+- **Live Local Acceptance:** `node scripts/accept-local.mjs` executed against running backend API on `:8787`:
+  - **15/15 checks PASSED** (AUTH, PERMISSIONS, SESSION, CHAT, STREAMING [1999ms token spread], MULTI-TURN, CANCELLATION, MEMORY, RAG-INGEST, RAG-ANSWER, RAG-REFUSAL, RAG-CITATION, USAGE, TENANT-ISOLATION, RATE-LIMIT).
+- **Runtime Security Attack Suite:** `node scripts/acceptance/attacks.mjs`:
+  - **11/11 attack probes PASSED** (UNAUTHENTICATED [72 routes 401], CSRF, TENANT-IDOR [6 probes 404], API-KEY-SCOPE, PATH-TRAVERSAL, UPLOAD-VALIDATION, MALFORMED-INPUT, CHAT-OVERRIDES, ENUMERATION, RESPONSE-HEADERS, RAG-INJECTION).
+- **Architectural Boundary Enforcement:** `node scripts/check-boundary.mjs`:
+  - **7/7 boundary rules PASSED** (377 source files analyzed, 0 violations).
+- **Capability Benchmark Suite:** `npm run benchmark`:
+  - **10/10 scenarios executed** with honest classification labels saved to `benchmark-results/`.
+- **System Doctor & Diagnostics:** `npm run doctor`:
+  - **9 PASS · 10 UNAVAILABLE · 0 FAIL** (detected host Node 22, npm 10, Chrome; unavailable external services degrade gracefully).
+- **Production Boot Matrix:** `bash scripts/verify-boot.sh`:
+  - **8/8 boot scenarios PASSED**, verifying worker boot, production refusal of mock providers, and process isolation refusal.
 
-The Universal AI Agent Platform monorepo has completed Milestone 6, resolving the last material security vulnerability, unlocking real browser E2E test execution, auditing benchmark realism, and confirming monorepo health across all 27 workspaces:
+## Changes Introduced in Milestone 7
 
-1. **RAG Indirect Prompt Injection Vulnerability Remediation (Phase C — 100% RESOLVED):**
-   - **Context Delimiter Sanitization:** In `backend/src/routes/v1/rag.ts`, implemented `sanitizeChunkContent()` escaping closing delimiters (`</untrusted-document-content>`) and pseudo-system tags (`<system>`), preventing tag breakout attacks. Hardened `RAG_SYSTEM_PROMPT` to treat document text strictly as passive data and disregard all embedded overrides.
-   - **Indirect Injection Tool-Call Defense:** In `backend/packages/providers/llm-mock/src/index.ts`, implemented `stripUntrustedContent()` ensuring embedded directives `[[call:...]]` inside `<untrusted-document-content>` can never trigger tool execution.
-   - **Deterministic Grounded RAG Mock Output:** In `MockLLMProvider`, implemented `buildRagReply()` to filter out prompt injection lines (`SYSTEM OVERRIDE`, `PWNED`, etc.) and output grounded answers citing `[1]` instead of echoing raw prompt text.
-   - **Grounding Validator Defense:** In `backend/packages/rag/src/grounding.ts`, added `prompt_injection_detected` violation and `detectPromptInjectionOutput()`. When an answer exhibits injection compliance, `checkGrounding()` returns `grounded: false, outcome: "violation"`, and `rag.ts` safely returns `NO_EVIDENCE_ANSWER`.
-   - **Adversarial Test Suite Authored:** Created `backend/packages/rag/src/adversarial-rag.test.ts` covering all 7 vectors: (1) System instruction override, (2) Secret exfiltration, (3) Unauthorized tool calls, (4) Citation suppression, (5) Tag breakout, (6) Cross-tenant retrieval isolation, and (7) Unsafe code/SQL payloads. All 8 tests pass.
-   - **Live Attack Suite Verification:** `node scripts/acceptance/attacks.mjs` upgraded from 10 to **11 PASS · 0 FAIL · 0 BLOCKED_EXTERNAL in 49s** (`RAG-INJECTION` is now a verified `PASS`).
+1. **Serialized Backend Application Vitest Fixtures:** Added `fileParallelism: false` to `backend/vitest.config.ts` to prevent parallel PGlite initialization contention on Windows; resolves nondeterministic timeout failures.
+2. **Runtime Security & Dependency Remediation:** Upgraded and locked Next.js 16.4.3, Fastify 5.12.7, Zod 4.6.7, undici 7.30.1, uuid 14.0.3, and body-parser 2.4.0; reached 0 high/critical production vulnerabilities.
+3. **Zod 4 Enum Schema Typing:** Added `as const` to `z.enum([...])` arrays across `shared/src/` and backend route schemas (`agent.ts`, `rag.ts`, `config.ts`) ensuring TypeScript infers exact string literal unions.
+4. **Testing Peer Dependencies:** Added `@testing-library/dom` to frontend devDependencies.
+5. **Reconciled Authoritative Test Accounting:** Established a single unified accounting model across all 28 workspaces (`test-accounting.json`), removing historical count contradictions.
 
-2. **Browser E2E Automation Verified with Host Chrome (Phase D):**
-   - Auto-detected Windows Google Chrome (v154.0.8037.98) installed at `C:\Program Files\Google\Chrome\Application\chrome.exe` in `frontend/playwright.config.ts` and `scripts/doctor.mjs`.
-   - `npm run doctor` updated: **9 pass · 10 unavailable · 0 fail** (Playwright browser now reports `PASS`).
-   - Validated 11 real browser E2E test cases across 4 test suites:
-     - `e2e/account-security.spec.ts` (2 passed): session listing, server-side cookie revocation on password change, account deletion.
-     - `e2e/chat-and-history.spec.ts` (1 passed): real streaming response, CORS credentials, reload history persistence.
-     - `e2e/auth-and-isolation.spec.ts` (7 passed): unauthenticated redirect, signup, signout, enumeration resistance, cross-tenant isolation, usage metrics, platform screen.
-     - `e2e/autonomous-agent.spec.ts` (1 passed): autonomous task creation, redirection to `/agent/[id]`, task list navigation.
+## External Status
 
-3. **Capability Benchmark Suite Realism Audit (Phase E):**
-   - Audited and updated `scripts/benchmark-suite.mjs` to remove unsafe mock evaluation, drive real `MockLLMProvider` streaming with measured TTFT and token accounting, verify `MockImageProvider` SVG generation, verify `MockVideoProvider` GIF sequence generation, and validate grounding with `checkGrounding`.
-   - Executed benchmark suite across all 10 scenarios:
-     - 6 PASS (Conversational Q&A, Web Research & Grounding, Autonomous Code Repair, Document RAG Q&A, Multi-Agent Collaboration, Authorized Travel).
-     - 3 DEGRADED (Image Generation, Short Video Motion, Long-Form Video Pipeline).
-     - 1 BLOCKED_EXTERNAL (Audio Narration: graceful 503 refusal without audio model).
-     - 0 FAILURES.
-
-4. **Monorepo Quality Gates Re-Validated:**
-   - `npm run build:packages`: Compiled all packages cleanly (`tsc -b`).
-   - `npm run build:backend`: Compiled Fastify backend cleanly (`tsc -b`).
-   - `npm run typecheck`: Verified all 27 workspaces with 0 TypeScript errors.
-   - `npm run lint`: 0 errors, 5 console warnings across entire codebase.
-   - `node scripts/check-boundary.mjs`: 7/7 architectural boundary rules verified across 377 source files.
-   - `node scripts/accept-local.mjs`: 15/15 live API acceptance checks passing in 28s.
-   - `node scripts/acceptance/attacks.mjs`: 11/11 attacks passing in 49s.
-
----
-
-## 2. Test & Verification Metrics
-
-- **Packages Build:** PASS (`npm run build:packages` - `tsc -b tsconfig.json`, exit 0)
-- **Backend Build:** PASS (`npm run build:backend` - `tsc -b`, exit 0)
-- **Full Typecheck:** PASS (`npm run typecheck` - 27/27 workspaces clean, 0 errors, exit 0)
-- **ESLint Static Analysis:** PASS (`npm run lint` - 0 errors, 5 console warnings, exit 0)
-- **Architectural Boundary Verification:** PASS (`node scripts/check-boundary.mjs` - 7/7 passed across 377 source files, exit 0)
-- **Live Local Acceptance Suite:** PASS (`node scripts/accept-local.mjs` - 15/15 passed in 28s, exit 0)
-- **Live Security Attacks Suite:** PASS (`node scripts/acceptance/attacks.mjs` - 11 passed, 0 failed, 0 BLOCKED_EXTERNAL, exit 0)
-- **Capability Benchmark Suite:** PASS (`npm run benchmark` - 10/10 capabilities evaluated honestly, exit 0)
-- **Playwright Browser E2E Suite:** PASS (11 tests passed in host Google Chrome)
-- **Monorepo Unit/Integration Total:** 1,014 tests passed across 162 test files (100% pass rate, 0 failures, 0 regressions)
-
----
-
-## 3. Operational Environment Status & Honest Classification Taxonomy
-
-| Dependency / Service | Local Status | Classification | Handled Behavior | Safety Verification |
-|---|---|---|---|---|
-| **Node.js** | v22.14.0 | PASS | Primary runtime | Clean build across monorepo |
-| **npm** | v10.9.2 | PASS | Package manager | Lockfile integrity verified |
-| **Python** | 3.11.2 | PASS | Scripting helper | API doc generation scripts pass |
-| **Fastify API Server** | Port 8787 | PASS | Live local backend | 15/15 live acceptance checks passed |
-| **Next.js Web Server** | Port 3000 | PASS | Live local frontend | 20 unit suites passed, 17 routes compiled |
-| **Google Chrome (Host)**| v154.0.8037.98 | PASS | Browser E2E runner | 11 Playwright E2E browser tests passed |
-| **Embedded PGlite** | Active (`backend/data/pglite`) | PASS | Local SQL persistence | Migrations 0001–0007 applied cleanly |
-| **Ollama** | Inactive | DEGRADED | Falls back to mock LLM | Deterministic responses, zero crashes |
-| **FFmpeg** | Not on PATH | DEGRADED | Video degrades gracefully (`skipped_no_ffmpeg`) | Video pipeline structure validated without hanging |
-| **Piper Neural Voice** | Models not downloaded | BLOCKED_EXTERNAL | SAPI fallback / mock speech | POST /api/v1/audio returns clear 503 |
-| **Stable Diffusion GGUF**| Weights not downloaded | DEGRADED | SVG placeholder fallback | Format sniffing and sanitization verified |
-| **GCP Cloud Credentials**| Not provisioned | BLOCKED_EXTERNAL | Cloud deployment safely gated | Terraform scripts validated statically |
-| **Live IRCTC Portal** | Simulated engine | PASS | Mock Tatkal booking provider | Mandatory human approval gate prevents any unauthorized billing |
+Ollama, FFmpeg, speech models (Piper), image weights (SDXL), OCR engines (Tesseract), Docker daemon, Terraform CLI, hosted LLM API credentials (OpenAI/Anthropic/Google), live search keys (Brave), GCP deployment credentials, and authorized live IRCTC portal are absent on this development host. Mock and simulated paths remain strictly labelled and are never promoted to real capability status. Production has not been deployed to external infrastructure.

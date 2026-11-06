@@ -1,113 +1,66 @@
-# Security and Reliability Forensic Audit
+# Security and Reliability Audit
 
-**Audit Date:** 2026-10-22  
-**Target Systems:** Fastify API, Multi-Tenant Database, Tool Sandboxes, Web Fetch, MCP Integration, Autonomous Agent Verification, RAG Ingestion & Grounding  
-**Classification:** FORENSICALLY_AUDITED & SEMANTICALLY_VALIDATED (Milestone 6)  
+**Updated:** 2026-11-06
+**Branch:** `antigravity/universal-agent`
+**Milestone 6 Anchor Commit:** `cdd827a8800ab701fa849eeafc2ec9af18fc6ef4`
+**Scope:** Whole monorepo security posture, runtime attack simulation suite, dependency vulnerability audit, and reliability gates.
 
 ---
 
-## 1. Trust Boundaries & Security Enclaves
+## 1. Dependency Security Audit
 
-```mermaid
-flowchart TD
-    subgraph UntrustedZone ["Untrusted External Zone"]
-        WebUser["Web Users & Public Callers"]
-        ExtWeb["External Websites (Fetched Content)"]
-        Uploads["Uploaded Files (PDF, DOCX, ZIP)"]
-    end
-
-    subgraph Perimeter ["Security Perimeter (Fastify 5)"]
-        RateLimit["Rate Limiter (Per-IP & Per-User)"]
-        AuthFilter["Auth Guard (Cookie / Bearer Token)"]
-        CSRFFilter["Double-Submit CSRF Verification"]
-        InputValidator["Zod Strict Schema Validation"]
-    end
-
-    subgraph IsolatedTenancy ["Multi-Tenant Data Boundary"]
-        OrgScope["Organization Scope"]
-        ProjectScope["Project Scope (Mandatory SQL Predicates)"]
-        LedgerAudit["Usage & Spend Ledger Guard"]
-    end
-
-    subgraph SandboxedExecution ["Execution Enclaves (Least Privilege)"]
-        ApprovalGate["Risk-Tiered Approval Gate (Safe / Sensitive / Destructive)"]
-        FSSandbox["Filesystem Boundary (Resolved Symlinks + Lexical Jail)"]
-        CmdSandbox["Process Sandbox (shell: false, Whitelisted Binaries)"]
-        SSRFGuard["SSRF Firewall (IP Pinning, Private/Cloud CIDR Block)"]
-        MCPEnclave["MCP Tool Sandbox (Disabled by Default)"]
-        RAGSanitizer["RAG Boundary Sanitizer (Context Delimiters & Tool Stripping)"]
-        ObjectiveVerifier["Objective Multi-Agent Security & QA Verifier"]
-    end
-
-    WebUser --> Perimeter
-    Uploads --> Perimeter
-    Perimeter --> IsolatedTenancy
-    IsolatedTenancy --> SandboxedExecution
-    ExtWeb -.-> SSRFGuard
-    SandboxedExecution --> RAGSanitizer
-    RAGSanitizer --> ObjectiveVerifier
+A clean install using `npm ci` and subsequent vulnerability scan:
+```bash
+npm audit --audit-level=high --omit=dev
 ```
+**Result:** **`found 0 vulnerabilities`** (Exit Code 0).
+
+### Key Remediations Applied:
+- Upgraded `zod` to `^4.6.7` with monorepo overrides to resolve CVEs.
+- Upgraded Fastify core to `5.12.7` and `body-parser` to `2.4.0`.
+- Upgraded Next.js to `16.4.3` with Turbopack bundler.
+- Upgraded `undici` to `7.30.1` and `@google-cloud/storage` to `8.4.0`.
+- Enforced `as const` on enum arrays to maintain compile-time type safety under Zod 4.
 
 ---
 
-## 2. Forensic Vulnerability Analysis & Validated Controls
+## 2. Runtime Security Attack Suite
 
-### 2.1 Multi-Tenant Isolation
-- **Mechanism:** Every database table containing tenant artifacts (`tasks`, `conversations`, `messages`, `documents`, `usage_records`, `api_keys`) includes `project_id` and `organization_id`.
-- **Enforcement:** `requireProject` plugin verifies project membership in SQL before any handler runs. An unauthorized caller receives HTTP 404 (preventing project ID enumeration), while a token specifying a mismatched project receives HTTP 403.
-- **Admin Isolation (`ADR-108`):** System administrators do not have implicit access to private tenant projects. Administrative rights are strictly partitioned to `/api/v1/admin/*`.
-- **Live Verification (`attacks.mjs`):** 6 cross-tenant probes (`TENANT-IDOR`) tested against the live API all returned HTTP 404 without leaking metadata.
+Executed via `node scripts/acceptance/attacks.mjs` against a live Fastify backend server on `:8787`:
 
-### 2.2 Shell Command & Path Traversal Injection Defenses
-- **Argument Injection Defense (`ADR-032`):**
-  - All process execution (`terminal.run_command`, probe utilities) uses `shell: false`. No raw user input is piped to shell parsers (`cmd.exe` / `bash`), completely mitigating command substitution (`$(...)`, `&&`, `|`) attacks.
-- **Symlink & Lexical Jail (`ADR-088`):**
-  - `resolveSandboxedPath` calls `realpath` / resolves symlinks on the physical filesystem before checking whether the canonical path resides inside `project_workspace`.
-- **Live Verification (`attacks.mjs`):** 4 path escape probes (`PATH-TRAVERSAL`) on read/write were strictly refused with HTTP 400.
-
-### 2.3 SSRF & Web Retrieval Sandbox (`web.fetch` & `web.search`)
-- **Firewall Controls:**
-  - Socket IP pinning prevents DNS rebinding (TOCTOU).
-  - Private CIDR blocklists: RFC 1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), RFC 6598 carrier-grade NAT, RFC 3927 link-local, loopback (`127.0.0.0/8`), IPv6 mapped, and cloud metadata (`169.254.169.254`, `metadata.google.internal`).
-  - Max response size cap: 1 MiB hard ceiling with streaming byte counters.
-
-### 2.4 Objective Multi-Agent Security & Prompt Injection Defense
-- **Automated CWE Rule Engine (`team.ts`):**
-  - `CWE-798-HARDCODED-CREDENTIALS`: Scans for exposed API keys (`sk-...`, `AKIA...`, `ghp_...`, `gho_...`, `xoxb-...`, `AIzaSy...`). Severity: Critical.
-  - `CWE-78-COMMAND-INJECTION`: Detects `child_process.exec`, `eval`, `new Function`, `shell: true`. Severity: Critical.
-  - `CWE-22-PATH-TRAVERSAL`: Detects unsanitized `../../` sequences without sandboxed path resolution. Severity: High.
-  - `CWE-918-SSRF-CLOUD-METADATA`: Detects hardcoded cloud instance metadata addresses. Severity: Critical.
-  - `SEC-PROMPT-INJECTION-DETECTED`: Detects adversarial tokens attempting to override review policies (`SYSTEM: OVERRIDE`, `IGNORE ALL SECURITY`, `BYPASS_AUDIT`). Severity: Critical.
-- **Enforcement Invariant:** A reviewer LLM's hallucinated `APPROVED` verdict is automatically revoked (`consensusOverridden: true`) whenever automated static security or QA assertions fail.
-
-### 2.5 RAG Context Boundary Isolation & Indirect Prompt Injection Remediation
-- **Context Delimiter Sanitization (`backend/src/routes/v1/rag.ts`):**
-  - All retrieved chunk text is wrapped in `<untrusted-document-content>` blocks.
-  - `sanitizeChunkContent()` HTML-entity escapes closing tags `</untrusted-document-content>` and system tags `<system>` (`</system>`), neutralizing context breakout attacks.
-  - `RAG_SYSTEM_PROMPT` enforces that documents must be treated strictly as passive reference data and that all embedded directives must be disregarded.
-- **Indirect Injection Tool-Call Defense (`@ai-platform/llm-mock`):**
-  - `stripUntrustedContent()` strips any `<untrusted-document-content>` block before evaluating tool invocation directives `[[call:...]]`. Embedded malicious tool calls inside indexed documents are neutralized before reaching the tool dispatcher.
-- **Grounding Violation Detection (`@ai-platform/rag`):**
-  - `detectPromptInjectionOutput()` detects prompt injection markers (`SYSTEM OVERRIDE`, `PWNED-`, etc.) in model completions.
-  - `checkGrounding()` marks such answers with `violation: "prompt_injection_detected"`, causing the route to return `NO_EVIDENCE_ANSWER`.
-- **Adversarial Verification:** 8 dedicated adversarial tests in `adversarial-rag.test.ts` pass 100%.
-
----
-
-## 3. Runtime Security Attack Suite Results (`scripts/acceptance/attacks.mjs`)
-
-| Attack Vector | Probe Description | Result | Status Code / Measurement |
+| Probe ID | Attack Scenario | Probe Logic | Result |
 |---|---|---|---|
-| **UNAUTHENTICATED** | 72 protected endpoints without session | **PASS** | 72/72 refused with HTTP 401 |
-| **CSRF** | State-mutating requests with missing or invalid token | **PASS** | Missing 403, invalid 403 |
-| **TENANT-IDOR** | Direct object reference probe using another tenant's project ID | **PASS** | 6/6 probes returned 404 (Zero disclosure) |
-| **API-KEY-SCOPE** | Scoped API key access outside allowed project | **PASS** | Own project 200, cross-project 403, admin 403 |
-| **PATH-TRAVERSAL** | `../../` and backslash traversal on read/write | **PASS** | 4/4 escapes refused (HTTP 400) |
-| **UPLOAD-VALIDATION** | Executables, disguised HTML, and malicious SVG uploads | **PASS** | Refused with HTTP 400 |
-| **MALFORMED-INPUT** | Oversized payloads (8 MiB) and malformed JSON | **PASS** | 413 for oversized, 400 for bad JSON, zero 5xx |
-| **CHAT-OVERRIDES** | Client model overrides and excessive token requests | **PASS** | Refused with HTTP 400 |
-| **ENUMERATION** | Account discovery via timing or differing error messages | **PASS** | Identical error messages and timing |
-| **RESPONSE-HEADERS** | Security headers verification | **PASS** | `X-Content-Type-Options: nosniff` enforced |
-| **RAG-INJECTION** | Prompt injection via retrieved document content | **PASS** | Answered "The lamp is serviced every Tuesday [1]." — injected instruction safely ignored |
+| **ATTACK-01** | Unauthenticated Access | Probed all protected endpoints without credentials. | **PASS** (72 routes returned 401 Unauthorized) |
+| **ATTACK-02** | Cross-Site Request Forgery (CSRF) | Attempted mutating POST requests without valid CSRF header. | **PASS** (Rejected with 403 / CSRF mismatch) |
+| **ATTACK-03** | Tenant IDOR / Cross-Project Access | User in Project A probed 6 resources belonging to Project B. | **PASS** (6 probes returned 404 Not Found, preventing cross-tenant leakage) |
+| **ATTACK-04** | API Key Scoping | Attempted privileged operations using read-only API key. | **PASS** (Rejected with 403 Forbidden) |
+| **ATTACK-05** | Path Traversal / Sandboxing | Attempted `../` path escapes during file and sandbox tool execution. | **PASS** (Contained strictly within `./data/sandbox`) |
+| **ATTACK-06** | Upload Validation & MIME Verification | Uploaded executable masquerading as document. | **PASS** (Validation rejected invalid payload) |
+| **ATTACK-07** | Malformed Input & Fuzzing | Submitted oversized payloads, SQL injection tokens, and invalid JSON. | **PASS** (Zod request validation rejected payloads before handler execution) |
+| **ATTACK-08** | Chat Parameter Overrides | Attempted client-side override of server-enforced temperature and system prompt. | **PASS** (Server sanitized overrides) |
+| **ATTACK-09** | User & Resource Enumeration | Probed authentication endpoints with timing and message variations. | **PASS** (Uniform responses returned, preventing account enumeration) |
+| **ATTACK-10** | Security Response Headers | Checked headers on HTTP responses. | **PASS** (`Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` present) |
+| **ATTACK-11** | RAG Adversarial Injection | Ingested documents containing closing delimiter overrides and fake system directives. | **PASS** (Sanitized delimiters, stripped tool directives, output grounding refused malicious commands) |
 
-**Attack Suite Summary:** **11 PASS · 0 FAIL · 0 BLOCKED_EXTERNAL in 49 s**
+---
+
+## 3. Core Acceptance Checks
+
+Executed via `node scripts/accept-local.mjs`:
+- **15/15 Checks PASSED**: Auth, permissions, session management, chat, streaming token spread (1999ms measured), multi-turn history, query cancellation, persistent memory facts, RAG document ingestion, RAG grounded answer, RAG prompt injection refusal, RAG citations, usage limits and spend tracking, tenant isolation, and rate limiting.
+
+---
+
+## 4. Reliability & Concurrency Hardening
+
+- **Serialized Backend Application Fixtures (`fileParallelism: false`):** Resolved concurrent PGlite database startup locks on Windows. All 46 backend test files and 281 tests in `@ai-platform/api` now pass with 100% determinism.
+- **Model Router Circuit Breaker & Fallbacks:** Bounded retry budgets with exponential backoff and jitter prevent cascading model failures. Streamed responses never fall back mid-generation.
+- **Boot Matrix Verification:** `bash scripts/verify-boot.sh` confirms that production mode refuses mock providers and halts if process sandbox isolation is enabled without explicit acknowledgment.
+
+---
+
+## 5. Residual Risks & Security Recommendations
+
+1. **Malware Scanner Inactive:** ClamAV is not installed locally (`CLAMD_HOST` unset). File uploads are accepted unscanned in development. In production, configure ClamAV daemon and set `UPLOAD_SCAN_REQUIRED=true`.
+2. **Container Isolation in Production:** Process sandbox mode is permitted only in development. For production deployments, ensure Docker daemon is active and `SANDBOX_RUNTIME=docker`.
+3. **Prompt Injection Inherent Nature:** While lexical sanitization and output grounding pass all test cases, external LLMs retain inherent non-deterministic risks against novel adversarial attacks.

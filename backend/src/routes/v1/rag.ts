@@ -91,7 +91,7 @@ const ragQueryRequestSchema = z.object({
   projectId: z.string().optional(),
 });
 
-const memoryScopeSchema = z.enum(["conversation", "task", "user", "project", "semantic"]);
+const memoryScopeSchema = z.enum(["conversation", "task", "user", "project", "semantic"] as const);
 
 const createMemoryRequestSchema = z.object({
   scope: memoryScopeSchema,

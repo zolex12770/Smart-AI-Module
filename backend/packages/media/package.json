@@ -20,8 +20,8 @@
     "@ai-platform/database": "*",
     "@ai-platform/jobs": "*",
     "@ai-platform/shared": "*",
-    "@google-cloud/storage": "^8.0.1",
-    "uuid": "^11.0.4"
+    "@google-cloud/storage": "^8.4.0",
+    "uuid": "^14.0.3"
   },
   "devDependencies": {
     "@ai-platform/video-mock": "*",
