@@ -7,18 +7,21 @@ import { RequireSession, useSession } from "./session-context";
 const NAV_LINKS = [
   { href: "/chat", label: "Chat" },
   { href: "/tasks", label: "Tasks" },
+  { href: "/coding", label: "Coding" },
   { href: "/images", label: "Images" },
   { href: "/videos", label: "Videos" },
-  // ADR-114: speech used to exist only inside the video pipeline, with no way to ask for it.
+  // Speech capability in its own right (ADR-114)
   { href: "/audio", label: "Audio" },
   { href: "/files", label: "Files" },
-  // ADR-084: the ingestion half of RAG had no way to be queried from the UI at all.
+  // Knowledge and RAG ingestion querying (ADR-084)
   { href: "/ask", label: "Ask" },
-  // ADR-084: memory silently shapes model answers, so it must be inspectable and deletable.
+  // User-controlled memory inspection and deletion (ADR-084)
   { href: "/memory", label: "Memory" },
   { href: "/usage", label: "Usage" },
-  // ADR-074: models, tools, MCP, jobs and dead letters — the ADR-066 API had no consumer.
+  // Models, tools, MCP, jobs and system status
   { href: "/platform", label: "Platform" },
+  // Central admin panel and granular governance
+  { href: "/admin", label: "Admin" },
   { href: "/settings", label: "Settings" },
 ];
 
@@ -41,7 +44,7 @@ export function AppChrome({ children }: { children: React.ReactNode }) {
   return (
     <div className="app-shell">
       <nav className="app-nav">
-        <span className="app-nav-brand">AI Agent Platform</span>
+        <span className="app-nav-brand">NirnayAI</span>
         <div className="app-nav-links">
           {NAV_LINKS.map((link) => (
             <Link
