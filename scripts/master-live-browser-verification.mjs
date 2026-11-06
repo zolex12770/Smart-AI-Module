@@ -27,14 +27,15 @@ async function main() {
     // 1. AUTHENTICATION & LOGIN (/login)
     // -------------------------------------------------------------------------
     console.log("\n[STAGE 1] Testing Authentication & Gated Operator Sign-In...");
-    await page.goto("http://localhost:3000/login", { waitUntil: "domcontentloaded", timeout: 25000 });
+    await page.goto("http://localhost:3000/login", { waitUntil: "networkidle", timeout: 25000 });
     await page.screenshot({ path: path.join(ARTIFACT_DIR, "master_01_login.png") });
 
     // Verify local dev gating notice is visible
     const hasOneClick = await page.locator('button:has-text("One-Click Sign In")').isVisible();
     console.log("  One-Click Operator Sign-In visible (dev mode):", hasOneClick);
 
-    // Click Sign In
+    // Wait for hydration and click Sign In
+    await page.waitForTimeout(1000);
     await page.locator('button:has-text("One-Click Sign In")').click();
     await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 20000 });
     console.log("✓ Successfully authenticated into session. Landed at:", page.url());
