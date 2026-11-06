@@ -49,6 +49,13 @@ export default function LoginPage() {
     }
   }
 
+  const isLocalDev =
+    process.env.NODE_ENV === "development" ||
+    (typeof window !== "undefined" &&
+      (window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1" ||
+        window.location.hostname === "::1"));
+
   return (
     <main className="auth-shell">
       <form className="auth-card" onSubmit={onSubmit}>
@@ -57,33 +64,37 @@ export default function LoginPage() {
           Independent Autonomous AI Platform
         </p>
 
-        <button
-          type="button"
-          onClick={handleQuickOperatorLogin}
-          disabled={busy}
-          style={{
-            background: "#059669",
-            color: "#ffffff",
-            border: "none",
-            padding: "10px 16px",
-            borderRadius: "6px",
-            fontWeight: 600,
-            fontSize: "14px",
-            cursor: "pointer",
-            width: "100%",
-            marginBottom: "16px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: "8px",
-          }}
-        >
-          ⚡ One-Click Sign In as Local Operator
-        </button>
+        {isLocalDev ? (
+          <>
+            <button
+              type="button"
+              onClick={handleQuickOperatorLogin}
+              disabled={busy}
+              style={{
+                background: "#059669",
+                color: "#ffffff",
+                border: "none",
+                padding: "10px 16px",
+                borderRadius: "6px",
+                fontWeight: 600,
+                fontSize: "14px",
+                cursor: "pointer",
+                width: "100%",
+                marginBottom: "16px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "8px",
+              }}
+            >
+              ⚡ One-Click Sign In as Local Operator
+            </button>
 
-        <div style={{ textAlign: "center", margin: "8px 0 16px", color: "var(--muted)", fontSize: "12px" }}>
-          — or enter credentials below —
-        </div>
+            <div style={{ textAlign: "center", margin: "8px 0 16px", color: "var(--muted)", fontSize: "12px" }}>
+              — or enter credentials below —
+            </div>
+          </>
+        ) : null}
 
         <label htmlFor="email">Email</label>
         <input
@@ -112,10 +123,12 @@ export default function LoginPage() {
           {busy ? "Signing in…" : "Sign in"}
         </button>
 
-        <div style={{ marginTop: 12, padding: "8px 12px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, fontSize: "12px", color: "var(--muted)" }}>
-          <strong>Default Local Operator:</strong><br />
-          <code>operator@local.dev</code> / <code>test-password-1234</code>
-        </div>
+        {isLocalDev ? (
+          <div style={{ marginTop: 12, padding: "8px 12px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, fontSize: "12px", color: "var(--muted)" }}>
+            <strong>Default Local Operator (Dev Only):</strong><br />
+            <code>operator@local.dev</code> / <code>test-password-1234</code>
+          </div>
+        ) : null}
 
         <p className="auth-alt" style={{ marginTop: 16 }}>
           No account? <Link href="/signup">Create one</Link>

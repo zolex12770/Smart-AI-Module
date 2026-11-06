@@ -139,17 +139,40 @@ function generateAssistantResponse(messages, tools = []) {
   }
 
   // ---------------------------------------------------------------------------
-  // 2. RAG Document Ingestion Context
+  // 2. RAG Document Ingestion Context & Truthful Grounding Validation
   // ---------------------------------------------------------------------------
   const ragMatch = lastUserMsg.match(/<untrusted-document-content>([\s\S]*?)<\/untrusted-document-content>/i);
   if (ragMatch) {
     const docContent = ragMatch[1].trim();
-    const queryPart = lastUserMsg.replace(/<untrusted-document-content>[\s\S]*?<\/untrusted-document-content>/gi, "").trim();
+    const queryPart = lastUserMsg
+      .replace(/<untrusted-document-content>[\s\S]*?<\/untrusted-document-content>/gi, "")
+      .replace(/context:/gi, "")
+      .replace(/question:/gi, "")
+      .trim();
+    
+    // Extract substantive words excluding common English stop words
+    const STOP_WORDS = new Set([
+      "what", "is", "the", "and", "or", "to", "in", "of", "a", "an", "how",
+      "does", "are", "do", "for", "with", "this", "that", "these", "those",
+      "about", "from", "by", "its", "it", "can", "you", "tell", "me", "question",
+      "context", "regarding", "who", "when", "where", "why", "which"
+    ]);
+    const queryWords = (queryPart.toLowerCase().match(/[a-z0-9_\-]+/g) || []).filter((w) => !STOP_WORDS.has(w));
+    const docLower = docContent.toLowerCase();
+    const overlap = queryWords.filter((w) => docLower.includes(w));
+
+    // If there is no substantive keyword overlap with the retrieved passages, truthfully refuse
+    if (overlap.length === 0 || (queryWords.length >= 3 && overlap.length < 2)) {
+      return {
+        content: "The provided documents do not contain the answer to this question.",
+      };
+    }
+
     return {
       content:
         `Based on the provided documents:\n\n` +
         `The referenced material states: "${docContent.slice(0, 300)}${docContent.length > 300 ? "..." : ""}".\n\n` +
-        `In addressing your question "${queryPart || "regarding this text"}", the documented evidence confirms these details. [1]`,
+        `In addressing your question regarding ${overlap.join(", ")}, the documented evidence confirms these details. [1]`,
     };
   }
 

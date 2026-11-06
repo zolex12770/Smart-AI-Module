@@ -2,8 +2,10 @@ import { apiFetch, getSelectedProjectId } from "./auth-client";
 import type { GeneratedImage, ImageGenerationRequest, Task, TaskNode, TaskType, VideoProjectRequest } from "@ai-platform/shared";
 
 export function getApiUrl(): string {
-  if (typeof window !== "undefined" && window.location.hostname === "127.0.0.1") {
-    return "http://127.0.0.1:8787";
+  if (typeof window !== "undefined") {
+    const { hostname, protocol } = window.location;
+    if (hostname === "127.0.0.1") return `${protocol}//127.0.0.1:8787`;
+    if (hostname === "localhost") return `${protocol}//localhost:8787`;
   }
   return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
 }
