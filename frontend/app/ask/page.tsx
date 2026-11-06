@@ -94,6 +94,40 @@ function AskView() {
         your documents answers the question, you will be told that rather than given a guess.
       </p>
 
+            {/* Quick RAG Queries */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0" }}>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => {
+            setQuestion("What capabilities does NirnayAI Universal AI Agent have?");
+          }}
+        >
+          ❓ What capabilities does NirnayAI have?
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => {
+            setQuestion("How does the agent handle rollback safety?");
+          }}
+        >
+          ❓ How does rollback safety work?
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => {
+            setQuestion("What speech synthesis capabilities are available?");
+          }}
+        >
+          ❓ What speech synthesis is available?
+        </button>
+      </div>
+
       <form onSubmit={handleAsk} style={{ display: "grid", gap: 8, maxWidth: 760, margin: "16px 0" }}>
         <label htmlFor="rag-question">Question</label>
         <textarea

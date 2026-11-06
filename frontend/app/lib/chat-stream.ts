@@ -1,4 +1,4 @@
-import { API_URL } from "./api";
+import { API_URL, getApiUrl } from "./api";
 import { getSelectedProjectId, readCsrfToken } from "./auth-client";
 
 export type ChatRole = "system" | "user" | "assistant" | "tool";
@@ -74,7 +74,7 @@ export async function* streamChat(
   const projectId = getSelectedProjectId();
   if (projectId) headers["x-project-id"] = projectId;
 
-  const res = await fetch(`${API_URL}/api/v1/chat`, {
+  const res = await fetch(`${getApiUrl()}/api/v1/chat`, {
     method: "POST",
     headers,
     credentials: "include",

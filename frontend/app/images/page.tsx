@@ -93,6 +93,25 @@ export default function ImagesPage() {
         </div>
       </div>
 
+            {/* Provider Configuration Notice */}
+      {unavailable && (
+        <div
+          style={{
+            padding: "12px 16px",
+            borderRadius: "6px",
+            background: "color-mix(in srgb, #2563eb 8%, transparent)",
+            border: "1px solid #2563eb",
+            marginBottom: 16,
+            fontSize: "13px",
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>ℹ️ Image Generation Provider Status:</strong> Image synthesis is not configured on this deployment.
+          To activate real local diffusion, configure <code>IMAGE_SD_CLI_PATH</code> or <code>IMAGE_BASE_URL</code> (docs/MEDIA.md).
+          The application safely blocks execution when no model is attached to prevent silent mock generation.
+        </div>
+      )}
+
       <form className="card" onSubmit={handleSubmit}>
         <div className="form-row">
           <label style={{ flex: 1, minWidth: 240 }}>

@@ -51,7 +51,9 @@ export default function TasksPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [taskType, setTaskType] = useState<TaskType>("echo_chat");
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({
+    message: "Hello from Universal AI Agent task runner!",
+  });
   const [submitting, setSubmitting] = useState(false);
 
   // Stable, so it can be a dependency of the effect below rather than re-running every render.
@@ -105,6 +107,54 @@ export default function TasksPage() {
             tool calls and the configured model — see docs/26_DECISIONS.md ADR-018 and docs/PROVIDERS.md.
           </p>
         </div>
+      </div>
+
+            {/* Quick Action Presets */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => {
+            setTaskType("echo_chat");
+            setFieldValues({ message: "Hello from Universal AI Agent task runner!" });
+          }}
+        >
+          ⚡ Echo Chat Preset
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => {
+            setTaskType("autonomous");
+            setFieldValues({ goal: "Analyze workspace and summarize status" });
+          }}
+        >
+          🤖 Autonomous Agent Preset
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => {
+            setTaskType("fix_failing_test");
+            setFieldValues({ testDir: "coding-demo", testFile: "math.test.js" });
+          }}
+        >
+          🔧 Coding Fix Preset
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => {
+            setTaskType("answer_from_documents");
+            setFieldValues({ question: "What capabilities does NirnayAI have?" });
+          }}
+        >
+          📚 Document RAG Preset
+        </button>
       </div>
 
       <form className="card" onSubmit={handleCreate}>

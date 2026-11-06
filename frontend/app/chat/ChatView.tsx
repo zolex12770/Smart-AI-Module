@@ -76,9 +76,8 @@ export default function ChatView({
       .catch(() => setChatModel(undefined));
   }, [projectId]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
+  async function sendPrompt(customText?: string) {
+    const text = (customText ?? input).trim();
     if (!text || isStreaming) return;
 
     const nextMessages: DisplayMessage[] = [...messages, { role: "user", content: text }];
@@ -191,6 +190,11 @@ export default function ChatView({
       controllerRef.current = null;
       setIsStreaming(false);
     }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await sendPrompt();
   }
 
   const current = conversations.find((c) => c.id === conversationId);
@@ -371,7 +375,40 @@ export default function ChatView({
         </header>
 
         <div className="messages">
-          {messages.length === 0 && <p className="empty-state">Say something to start the conversation.</p>}
+          {messages.length === 0 && (
+            <div style={{ textAlign: "center", padding: "32px 16px" }}>
+              <p className="empty-state" style={{ marginBottom: 16 }}>
+                Welcome to NirnayAI Chat. Ask a question or click a prompt to start:
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", maxWidth: 600, margin: "0 auto" }}>
+                {[
+                  "👋 Hello",
+                  "🧮 What is 2 + 2?",
+                  "💻 return 'hello world' in c++",
+                  "🐍 Write a Python function to reverse a string",
+                  "🇮🇳 Explain recursion in simple Hindi",
+                ].map((promptText) => (
+                  <button
+                    key={promptText}
+                    type="button"
+                    onClick={() => void sendPrompt(promptText)}
+                    disabled={isStreaming}
+                    style={{
+                      background: "var(--surface)",
+                      border: "1px solid var(--border)",
+                      padding: "8px 14px",
+                      borderRadius: "20px",
+                      fontSize: "13px",
+                      cursor: "pointer",
+                      color: "var(--fg)",
+                    }}
+                  >
+                    {promptText}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {messages.map((m, i) => (
             <div key={i} className={`message ${m.isError ? "error" : m.role}`}>
               {m.content || (isStreaming && i === messages.length - 1 ? "…" : "")}

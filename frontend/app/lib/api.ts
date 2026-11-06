@@ -1,6 +1,13 @@
 import { apiFetch, getSelectedProjectId } from "./auth-client";
 import type { GeneratedImage, ImageGenerationRequest, Task, TaskNode, TaskType, VideoProjectRequest } from "@ai-platform/shared";
 
+export function getApiUrl(): string {
+  if (typeof window !== "undefined" && window.location.hostname === "127.0.0.1") {
+    return "http://127.0.0.1:8787";
+  }
+  return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
+}
+
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
 
 // Mirrors of the API's response shapes for `conversations`/`messages` — deliberately local
@@ -558,7 +565,7 @@ export const deleteMemory = (id: string) => request<{ ok: true }>(`/api/v1/memor
  * callers omit it and get the project the rest of the app is scoped to.
  */
 export function assetUrl(assetId: string, projectId?: string | null): string {
-  const url = `${API_URL}/api/v1/assets/${encodeURIComponent(assetId)}`;
+  const url = `${getApiUrl()}/api/v1/assets/${encodeURIComponent(assetId)}`;
   const scope = projectId ?? getSelectedProjectId();
   // No scope means no session has resolved yet; emitting a bare URL keeps the failure a plain
   // 400 from the API rather than a request claiming a project that is not the user's.

@@ -76,6 +76,24 @@ export default function VideosPage() {
         </div>
       </div>
 
+            {/* Video Provider Configuration Notice */}
+      {(!videoProvider || !videoProvider.available) && (
+        <div
+          style={{
+            padding: "12px 16px",
+            borderRadius: "6px",
+            background: "color-mix(in srgb, #2563eb 8%, transparent)",
+            border: "1px solid #2563eb",
+            marginBottom: 16,
+            fontSize: "13px",
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>ℹ️ Video Generation Provider Status:</strong> Long-form video synthesis requires ffmpeg and a configured video renderer (<code>VIDEO_PROVIDER</code>, docs/MEDIA.md).
+          When unconfigured, requests are safely gated to guarantee transparency.
+        </div>
+      )}
+
       <form className="card" onSubmit={handleSubmit}>
         <div className="form-row">
           <label style={{ flex: 1, minWidth: 240 }}>

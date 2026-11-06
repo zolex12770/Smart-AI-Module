@@ -14,7 +14,7 @@ import { StatusBadge } from "../lib/status-badge";
  */
 export default function AudioPage() {
   const [generations, setGenerations] = useState<AudioGeneration[]>([]);
-  const [text, setText] = useState("");
+  const [text, setText] = useState("Hello from NirnayAI Windows SAPI speech synthesis.");
   const [speed, setSpeed] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,6 +70,34 @@ export default function AudioPage() {
             on Linux and Windows — and each clip below is a real WAV whose duration was measured from the file.
           </p>
         </div>
+      </div>
+
+            {/* Quick Voice Presets */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => setText("Hello from NirnayAI Windows SAPI speech synthesis.")}
+        >
+          🗣️ Sample: NirnayAI Introduction
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => setText("Universal AI Agent autonomous platform is online and operational.")}
+        >
+          🚀 Sample: System Status
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => setText("Speech synthesis completed successfully on Windows with audio playback.")}
+        >
+          🔊 Sample: Speech Test
+        </button>
       </div>
 
       <form className="card" onSubmit={handleSubmit}>
