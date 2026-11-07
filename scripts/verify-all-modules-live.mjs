@@ -200,23 +200,26 @@ async function main() {
     // STEP 8: Module Images (/images)
     // -------------------------------------------------------------
     console.log("\n[TEST 8] Verifying Images Module (/images)...");
-    await page.goto("http://localhost:3000/images", { waitUntil: "domcontentloaded", timeout: 25000 });
+    await page.goto("http://localhost:3000/images", { waitUntil: "networkidle", timeout: 25000 });
     await page.waitForSelector("h1:has-text('Image generation')", { timeout: 10000 });
-    const hasImageNotice = await page.locator("text=Image Generation Provider Status").isVisible();
-    console.log("✓ Images Module rendered; truthful provider notice visible:", hasImageNotice);
+    const imageSubtitle = await page.locator(".page-subtitle").textContent();
+    const hasImageWarning = await page.locator("text=Image Generation Provider Status").isVisible();
+    const imageCount = await page.locator(".grid .card img").count();
+    console.log("✓ Images Module rendered; Active provider:", imageSubtitle.trim(), "; Images in gallery:", imageCount);
     await page.screenshot({ path: path.join(ARTIFACT_DIR, "verified_module_images.png") });
-    results.images = { status: "PASSED", noticeVisible: hasImageNotice };
+    results.images = { status: "PASSED", provider: imageSubtitle.trim(), galleryCount: imageCount, warningNotice: hasImageWarning };
 
     // -------------------------------------------------------------
     // STEP 9: Module Videos (/videos)
     // -------------------------------------------------------------
     console.log("\n[TEST 9] Verifying Videos Module (/videos)...");
-    await page.goto("http://localhost:3000/videos", { waitUntil: "domcontentloaded", timeout: 25000 });
+    await page.goto("http://localhost:3000/videos", { waitUntil: "networkidle", timeout: 25000 });
     await page.waitForSelector("h1:has-text('Long-form video generation')", { timeout: 10000 });
-    const hasVideoNotice = await page.locator("text=Video Generation Provider Status").isVisible();
-    console.log("✓ Videos Module rendered; truthful provider notice visible:", hasVideoNotice);
+    const hasVideoWarning = await page.locator("text=Video Generation Provider Status").isVisible();
+    const videoProjectCount = await page.locator('.card-list a[href^="/videos/"]').count();
+    console.log("✓ Videos Module rendered; Video projects in list:", videoProjectCount, "; Warning present:", hasVideoWarning);
     await page.screenshot({ path: path.join(ARTIFACT_DIR, "verified_module_videos.png") });
-    results.videos = { status: "PASSED", noticeVisible: hasVideoNotice };
+    results.videos = { status: "PASSED", projectCount: videoProjectCount, warningNotice: hasVideoWarning };
 
     // -------------------------------------------------------------
     // STEP 10: Module Admin (/admin)

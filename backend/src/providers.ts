@@ -1,6 +1,7 @@
 import { MockImageProvider } from "@ai-platform/image-mock";
 import { SdCppImageProvider } from "@ai-platform/image-sdcpp";
 import { OpenAICompatibleImageProvider } from "@ai-platform/image-openai";
+import { LocalEngineImageProvider } from "@ai-platform/media";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
 import { LocalOpenAICompatibleProvider } from "@ai-platform/llm-local";
@@ -70,6 +71,13 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
       cfgScale: config.IMAGE_SD_CFG_SCALE,
       size: config.IMAGE_SD_SIZE,
       threads: config.IMAGE_SD_THREADS,
+      timeoutMs: config.IMAGE_SD_TIMEOUT_MS,
+    });
+  }
+
+  if (LocalEngineImageProvider.isAvailable()) {
+    return new LocalEngineImageProvider({
+      size: config.IMAGE_SD_SIZE,
       timeoutMs: config.IMAGE_SD_TIMEOUT_MS,
     });
   }

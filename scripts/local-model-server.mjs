@@ -16,6 +16,24 @@ function generateAssistantResponse(messages, tools = []) {
   const lowerMsg = lastUserMsg.toLowerCase();
 
   // ---------------------------------------------------------------------------
+  // 0. Storyboard generator for video planning
+  // ---------------------------------------------------------------------------
+  if (messages.some((m) => typeof m.content === "string" && (m.content.includes("video director") || m.content.includes("shotDescription") || m.content.includes("storyboard")))) {
+    const brief = lastUserMsg.replace(/Brief:\s*/i, "").trim() || "A journey through artificial intelligence";
+    return {
+      content: JSON.stringify({
+        title: brief.slice(0, 40),
+        scenes: [
+          {
+            shotDescription: `Cinematic wide angle shot of ${brief}, rich atmospheric volumetric lighting, hyperdetailed`,
+            narration: `Exploring the future of ${brief.slice(0, 35)}, built for autonomous real-world performance.`
+          }
+        ]
+      })
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // 1. Tool-calling detection for Autonomous & Coding Agent requests
   // ---------------------------------------------------------------------------
   if (tools && tools.length > 0) {
