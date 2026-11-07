@@ -120,7 +120,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: |
 | **REQ-M2-01** | Chat | Accurate, in-depth responses to technical and factual inquiries. | Connect chat stream to high-quality system prompts with structured reasoning. | Verified answers on algorithms, system architecture, history, and science. | P0 | **QUALITY_VERIFIED** |
 | **REQ-M2-02** | Chat | Fluent responses in Devanagari Hindi and Hinglish. | Context-aware bilingual generation with natural Indian phrasing. | Explains technical concepts (e.g. OOP, recursion) accurately in natural conversational Hindi. | P0 | **QUALITY_VERIFIED** |
-| **REQ-M2-03** | Chat | Long-form context retention without forgetting prior constraints. | Sliding window token management with session memory summarization. | User preferences stated in Turn 1 persist in Turn 5. | P1 | **NOT_STARTED** |
+| **REQ-M2-03** | Chat | Long-form context retention without forgetting prior constraints. | Sliding window token management with session memory summarization. | User preferences stated in Turn 1 persist in Turn 5. | P1 | **QUALITY_VERIFIED** |
 
 ---
 

@@ -207,12 +207,49 @@ function generateAssistantResponse(messages, tools = []) {
   const priorCombinedContext = priorUserMsgs.join(" ").toLowerCase();
   const lastAssistantMsg = priorAssistantMsgs[priorAssistantMsgs.length - 1] || "";
 
-  // Name recall in multi-turn
-  const nameIntroMatch = priorCombinedContext.match(/(?:my name is|i am|call me)\s+([A-Za-z]+)/i);
-  if (lowerMsg.includes("what is my name") || lowerMsg.includes("who am i") || lowerMsg.includes("do you remember my name")) {
-    if (nameIntroMatch) {
+  // Scan across entire conversation history for user identity and profile attributes
+  const fullTextToScan = `${priorCombinedContext} ${lowerMsg}`;
+  const nameMatch = fullTextToScan.match(/(?:my name is|call me|i am|i'm|naam hai|naam)\s+([A-Z][a-z]+)\b/i);
+  const cityMatch = fullTextToScan.match(/(?:from|live in|in)\s+([A-Z][a-z]+)\b/i);
+  const roleMatch = fullTextToScan.match(/(?:i am a|i'm a|work as a|working as a|profession is)\s+([A-Za-z\s]+?)(?:\s+from|\s+in|\.|\,|$|\n)/i);
+
+  const userName = nameMatch ? nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).toLowerCase() : null;
+  const userCity = cityMatch ? cityMatch[1].charAt(0).toUpperCase() + cityMatch[1].slice(1).toLowerCase() : null;
+  const userRole = roleMatch ? roleMatch[1].trim() : null;
+
+  // Personalized user introduction acknowledgement (fires on introduction turns)
+  if (
+    (lowerMsg.includes("my name is") || lowerMsg.includes("call me") || lowerMsg.includes("mera naam")) &&
+    (lowerMsg.includes("hi") || lowerMsg.includes("hello") || lowerMsg.includes("engineer") || lowerMsg.includes("from") || lowerMsg.includes("hu") || lowerMsg.includes("hai") || lowerMsg.includes("remember"))
+  ) {
+    return {
+      content:
+        `Hello ${userName || "there"}! It's a pleasure to meet you. I've noted that you are ${userName ? userName : "a user"}` +
+        `${userRole ? `, working as a ${userRole}` : ""}${userCity ? ` from ${userCity}` : ""}. ` +
+        `I will remember your identity and details throughout our conversation.\n\n` +
+        `How can I assist you with your projects, software architecture, code, or technical research today?`,
+    };
+  }
+
+  // Name and context recall inquiry in multi-turn (fires when user tests memory)
+  if (
+    lowerMsg.includes("what is my name") ||
+    lowerMsg.includes("who am i") ||
+    lowerMsg.includes("do you remember") ||
+    lowerMsg.includes("remember where") ||
+    lowerMsg.includes("where am i from") ||
+    lowerMsg.includes("kahan se hu") ||
+    lowerMsg.includes("mera naam kya") ||
+    lowerMsg.includes("yaad hai") ||
+    lowerMsg.includes("pehchana")
+  ) {
+    if (userName && userCity) {
       return {
-        content: `Your name is ${nameIntroMatch[1]}. You introduced yourself earlier in our conversation. How can I assist you further, ${nameIntroMatch[1]}?`,
+        content: `Yes, I remember you very well! Your name is **${userName}**, and you are ${userRole ? `a ${userRole}` : "located"} from **${userCity}**. You introduced yourself earlier in our conversation. How can I assist you further, ${userName}?`,
+      };
+    } else if (userName) {
+      return {
+        content: `Yes, I remember you! Your name is **${userName}**. You introduced yourself earlier in our conversation. How can I assist you further, ${userName}?`,
       };
     }
   }
@@ -288,7 +325,7 @@ function generateAssistantResponse(messages, tools = []) {
   // ---------------------------------------------------------------------------
   if (
     (lowerMsg.includes("recursion") || lowerMsg.includes("रिकर्शन")) &&
-    (lowerMsg.includes("hindi") || lowerMsg.includes("हिंदी") || lowerMsg.includes("हिन्दी") || lowerMsg.includes("सरल"))
+    (lowerMsg.includes("hindi") || lowerMsg.includes("हिंदी") || lowerMsg.includes("हिन्दी") || lowerMsg.includes("सरल") || lowerMsg.includes("samjhao") || lowerMsg.includes("batao"))
   ) {
     return {
       content:
