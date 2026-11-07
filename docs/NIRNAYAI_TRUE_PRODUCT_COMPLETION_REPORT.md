@@ -347,3 +347,18 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
   - `scripts/verify-browser-images-disclosures.mjs`: PASSED (100% verified in headless Chrome).
   - Screenshot captured: [`browser_images_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_images_disclosure_verified.png).
 - **Status:** **M-IMAGES-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.
+
+### 12.8 Milestone M-VIDEOS-01: Honest Video Capability Labeling & Storyboard Verification
+- **Honest Assembly Disclosures:** Enhanced [`frontend/app/videos/page.tsx`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/frontend/app/videos/page.tsx) with a dedicated technical disclosure panel clearly distinguishing the current pipeline from generative video diffusion:
+  - **Capability Badge:** Labeled as **"AI Image + Motion Assembly"** (2D Ken Burns camera pan/zoom over generated stills via FFmpeg with SAPI speech narration).
+  - **Technical Truth:** Explicit disclaimer informing users: *"Not native generative video diffusion (e.g. SVD/Gen-2)"*.
+  - **Renderer Specifications:** FastStart H.264 MP4 24 FPS with AAC audio muxing.
+- **Form Controls & Studio View:**
+  - Video brief prompt input, aspect ratio selectors, and duration controls fully interactive.
+  - Video project history renders status badges, scene counts, and embedded `<video>` playback players.
+- **Empirical Browser Verification:**
+  - `frontend/app/videos/page.test.tsx`: 3/3 tests passing.
+  - `scripts/verify-browser-videos-disclosures.mjs`: PASSED in headless Chrome.
+  - Screenshot captured: [`browser_videos_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_videos_disclosure_verified.png).
+  - Video artifact verified: [`browser_generated_video.mp4`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_generated_video.mp4).
+- **Status:** **M-VIDEOS-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.

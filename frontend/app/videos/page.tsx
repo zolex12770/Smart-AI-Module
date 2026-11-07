@@ -76,6 +76,33 @@ export default function VideosPage() {
         </div>
       </div>
 
+      {videoProvider && !videoProvider.isMock && (
+        <div
+          style={{
+            padding: "10px 14px",
+            borderRadius: "6px",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            marginBottom: 16,
+            fontSize: "12px",
+            lineHeight: 1.6,
+            color: "var(--muted)",
+          }}
+        >
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <span>
+              🎬 <strong>Capability Disclosure:</strong> AI Image + Motion Assembly (2D Ken Burns camera pan/zoom over generated stills via FFmpeg, with SAPI speech narration)
+            </span>
+            <span>
+              ⚠️ <strong>Technique Truth:</strong> Not native generative video diffusion (e.g. SVD/Gen-2)
+            </span>
+            <span>
+              ⚙️ <strong>Renderer:</strong> H.264 MP4 24 FPS FastStart
+            </span>
+          </div>
+        </div>
+      )}
+
             {/* Video Provider Configuration Notice */}
       {(!videoProvider || !videoProvider.available) && (
         <div

@@ -224,19 +224,19 @@ The following strict statuses are used across all milestones. No milestone may c
 ### Module 6: Video Generation & Honest Labeling (`M-VIDEOS`)
 
 #### **Milestone ID: M-VIDEOS-01** — Storyboard Planning, Motion Assembly & Capability Labeling
-- **User-Facing Capability:** Users request a video brief; the system generates a storyboard, visual stills, Ken Burns camera motion via FFmpeg, SAPI speech narration, and outputs a synchronized MP4 video.
-- **Functional Requirements:** Storyboard planning via LLM; still frame generation; FFmpeg 2D camera zoom/pan motion; SAPI audio synthesis; AAC/MP4 muxing; HTML5 video playback with download.
-- **Technical Requirements:** `image-motion` provider; FFmpeg 4.2.2 64-bit; Windows SAPI 5.4; Fastify video routes; Next.js video player.
+- **User-Facing Capability:** Users request a video brief; the system generates a storyboard, visual stills, Ken Burns camera motion via FFmpeg, SAPI speech narration, and outputs a synchronized MP4 video with explicit technical disclosure panels.
+- **Functional Requirements:** Storyboard planning via LLM; still frame generation; FFmpeg 2D camera zoom/pan motion; SAPI audio synthesis; AAC/MP4 muxing; HTML5 video playback with download; honest capability labeling distinguishing image+motion assembly from native generative video diffusion.
+- **Technical Requirements:** `image-motion` provider; FFmpeg 4.2.2 64-bit; Windows SAPI 5.4; Fastify video routes; Next.js video studio in `frontend/app/videos/page.tsx` with dedicated disclosure panel.
 - **Dependencies:** `M-INTENT-01`, `M-IMAGES-01`.
-- **Known Failures & Limitations:** This is 2D motion over still frames, **NOT** native generative video diffusion (e.g. SVD). Must be labeled truthfully in UI.
+- **Known Failures & Limitations:** This is 2D motion over still frames, **NOT** native generative video diffusion (e.g. SVD/Gen-2). Labeled truthfully in the UI with renderer specifications (H.264 MP4 24 FPS FastStart).
 - **Priority:** `P1`
 - **Test Dataset:** Cybernetic quantum core 4-second video request.
-- **Acceptance Criteria:** Valid MP4 file generated; duration $\ge 4.0$s; synchronized audio stream; OpenCV verifies 24 FPS and 96 frames; video player mounts in DOM.
-- **Verification Method:** Playwright browser test at `/videos/:id` and OpenCV Python verification.
-- **Regression Tests:** `scripts/verify-browser-media-full.mjs`.
-- **Required Evidence:** Artifact [`browser_generated_video.mp4`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_generated_video.mp4), screenshot [`browser_video_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_video_verified.png).
-- **Current Status:** `BROWSER_VERIFIED` / `ARTIFACT_VERIFIED`
-- **Remaining Work:** Update UI badge to display "AI Image + Motion Assembly" rather than ambiguous "AI Video".
+- **Acceptance Criteria:** Valid MP4 file generated; duration $\ge 4.0$s; synchronized audio stream; OpenCV verifies 24 FPS and 96 frames; video player mounts in DOM; honest capability disclosures displayed and verified in browser DOM.
+- **Verification Method:** Playwright browser test at `/videos` and `/videos/:id`, Jest/Vitest component tests, and OpenCV Python verification.
+- **Regression Tests:** `scripts/verify-browser-videos-disclosures.mjs`, `scripts/verify-browser-media-full.mjs`, `frontend/app/videos/page.test.tsx`.
+- **Required Evidence:** Artifact [`browser_generated_video.mp4`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_generated_video.mp4), screenshots [`browser_videos_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_videos_disclosure_verified.png) and [`browser_video_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_video_verified.png).
+- **Current Status:** `ARTIFACT_VERIFIED` / `BROWSER_VERIFIED`
+- **Remaining Work:** None. Honest labeling ('AI Image + Motion Assembly'), technical limitations ('Not native generative video diffusion'), renderer specs, and video player UI fully verified.
 
 ---
 
@@ -322,9 +322,9 @@ The following strict statuses are used across all milestones. No milestone may c
 > **MANDATORY DIRECTIVE:** Work on exactly **ONE** active milestone at a time. Do NOT advance to subsequent milestones until the active milestone's acceptance criteria are independently satisfied and verified through code, unit tests, integration tests, real browser DOM automation, and output artifact inspection.
 
 ### Current Execution Queue:
-1. **ACTIVE MILESTONE:** **`M-VIDEOS-01` (Honest Video Capability Labeling & Storyboard Depth)**
-   - *Objective:* Update UI badge to display "AI Image + Motion Assembly" rather than ambiguous "AI Video", with enhanced camera motion controls and storyboard transparency.
-2. **NEXT MILESTONE:** **`M-AUDIO-01` (Speech Synthesis Quality & Pacing)**
-   - *Objective:* Complete deep inspection and chunk pacing verification for long-form speech generation.
-3. **SUBSEQUENT MILESTONE:** **`M-FILES-01` (Document Lifecycle & PDF Text Extraction)**
+1. **ACTIVE MILESTONE:** **`M-AUDIO-01` (Speech Synthesis Quality & Pacing)**
+   - *Objective:* Deep inspection and chunk pacing verification for long-form speech generation with honest offline SAPI disclosure.
+2. **NEXT MILESTONE:** **`M-FILES-01` (Document Lifecycle & PDF Text Extraction)**
    - *Objective:* Add dedicated PDF text extraction and document search indexing.
+3. **SUBSEQUENT MILESTONE:** **`M-ASK-01` (Cross-Lingual RAG & Grounded Retrieval)**
+   - *Objective:* Verify Hindi/Hinglish query expansion, numbered citations, and ungrounded query refusal.
