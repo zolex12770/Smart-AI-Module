@@ -1,4 +1,5 @@
 export * from "./engine.js";
+export * from "./intent-engine.js";
 export * from "./planner.js";
 export * from "./reasoning-loop.js";
 export * from "./team.js";

@@ -1,5 +1,6 @@
 import http from "node:http";
 import crypto from "node:crypto";
+import { sharedIntentEngine } from "./lib/intent_engine.mjs";
 
 const PORT = 11434;
 const MODEL_NAME = "qwen2.5:7b";
@@ -742,11 +743,19 @@ const server = http.createServer((req, res) => {
         const seed = body.seed !== undefined ? body.seed : Math.floor(Math.random() * 1000000);
         const model = body.model || "flux";
 
-        console.log(`[local-model-server] Generating prompt-conditioned diffusion image: "${prompt.slice(0, 60)}" (${width}x${height}, seed: ${seed})`);
+        const sessionId = body.user || body.sessionId || "default-session";
+        const intentResult = sharedIntentEngine.processTurn(sessionId, prompt, { forcedIntent: "IMAGE_GENERATION" });
+        const finalPrompt = intentResult.enhancedPrompt || prompt;
+        const negativePrompt = intentResult.negativeConstraints ? intentResult.negativeConstraints.join(", ") : "";
+
+        console.log(`[local-model-server] Intent processed [${intentResult.detectedLanguage}]: "${finalPrompt.slice(0, 70)}..." (isRevision: ${intentResult.isRevision})`);
 
         // Primary: Real Prompt-to-Image Diffusion via FLUX/SD endpoint
-        const encodedPrompt = encodeURIComponent(prompt.trim());
-        const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&model=${encodeURIComponent(model)}&nologo=true&seed=${seed}`;
+        const encodedPrompt = encodeURIComponent(finalPrompt.trim());
+        let imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&model=${encodeURIComponent(model)}&nologo=true&seed=${seed}`;
+        if (negativePrompt) {
+          imageUrl += `&negative=${encodeURIComponent(negativePrompt)}`;
+        }
 
         let imgBuffer = null;
         let lastError = null;
@@ -819,7 +828,7 @@ const server = http.createServer((req, res) => {
             data: [
               {
                 b64_json: b64Json,
-                revised_prompt: prompt,
+                revised_prompt: finalPrompt,
               },
             ],
           })
