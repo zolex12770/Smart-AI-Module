@@ -703,9 +703,134 @@ const server = http.createServer((req, res) => {
             created: 1730000000,
             owned_by: "local",
           },
+          {
+            id: "flux",
+            object: "model",
+            created: 1730000000,
+            owned_by: "diffusion",
+          },
         ],
       })
     );
+    return;
+  }
+
+  // Endpoint: POST /v1/images/generations (and /images/generations)
+  if (
+    req.method === "POST" &&
+    (url.pathname === "/v1/images/generations" || url.pathname === "/images/generations")
+  ) {
+    let bodyData = "";
+    req.on("data", (chunk) => {
+      bodyData += chunk;
+    });
+
+    req.on("end", async () => {
+      try {
+        const body = JSON.parse(bodyData || "{}");
+        const prompt = body.prompt;
+        if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Prompt is required." } }));
+          return;
+        }
+
+        const sizeStr = body.size || "512x512";
+        const [wStr, hStr] = sizeStr.split("x");
+        const width = Math.min(1024, Math.max(256, parseInt(wStr, 10) || 512));
+        const height = Math.min(1024, Math.max(256, parseInt(hStr, 10) || 512));
+        const seed = body.seed !== undefined ? body.seed : Math.floor(Math.random() * 1000000);
+        const model = body.model || "flux";
+
+        console.log(`[local-model-server] Generating prompt-conditioned diffusion image: "${prompt.slice(0, 60)}" (${width}x${height}, seed: ${seed})`);
+
+        // Primary: Real Prompt-to-Image Diffusion via FLUX/SD endpoint
+        const encodedPrompt = encodeURIComponent(prompt.trim());
+        const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=${width}&height=${height}&model=${encodeURIComponent(model)}&nologo=true&seed=${seed}`;
+
+        let imgBuffer = null;
+        let lastError = null;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          const fetchController = new AbortController();
+          const timeout = setTimeout(() => fetchController.abort(), 60000);
+
+          try {
+            const imgRes = await fetch(imageUrl, {
+              signal: fetchController.signal,
+              headers: { "User-Agent": "NirnayAI-Diffusion/1.0" },
+            });
+            clearTimeout(timeout);
+
+            if (imgRes.status === 402) {
+              const errBody = await imgRes.text();
+              console.log(`[local-model-server] Upstream rate limit (402) on attempt ${attempt}: ${errBody}`);
+              const match = errBody.match(/Retry after (\d+)s/);
+              const waitSec = match ? parseInt(match[1], 10) + 2 : 45;
+              console.log(`[local-model-server] Rate limit cooldown: waiting ${waitSec}s before retry...`);
+              await new Promise((r) => setTimeout(r, waitSec * 1000));
+              continue;
+            }
+
+            if (!imgRes.ok) {
+              throw new Error(`Upstream diffusion error: HTTP ${imgRes.status}`);
+            }
+
+            const arrayBuf = await imgRes.arrayBuffer();
+            imgBuffer = Buffer.from(arrayBuf);
+
+            if (imgBuffer.length < 1000) {
+              throw new Error(`Received invalid/truncated image data (${imgBuffer.length} bytes)`);
+            }
+
+            break; // Success!
+          } catch (fetchErr) {
+            clearTimeout(timeout);
+            lastError = fetchErr;
+            console.error(`[local-model-server] Diffusion generation attempt ${attempt} failed:`, fetchErr.message);
+            if (attempt < 3) {
+              await new Promise((r) => setTimeout(r, 5000));
+            }
+          }
+        }
+
+        if (!imgBuffer) {
+          // Return honest failure explanation
+          res.writeHead(503, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              error: {
+                message: `Text-to-image synthesis failed: ${lastError?.message || "Rate limit or network error"}. Ensure network connectivity for diffusion models or configure local stable-diffusion.cpp weights.`,
+                type: "provider_error",
+                code: "diffusion_service_unavailable",
+              },
+            })
+          );
+          return;
+        }
+
+        const b64Json = imgBuffer.toString("base64");
+        console.log(`[local-model-server] Successfully synthesized prompt-conditioned image (${imgBuffer.length} bytes)`);
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            created: Math.floor(Date.now() / 1000),
+            data: [
+              {
+                b64_json: b64Json,
+                revised_prompt: prompt,
+              },
+            ],
+          })
+        );
+        return;
+      } catch (err) {
+        console.error("Local model image generation error:", err);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: err.message || "Internal image generation error" } }));
+      }
+    });
     return;
   }
 

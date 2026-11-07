@@ -47,6 +47,7 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
       ? new OpenAICompatibleImageProvider({
           baseUrl: config.IMAGE_BASE_URL,
           model: config.IMAGE_MODEL,
+          name: config.IMAGE_MODEL === "flux" ? "flux-diffusion" : `image-openai-${config.IMAGE_MODEL}`,
           apiKey: config.IMAGE_API_KEY,
           supportsNegativePrompt: config.IMAGE_SUPPORTS_NEGATIVE_PROMPT,
           supportsSeed: config.IMAGE_SUPPORTS_SEED,
@@ -75,12 +76,7 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
     });
   }
 
-  if (LocalEngineImageProvider.isAvailable()) {
-    return new LocalEngineImageProvider({
-      size: config.IMAGE_SD_SIZE,
-      timeoutMs: config.IMAGE_SD_TIMEOUT_MS,
-    });
-  }
+  // Procedural art is strictly separated and not substituted for text-to-image
 
   // Only when mocks were asked for explicitly (tests, the E2E server). Otherwise image
   // generation is unavailable and says so — never a placeholder presented as a result.

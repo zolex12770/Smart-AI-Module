@@ -155,10 +155,7 @@ class MediaGenerationEngine:
                 cv2.circle(canvas, (nx, ny), 7, (0, 210, 255), -1, cv2.LINE_AA)
                 cv2.circle(canvas, (nx, ny), 14, (0, 160, 210), 1, cv2.LINE_AA)
 
-        # Header Watermark Badge
-        cv2.putText(canvas, "NIRNAYAI VISUAL INTELLIGENCE", (24, 38), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(canvas, f"Prompt: {prompt[:50]}", (24, height - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 225, 245), 1, cv2.LINE_AA)
-
+        # Procedural canvas generated cleanly without artificial text watermarks
         # Write output PNG
         success = cv2.imwrite(str(out_file), canvas)
         if not success:

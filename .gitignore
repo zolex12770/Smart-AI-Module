@@ -49,3 +49,6 @@ benchmark-results/
 
 __pycache__/
 *.pyc
+tools/
+*.exe
+*.dll
