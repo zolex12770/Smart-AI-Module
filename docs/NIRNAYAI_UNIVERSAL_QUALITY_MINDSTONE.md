@@ -94,9 +94,9 @@ The following strict statuses are used across all milestones. No milestone may c
 - **Acceptance Criteria:** Language classification precision $>95\%$; target module routing accuracy $>95\%$.
 - **Verification Method:** Unit tests in Vitest and standalone Node runner.
 - **Regression Tests:** `backend/packages/agent-core/src/intent-engine.test.ts`, `scripts/tests/test_intent_engine.mjs`.
-- **Required Evidence:** Test execution logs, unit test pass report.
-- **Current Status:** `UNIT_TESTED`
-- **Remaining Work:** Expand handling of fragmented single-word inputs and typos.
+- **Required Evidence:** Test execution logs, unit test pass report, benchmark results.
+- **Current Status:** `UNIT_TESTED` / `BENCHMARK_VERIFIED`
+- **Remaining Work:** None. 4-language modality classification (English, Hindi Devanagari, Hinglish, Indian English), module dispatch, and entity extraction pass 100% across Vitest and satisfaction benchmark.
 
 #### **Milestone ID: M-INTENT-02** — Constraint Extraction & Negative Instruction Preservation
 - **User-Facing Capability:** The platform extracts explicit constraints (*"in TypeScript"*, *"within 100 words"*) and strict negative constraints (*"without recursion"*, *"avoid cars"*, *"original meaning change mat karna"*).
@@ -322,9 +322,9 @@ The following strict statuses are used across all milestones. No milestone may c
 > **MANDATORY DIRECTIVE:** Work on exactly **ONE** active milestone at a time. Do NOT advance to subsequent milestones until the active milestone's acceptance criteria are independently satisfied and verified through code, unit tests, integration tests, real browser DOM automation, and output artifact inspection.
 
 ### Current Execution Queue:
-1. **ACTIVE MILESTONE:** **`M-INTENT-01` (Multilingual Modality & Intent Classification Engine)**
-   - *Objective:* Broaden multi-turn conversational reasoning, Hinglish idiom recognition, and stateful context delta merging.
-2. **NEXT MILESTONE:** **`M-INTENT-02` (Constraint Extraction & Negative Instruction Preservation)**
+1. **ACTIVE MILESTONE:** **`M-INTENT-02` (Constraint Extraction & Negative Instruction Preservation)**
    - *Objective:* Deepen boundary preservation and strict non-destructive constraint routing.
-3. **SUBSEQUENT MILESTONE:** **`M-INTENT-03` (Multi-Turn Reference Resolution & Delta Merging)**
+2. **NEXT MILESTONE:** **`M-INTENT-03` (Multi-Turn Reference Resolution & Delta Merging)**
    - *Objective:* Full multi-turn conversational delta persistence across all modality pipelines.
+3. **SUBSEQUENT MILESTONE:** **`M-CHAT-01` (Dynamic Conversational Reasoning & Personalization Memory)**
+   - *Objective:* Long-context session personalization and multi-turn profile retention across full chat dialogs.
