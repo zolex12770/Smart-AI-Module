@@ -170,4 +170,30 @@ Executed autonomously via [`scripts/verify-browser-chat.mjs`](file:///c:/Users/S
   3. All 4 turns rendered in sequential conversation bubbles with pristine typography, Markdown headers, and code block formatting.
   4. Real-time streaming and session state retention verified without memory degradation across turns.
 
+---
+
+## 8. Milestones M3 & M4: Tasks & Autonomous Coding Agent Workflows
+
+### 8.1 Architecture & Implementation
+The autonomous agent and coding repair loop operates across:
+- **Task Engine & DAG State Machine:** `backend/packages/agent-core/src/engine.ts` managing Directed Acyclic Graphs (DAGs) persisted in PGlite with explicit transitions (`PENDING` $\rightarrow$ `EXECUTING` $\rightarrow$ `COMPLETED` / `FAILED`).
+- **Tool Sandbox & Security Boundary:** `backend/packages/tools` running child processes inside isolated sandbox directories (`data/sandbox/workspaces/<projectId>`) with strict path resolution preventing path traversal.
+- **Verification Gate:** `backend/packages/agent-core/src/verify.ts` enforcing that a node is marked succeeded **only** when its verification step (e.g., executing the unit test suite and checking exit code 0 / `PASS`) actually passes.
+
+### 8.2 Live Browser Playwright Verification (`/tasks` & `/coding/:id`)
+Executed autonomously via [`scripts/verify-browser-tasks-and-coding.mjs`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/scripts/verify-browser-tasks-and-coding.mjs):
+1. **Task Creation from Browser UI:** Navigated to `http://localhost:3000/tasks`, selected "Fix failing test (coding agent)" via Quick Action preset (`testDir: "coding-demo"`, `testFile: "math.test.js"`), and clicked "Start task".
+2. **Automatic Route Redirection:** Browser automatically redirected to `/coding/bf89f182-2b32-4a8c-adbc-b42c776ed084`.
+3. **Autonomous Repair Loop:**
+   - **Step 1 (Diagnose):** Executed `node math.test.js` via `terminal.run_command`, capturing failure `AssertionError: Expected ANSWER to be 42`.
+   - **Step 2 (Patch):** Replaced `const ANSWER = 41;` with `const ANSWER = 42;` in `coding-demo/math.js` via `code.replace_text`.
+   - **Step 3 (Verify):** Re-ran `node math.test.js`, confirming exit code `0` and `PASS`.
+   - **Status Transition:** Task status badge transitioned to green `COMPLETED` via live SSE stream.
+4. **Task Table Persistence:** Navigated back to `http://localhost:3000/tasks`, confirming the task row persists with timestamp and `COMPLETED` badge.
+
+### 8.3 Visual Audit of Tasks & Coding Artifacts
+- Coding task detail screenshot: [`browser_coding_task_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_coding_task_verified.png).
+- Tasks table list screenshot: [`browser_tasks_dag_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_tasks_dag_verified.png).
+
+
 

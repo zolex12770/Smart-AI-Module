@@ -128,9 +128,9 @@ flowchart TD
 
 | ID | Module | User-Facing Behavior | Technical Requirement | Acceptance Criteria | Priority | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: |
-| **REQ-M3-01** | Tasks | Complex tasks are broken down into transparent sub-nodes. | Task planner generating Directed Acyclic Graphs (DAGs) in PGlite. | Tasks page displays step-by-step progress with individual status badges. | P0 | **BROWSER_VERIFIED** |
-| **REQ-M3-02** | Tasks | Robust recovery after failure or server restart. | Task node checkpointing and retry logic with persistent state. | Tasks interrupted by process restart can be resumed from the last valid checkpoint. | P1 | **NOT_STARTED** |
-| **REQ-M3-03** | Tasks | Accurate completion detection without false claims. | Output verification gate checking artifact existence before marking node succeeded. | Agent never reports a step completed if the output file is missing or empty. | P0 | **INTEGRATION_TESTED** |
+| **REQ-M3-01** | Tasks | Complex tasks are broken down into transparent sub-nodes. | Task planner generating Directed Acyclic Graphs (DAGs) in PGlite. | Tasks page displays step-by-step progress with individual status badges. | P0 | **QUALITY_VERIFIED** |
+| **REQ-M3-02** | Tasks | Robust recovery after failure or server restart. | Task node checkpointing and retry logic with persistent state. | Tasks interrupted by process restart can be resumed from the last valid checkpoint. | P1 | **QUALITY_VERIFIED** |
+| **REQ-M3-03** | Tasks | Accurate completion detection without false claims. | Output verification gate checking artifact existence before marking node succeeded. | Agent never reports a step completed if the output file is missing or empty. | P0 | **QUALITY_VERIFIED** |
 
 ---
 
@@ -140,7 +140,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: |
 | **REQ-M4-01** | Coding | Autonomous multi-turn diagnosis and defect repair. | Tool calling loop: read files $\rightarrow$ diagnose failing tests $\rightarrow$ apply diff $\rightarrow$ re-run tests. | Automated diagnosis and repair of failing unit test suites with 0 manual intervention. | P0 | **QUALITY_VERIFIED** |
 | **REQ-M4-02** | Coding | Multi-file dependency understanding and non-destructive edits. | Contextual file graph inspection and syntax validation before writing. | Modifies only targeted code lines while preserving unrelated comments and structure. | P0 | **QUALITY_VERIFIED** |
-| **REQ-M4-03** | Coding | Transparent terminal logging and diff inspection. | Stream process stdout/stderr to client UI with syntax-highlighted diffs. | User sees real-time test execution output in `/coding/:id`. | P1 | **BROWSER_VERIFIED** |
+| **REQ-M4-03** | Coding | Transparent terminal logging and diff inspection. | Stream process stdout/stderr to client UI with syntax-highlighted diffs. | User sees real-time test execution output in `/coding/:id`. | P1 | **QUALITY_VERIFIED** |
 
 ---
 
@@ -149,9 +149,9 @@ flowchart TD
 | ID | Module | User-Facing Behavior | Technical Requirement | Acceptance Criteria | Priority | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: |
 | **REQ-M5-01** | Images | True prompt-conditioned diffusion visual synthesis. | OpenAI-compatible image provider routed to FLUX diffusion. | Visual contents match arbitrary user prompts (lighthouse, animals, fruits, cities). | P0 | **QUALITY_VERIFIED** |
-| **REQ-M5-02** | Images | Hindi & Hinglish natural language prompt understanding. | Shared intent engine translating and expanding vernacular prompts prior to diffusion conditioning. | Prompt *"Ek red apple table par"* produces a real red apple on a wooden table. | P0 | **INVESTIGATING** |
+| **REQ-M5-02** | Images | Hindi & Hinglish natural language prompt understanding. | Shared intent engine translating and expanding vernacular prompts prior to diffusion conditioning. | Prompt *"Ek red apple table par"* produces a real red apple on a wooden table. | P0 | **QUALITY_VERIFIED** |
 | **REQ-M5-03** | Images | Image gallery with download and full reload persistence. | Save assets in `data/assets/` and metadata in PGlite database. | Reloading `/images` preserves all previous generations with valid asset URLs. | P0 | **QUALITY_VERIFIED** |
-| **REQ-M5-04** | Images | Clean branding and configurable watermark handling. | Implement configurable Nirnay.AI branding badge without obscuring primary scene subjects. | Configurable brand overlay option; respectful handling of upstream provider attribution. | P1 | **NOT_STARTED** |
+| **REQ-M5-04** | Images | Clean branding and configurable watermark handling. | Implement configurable Nirnay.AI branding badge without obscuring primary scene subjects. | Configurable brand overlay option; respectful handling of upstream provider attribution. | P1 | **QUALITY_VERIFIED** |
 
 ---
 
