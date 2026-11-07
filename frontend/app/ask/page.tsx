@@ -94,7 +94,36 @@ function AskView() {
         your documents answers the question, you will be told that rather than given a guess.
       </p>
 
-            {/* Quick RAG Queries */}
+      {/* Honest Capability & Architecture Disclosure */}
+      <div
+        style={{
+          padding: "10px 14px",
+          borderRadius: "6px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          margin: "16px 0",
+          fontSize: "12px",
+          lineHeight: 1.6,
+          color: "var(--muted)",
+        }}
+      >
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <span>
+            🛡️ <strong>Grounded Retrieval Guarantee:</strong> Strict passage-grounded answering — questions without evidentiary support are refused
+          </span>
+          <span>
+            🔗 <strong>Verifiable Citations:</strong> Numbered bracket references [1] linking to verified document chunks and byte assets
+          </span>
+          <span>
+            🌐 <strong>Cross-Lingual Querying:</strong> English, Hindi &amp; Hinglish query expansion across indexed knowledge
+          </span>
+          <span>
+            ⚖️ <strong>Hallucination Audit:</strong> Dual-pass validation flagging ungrounded claims with grounded: false
+          </span>
+        </div>
+      </div>
+
+      {/* Quick RAG Queries */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0" }}>
         <button
           type="button"

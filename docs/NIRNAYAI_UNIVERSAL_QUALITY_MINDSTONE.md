@@ -281,19 +281,19 @@ The following strict statuses are used across all milestones. No milestone may c
 ### Module 9: Grounded Knowledge & Cross-Lingual RAG (`M-ASK`)
 
 #### **Milestone ID: M-ASK-01** — Grounded Citations & Cross-Lingual Semantic Retrieval
-- **User-Facing Capability:** Users ask questions in English or Hindi over uploaded files, receiving factual answers with clickable numbered source citations, with strict refusal if evidence is missing.
+- **User-Facing Capability:** Users ask questions in English or Hindi over uploaded files, receiving factual answers with clickable numbered source citations, with strict refusal if evidence is missing and honest architecture disclosures.
 - **Functional Requirements:** Retrieve top-$k$ chunks; perform cross-lingual query expansion (Hindi $\rightarrow$ English); filter grounding to eliminate hallucination; display numbered source citations with distance scores; refuse ungrounded questions truthfully.
-- **Technical Requirements:** `searchDocuments` in `@ai-platform/rag`; cross-lingual expansion in `backend/src/routes/v1/rag.ts`; grounding validator in `local-model-server.mjs`.
+- **Technical Requirements:** `searchDocuments` in `@ai-platform/rag`; cross-lingual expansion in `backend/src/routes/v1/rag.ts`; grounding validator in `local-model-server.mjs`; Next.js RAG studio view in `frontend/app/ask/page.tsx` with dedicated disclosure panel.
 - **Dependencies:** `M-INTENT-01`, `M-FILES-01`.
-- **Known Failures & Limitations:** Lexical hash embedder lacks dense vector geometry for abstract synonyms.
+- **Known Failures & Limitations:** Lexical hash embedder operates in deterministic 256-dim feature-hash space in local mode.
 - **Priority:** `P0`
 - **Test Dataset:** Document Q&A on platform capabilities; cross-lingual travel policy inquiry; ungrounded quantum decryption test.
-- **Acceptance Criteria:** Relevant questions answered with numbered citations `[1]`; ungrounded questions refuse with exact string *"The provided documents do not contain the answer to this question."*
-- **Verification Method:** Playwright browser test at `/ask` and benchmark runner.
-- **Regression Tests:** `scripts/benchmark-requirement-satisfaction.mjs` Section 3.
-- **Required Evidence:** Screenshot [`browser_ask_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_ask_verified.png).
-- **Current Status:** `BROWSER_VERIFIED`
-- **Remaining Work:** Integrate local dense embedding model if memory headroom allows.
+- **Acceptance Criteria:** Relevant questions answered with numbered citations `[1]`; ungrounded questions refuse with exact string *"Your documents do not answer this question."*; honest capability disclosures displayed and verified in browser DOM.
+- **Verification Method:** Playwright browser test at `/ask`, Vitest component tests, and benchmark runner.
+- **Regression Tests:** `scripts/verify-browser-ask-disclosures.mjs`, `frontend/app/ask/page.test.tsx`, `scripts/benchmark-requirement-satisfaction.mjs` Section 3.
+- **Required Evidence:** Screenshots [`browser_ask_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_ask_disclosure_verified.png) and [`browser_ask_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_ask_verified.png).
+- **Current Status:** `ARTIFACT_VERIFIED` / `BROWSER_VERIFIED`
+- **Remaining Work:** None. Grounded Q&A, numbered bracket citations [1], cross-lingual query expansion, strict refusal on missing evidence, and honest RAG disclosures fully verified in live DOM.
 
 ---
 
@@ -322,9 +322,9 @@ The following strict statuses are used across all milestones. No milestone may c
 > **MANDATORY DIRECTIVE:** Work on exactly **ONE** active milestone at a time. Do NOT advance to subsequent milestones until the active milestone's acceptance criteria are independently satisfied and verified through code, unit tests, integration tests, real browser DOM automation, and output artifact inspection.
 
 ### Current Execution Queue:
-1. **ACTIVE MILESTONE:** **`M-ASK-01` (Cross-Lingual RAG & Grounded Retrieval)**
-   - *Objective:* Verify Hindi/Hinglish query expansion, numbered citations, and ungrounded query refusal.
-2. **NEXT MILESTONE:** **`M-INTENT-01` (Multilingual Modality & Intent Classification Engine)**
+1. **ACTIVE MILESTONE:** **`M-INTENT-01` (Multilingual Modality & Intent Classification Engine)**
    - *Objective:* Broaden multi-turn conversational reasoning, Hinglish idiom recognition, and stateful context delta merging.
-3. **SUBSEQUENT MILESTONE:** **`M-INTENT-02` (Constraint Extraction & Negative Instruction Preservation)**
+2. **NEXT MILESTONE:** **`M-INTENT-02` (Constraint Extraction & Negative Instruction Preservation)**
    - *Objective:* Deepen boundary preservation and strict non-destructive constraint routing.
+3. **SUBSEQUENT MILESTONE:** **`M-INTENT-03` (Multi-Turn Reference Resolution & Delta Merging)**
+   - *Objective:* Full multi-turn conversational delta persistence across all modality pipelines.

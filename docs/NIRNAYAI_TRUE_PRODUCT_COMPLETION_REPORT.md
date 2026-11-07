@@ -400,3 +400,17 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
   - `scripts/verify-browser-files-disclosures.mjs`: PASSED in headless Chrome.
   - Screenshots: [`browser_files_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_files_disclosure_verified.png) and [`browser_files_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_files_verified.png).
 - **Status:** **M-FILES-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.
+
+### 12.11 Milestone M-ASK-01: Grounded Citations, Cross-Lingual RAG & Hallucination Audit
+- **Grounded Verification Engine:** Dual-pass post-generation audit:
+  - If retrieved passages lack sufficient evidence, the model strictly refuses with *"Your documents do not answer this question."*
+  - Any model attempt to fabricate citations to uncited or non-existent documents is flagged with `grounded: false` and rendered as a grounding violation rather than silently accepted.
+- **Verifiable Numbered Citations:** Citations render numbered bracket references (`[1]`, `[2]`) that resolve to real underlying document assets via `/api/v1/files/:id` $\rightarrow$ `/api/v1/assets/:id` with distance scores.
+- **Cross-Lingual Semantic Retrieval:** Hindi, Hinglish, and English queries expanded across indexed vocabulary to ensure document coverage.
+- **Honest RAG Disclosures:** Enhanced [`frontend/app/ask/page.tsx`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/frontend/app/ask/page.tsx) with explicit disclosure panel covering grounded retrieval guarantees, verifiable citations, cross-lingual querying, and hallucination audits.
+- **Empirical Browser & Unit Verification:**
+  - `frontend/app/ask/page.test.tsx`: 7/7 Vitest unit tests passing.
+  - `scripts/verify-browser-ask-disclosures.mjs`: PASSED (100% verified in headless Chrome).
+  - Grounded question correctly yielded numbered citation `[1]` and excerpt; ungrounded futuristic test correctly triggered strict truthful refusal.
+  - Screenshots: [`browser_ask_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_ask_disclosure_verified.png) and [`browser_ask_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_ask_verified.png).
+- **Status:** **M-ASK-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.
