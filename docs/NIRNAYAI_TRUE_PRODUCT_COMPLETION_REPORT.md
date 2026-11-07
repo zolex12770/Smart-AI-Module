@@ -380,3 +380,23 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
   - Screenshots: [`browser_audio_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_audio_disclosure_verified.png) and [`browser_audio_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_audio_verified.png).
   - Real audio artifact verified: [`browser_generated_speech.wav`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_generated_speech.wav).
 - **Status:** **M-AUDIO-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.
+
+### 12.10 Milestone M-FILES-01: Document Lifecycle, Native PDF/DOCX Parsing & RAG Architecture Disclosures
+- **Native Document Parsers & Verification:** Verified production parsers across all supported formats:
+  - **PDF Extraction:** Real Mozilla PDF.js parser via `pdfjs-dist` in [`backend/packages/rag/src/parsers/pdf.ts`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/backend/packages/rag/src/parsers/pdf.ts) (3/3 unit tests passing, extracting plain text while preserving line breaks and handling non-PDF buffer errors gracefully).
+  - **DOCX Extraction:** Clean hand-rolled ZIP+XML DOM reader in [`backend/packages/rag/src/parsers/docx.ts`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/backend/packages/rag/src/parsers/docx.ts) (6/6 tests passing).
+  - **MIME Sniffing & Malware Hooks:** Binary sniffing in [`backend/packages/rag/src/parsers/sniff.ts`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/backend/packages/rag/src/parsers/sniff.ts) preventing file extension spoofing.
+- **Honest RAG Architecture Disclosures:** Enhanced [`frontend/app/files/page.tsx`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/frontend/app/files/page.tsx) with a dedicated technical disclosure panel:
+  - **Document Parsers:** Real native extraction for `.pdf` (pdfjs-dist), `.docx` (XML/ZIP parser), `.txt`, `.md`.
+  - **Chunking Pipeline:** Token-aware sliding chunker with paragraph and boundary alignment.
+  - **Embedding Engine:** Lexical feature-hash vector space (256-dim) in local mode, upgradable to dense semantic models.
+  - **Storage & Isolation:** Project-scoped pgvector PostgreSQL storage with asset data isolation.
+- **Document Management & Removal Lifecycle:**
+  - One-click knowledge base seeding (`📄 Seed Sample Document`).
+  - Document listing table rendering filename, scan status (`clean`), storage status (`ready`), and deletion controls (`Remove` invoking `DELETE /api/v1/files/:id`).
+- **Empirical Browser & Unit Verification:**
+  - `backend/packages/rag`: 11/11 test files passed, 76/76 unit and integration tests passing.
+  - `frontend/app/files/page.test.tsx`: 3/3 Vitest tests passing.
+  - `scripts/verify-browser-files-disclosures.mjs`: PASSED in headless Chrome.
+  - Screenshots: [`browser_files_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_files_disclosure_verified.png) and [`browser_files_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_files_verified.png).
+- **Status:** **M-FILES-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.

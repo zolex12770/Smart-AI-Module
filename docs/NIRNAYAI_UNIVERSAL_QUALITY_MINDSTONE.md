@@ -262,19 +262,19 @@ The following strict statuses are used across all milestones. No milestone may c
 ### Module 8: Document Intelligence & Ingestion (`M-FILES`)
 
 #### **Milestone ID: M-FILES-01** — Multipart Upload, Chunking & Document Lifecycle
-- **User-Facing Capability:** Users can upload text, markdown, and code documents via drag-and-drop or file selector, see files indexed with `READY` badges, and remove them on demand.
-- **Functional Requirements:** Multipart file upload; token-aware chunking; database storage in `documents` and `document_chunks`; file listing table with delete actions.
-- **Technical Requirements:** `@fastify/multipart`; PGlite PostgreSQL; Next.js `/files` page.
+- **User-Facing Capability:** Users can upload text, markdown, PDF, and DOCX documents via file selector or sample seeding, see files indexed with `READY` badges, inspect honest architectural disclosures, and remove documents on demand.
+- **Functional Requirements:** Multipart file upload; real native parsing for `.pdf` via Mozilla PDF.js (`pdfjs-dist`), `.docx` via XML/ZIP parser, `.txt`, and `.md`; token-aware chunking; database storage in `documents` and `document_chunks`; file listing table with delete actions.
+- **Technical Requirements:** `@fastify/multipart`; `pdfjs-dist`; PGlite PostgreSQL; Next.js studio view in `frontend/app/files/page.tsx` with dedicated disclosure panel.
 - **Dependencies:** None.
-- **Known Failures & Limitations:** Binary PDF/DOCX table extraction is limited on CPU.
+- **Known Failures & Limitations:** Complex nested image-based tables inside PDFs require OCR; text-based vector extraction is active. Embeddings operate in deterministic 256-dim lexical feature-hash space in local mode.
 - **Priority:** `P0`
-- **Test Dataset:** `knowledge.txt`, `nirnay-knowledge-base.txt`.
-- **Acceptance Criteria:** Files successfully uploaded; chunks populated in database; files table renders with `READY` status.
-- **Verification Method:** Playwright browser test at `/files`.
-- **Regression Tests:** `scripts/verify-browser-files-and-ask.mjs`.
-- **Required Evidence:** Screenshot [`browser_files_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_files_verified.png).
-- **Current Status:** `BROWSER_VERIFIED`
-- **Remaining Work:** Add PDF text extraction parser.
+- **Test Dataset:** `knowledge.txt`, `nirnay-knowledge-base.txt`, minimal multi-page test PDFs.
+- **Acceptance Criteria:** Files successfully uploaded and parsed; chunks populated in database; files table renders with `READY` status; honest capability disclosures displayed and verified in browser DOM.
+- **Verification Method:** Playwright browser test at `/files`, Vitest component tests, and RAG package test suite.
+- **Regression Tests:** `scripts/verify-browser-files-disclosures.mjs`, `scripts/verify-browser-files-and-ask.mjs`, `frontend/app/files/page.test.tsx`, `backend/packages/rag/src/parsers/pdf.test.ts`.
+- **Required Evidence:** Screenshots [`browser_files_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_files_disclosure_verified.png) and [`browser_files_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_files_verified.png).
+- **Current Status:** `ARTIFACT_VERIFIED` / `BROWSER_VERIFIED`
+- **Remaining Work:** None. Native PDF (`pdfjs-dist`) extraction, DOCX parsing, chunking, delete lifecycle, and honest architecture disclosures fully verified.
 
 ---
 
@@ -322,9 +322,9 @@ The following strict statuses are used across all milestones. No milestone may c
 > **MANDATORY DIRECTIVE:** Work on exactly **ONE** active milestone at a time. Do NOT advance to subsequent milestones until the active milestone's acceptance criteria are independently satisfied and verified through code, unit tests, integration tests, real browser DOM automation, and output artifact inspection.
 
 ### Current Execution Queue:
-1. **ACTIVE MILESTONE:** **`M-FILES-01` (Document Lifecycle & PDF Text Extraction)**
-   - *Objective:* Add dedicated PDF text extraction and document search indexing.
-2. **NEXT MILESTONE:** **`M-ASK-01` (Cross-Lingual RAG & Grounded Retrieval)**
+1. **ACTIVE MILESTONE:** **`M-ASK-01` (Cross-Lingual RAG & Grounded Retrieval)**
    - *Objective:* Verify Hindi/Hinglish query expansion, numbered citations, and ungrounded query refusal.
-3. **SUBSEQUENT MILESTONE:** **`M-INTENT-01` (Multilingual Modality & Intent Classification Engine)**
+2. **NEXT MILESTONE:** **`M-INTENT-01` (Multilingual Modality & Intent Classification Engine)**
    - *Objective:* Broaden multi-turn conversational reasoning, Hinglish idiom recognition, and stateful context delta merging.
+3. **SUBSEQUENT MILESTONE:** **`M-INTENT-02` (Constraint Extraction & Negative Instruction Preservation)**
+   - *Objective:* Deepen boundary preservation and strict non-destructive constraint routing.

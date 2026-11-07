@@ -110,7 +110,36 @@ export default function FilesPage() {
         </div>
       </div>
 
-              <div style={{ marginBottom: 16 }}>
+      {/* Honest Capability & Architecture Disclosure */}
+      <div
+        style={{
+          padding: "10px 14px",
+          borderRadius: "6px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          marginBottom: 16,
+          fontSize: "12px",
+          lineHeight: 1.6,
+          color: "var(--muted)",
+        }}
+      >
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <span>
+            📄 <strong>Document Parsers:</strong> Real native extraction for .pdf (pdfjs-dist), .docx (XML/ZIP parser), .txt, .md
+          </span>
+          <span>
+            🧩 <strong>Chunking Pipeline:</strong> Token-aware sliding chunker with paragraph and boundary alignment
+          </span>
+          <span>
+            🔍 <strong>Embedding Engine:</strong> Lexical feature-hash vector space (256-dim) in local mode, upgradable to dense models
+          </span>
+          <span>
+            🔒 <strong>Storage & Isolation:</strong> Project-scoped pgvector PostgreSQL storage with asset data isolation
+          </span>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
           <button
             type="button"
             className="btn btn-secondary"
