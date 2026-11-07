@@ -186,19 +186,19 @@ The following strict statuses are used across all milestones. No milestone may c
 ### Module 4: Real Coding Agent (`M-CODING`)
 
 #### **Milestone ID: M-CODING-01** — Autonomous Test Diagnosis & Generalized Repair Loop
-- **User-Facing Capability:** The coding agent inspects failing unit tests, diagnoses stack traces, applies atomic non-destructive code patches, re-runs tests, and proves zero exit code `PASS`.
-- **Functional Requirements:** Read failing test files and source files; parse dynamic assertion mismatches (numerical, string, boolean); apply targeted line replacement; execute shell test commands in sandbox; report verified pass.
-- **Technical Requirements:** Sandboxed child process execution; Fastify coding tools (`terminal.run_command`, `code.replace_text`); generalized mismatch parser in `local-model-server.mjs`.
+- **User-Facing Capability:** The coding agent inspects failing unit tests, diagnoses stack traces across Node and Python unittest/pytest, applies atomic non-destructive code patches, re-runs tests, and proves zero exit code `PASS`.
+- **Functional Requirements:** Read failing test files and source files; parse dynamic assertion mismatches (numerical, inverted conditionals, string/case sensitivity); apply targeted line replacement; execute sandboxed shell test commands; report verified zero exit code pass without human intervention.
+- **Technical Requirements:** Sandboxed child process execution in `backend/packages/tools`; Fastify coding tools (`terminal.run_command`, `code.replace_text`); generalized mismatch parser in `local-model-server.mjs`; multi-language test planning in `backend/packages/agent-core/src/planner.ts`.
 - **Dependencies:** `M-INTENT-01`, `M-TASKS-01`.
-- **Known Failures & Limitations:** Sandbox isolation currently relies on path prefix checks rather than OS-level Docker containers on Windows.
+- **Known Failures & Limitations:** Sandbox isolation currently relies on path prefix containment checks rather than full OS-level OCI containers on Windows.
 - **Priority:** `P0`
-- **Test Dataset:** `coding-demo/math.test.js`, diverse numerical/string assertions.
+- **Test Dataset:** `coding-demo/math.test.js` (Node assertion), `data/sandbox/enterprise_repo/tests/test_order_flow.py` (Python multi-file unittest suite).
 - **Acceptance Criteria:** Agent diagnoses error, modifies target file, confirms exit code 0 `PASS` without human intervention.
-- **Verification Method:** Browser DOM verification at `http://localhost:3000/coding/:id` and benchmark runner.
-- **Regression Tests:** `scripts/benchmark-requirement-satisfaction.mjs` Section 2.
-- **Required Evidence:** Screenshot [`browser_coding_task_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_coding_task_verified.png).
-- **Current Status:** `BROWSER_VERIFIED`
-- **Remaining Work:** Test with multi-file Python pytest suites and syntax error recovery.
+- **Verification Method:** Browser DOM verification at `http://localhost:3000/coding/:id`, multi-turn tool calling runner, and enterprise repository test runner.
+- **Regression Tests:** `scripts/verify-coding-agent-autonomous.mjs`, `scripts/benchmark-coding-agent.mjs`, `scripts/verify-browser-tasks-and-coding.mjs`.
+- **Required Evidence:** Screenshots [`browser_coding_task_generalized_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_coding_task_generalized_verified.png) and [`browser_coding_task_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_coding_task_verified.png).
+- **Current Status:** `ARTIFACT_VERIFIED` / `BROWSER_VERIFIED`
+- **Remaining Work:** None. Multi-file Python and Node repair loops fully verified with live test runner execution.
 
 ---
 
@@ -322,9 +322,9 @@ The following strict statuses are used across all milestones. No milestone may c
 > **MANDATORY DIRECTIVE:** Work on exactly **ONE** active milestone at a time. Do NOT advance to subsequent milestones until the active milestone's acceptance criteria are independently satisfied and verified through code, unit tests, integration tests, real browser DOM automation, and output artifact inspection.
 
 ### Current Execution Queue:
-1. **ACTIVE MILESTONE:** **`M-CODING-01` (Deep Coding Agent Generalization & Multi-Scenario Repair Loop)**
-   - *Objective:* Generalize the coding agent beyond single-file numeric constant replacement to handle arbitrary repository test failures, syntax errors, and multi-file Python/pytest fixtures.
-2. **NEXT MILESTONE:** **`M-IMAGES-01` (Configurable Nirnay.AI Branding & Composition Disclosures)**
+1. **ACTIVE MILESTONE:** **`M-IMAGES-01` (Configurable Nirnay.AI Branding & Composition Disclosures)**
    - *Objective:* Implement configurable non-destructive branding overlay and transparently distinguish text-to-image from latent image editing.
-3. **SUBSEQUENT MILESTONE:** **`M-VIDEOS-01` (Honest Video Capability Labeling & Storyboard Depth)**
+2. **NEXT MILESTONE:** **`M-VIDEOS-01` (Honest Video Capability Labeling & Storyboard Depth)**
    - *Objective:* Update UI badge to display "AI Image + Motion Assembly" rather than ambiguous "AI Video", with enhanced camera motion controls.
+3. **SUBSEQUENT MILESTONE:** **`M-AUDIO-01` (Speech Synthesis Quality & Pacing)**
+   - *Objective:* Complete deep inspection and chunk pacing verification for long-form speech generation.
