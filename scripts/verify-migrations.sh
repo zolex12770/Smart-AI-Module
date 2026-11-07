@@ -87,7 +87,9 @@ if [ -n "${OUT:-}" ]; then
   else
     MISSING=""
     for t in $TABLES; do
-      echo "$OUT" | grep -q "\"$t\"" || MISSING="$MISSING $t"
+      # A here-string, not `echo | grep -q`: under pipefail grep -q's early exit can SIGPIPE the
+      # echo, and the table would be reported missing although it exists.
+      grep -q "\"$t\"" <<<"$OUT" || MISSING="$MISSING $t"
     done
     if [ -z "$MISSING" ]; then
       ok "all $COUNT tables declared in the schema exist after migration"

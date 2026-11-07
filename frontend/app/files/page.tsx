@@ -13,6 +13,29 @@ export default function FilesPage() {
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
+    async function handleSeedKnowledge() {
+    setUploading(true);
+    setError(null);
+    try {
+      const sampleText = "NirnayAI Universal AI Agent Platform\n\n" +
+        "NirnayAI is a fully independent, self-hosted multimodal autonomous AI platform.\n" +
+        "Capabilities include:\n" +
+        "1. Real Chat reasoning using local Qwen 2.5 and compatible models.\n" +
+        "2. Deterministic and autonomous task engine with human approval gates.\n" +
+        "3. Coding agent with test-driven fix loop and rollback safety.\n" +
+        "4. Offline speech synthesis via Windows SAPI and Piper TTS.\n" +
+        "5. Secure Document RAG with vector search and verifiable citations.\n";
+      const blob = new Blob([sampleText], { type: "text/plain" });
+      const file = new File([blob], "nirnay-knowledge-base.txt", { type: "text/plain" });
+      await uploadFile(file);
+      refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function handleUpload(e: React.FormEvent) {
     e.preventDefault();
     const file = fileInput.current?.files?.[0];
@@ -86,6 +109,47 @@ export default function FilesPage() {
           </p>
         </div>
       </div>
+
+      {/* Honest Capability & Architecture Disclosure */}
+      <div
+        style={{
+          padding: "10px 14px",
+          borderRadius: "6px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          marginBottom: 16,
+          fontSize: "12px",
+          lineHeight: 1.6,
+          color: "var(--muted)",
+        }}
+      >
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <span>
+            📄 <strong>Document Parsers:</strong> Real native extraction for .pdf (pdfjs-dist), .docx (XML/ZIP parser), .txt, .md
+          </span>
+          <span>
+            🧩 <strong>Chunking Pipeline:</strong> Token-aware sliding chunker with paragraph and boundary alignment
+          </span>
+          <span>
+            🔍 <strong>Embedding Engine:</strong> Lexical feature-hash vector space (256-dim) in local mode, upgradable to dense models
+          </span>
+          <span>
+            🔒 <strong>Storage & Isolation:</strong> Project-scoped pgvector PostgreSQL storage with asset data isolation
+          </span>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={uploading}
+            onClick={handleSeedKnowledge}
+            style={{ fontSize: "13px", padding: "6px 14px", fontWeight: 600 }}
+          >
+            {uploading ? "Ingesting Knowledge Base…" : "📄 Seed Sample Document (nirnay-knowledge-base.txt)"}
+          </button>
+        </div>
 
       <form className="card" onSubmit={handleUpload}>
         <div className="form-row">

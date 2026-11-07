@@ -93,6 +93,52 @@ export default function ImagesPage() {
         </div>
       </div>
 
+      {imageProvider?.available && !imageProvider.isMock && (
+        <div
+          style={{
+            padding: "10px 14px",
+            borderRadius: "6px",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            marginBottom: 16,
+            fontSize: "12px",
+            lineHeight: 1.6,
+            color: "var(--muted)",
+          }}
+        >
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <span>
+              ⚡ <strong>Inference Host:</strong> Remote Cloud Diffusion (Pollinations FLUX.1 on dedicated GPU clusters; not local integrated graphics)
+            </span>
+            <span>
+              🎨 <strong>Synthesis Mode:</strong> Text-to-Image Diffusion Latents
+            </span>
+            <span>
+              🌸 <strong>Watermark Disclosure:</strong> Free-tier output carries upstream <code>pollinations.ai</code> watermark
+            </span>
+          </div>
+        </div>
+      )}
+
+            {/* Provider Configuration Notice */}
+      {unavailable && (
+        <div
+          style={{
+            padding: "12px 16px",
+            borderRadius: "6px",
+            background: "color-mix(in srgb, #2563eb 8%, transparent)",
+            border: "1px solid #2563eb",
+            marginBottom: 16,
+            fontSize: "13px",
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>ℹ️ Image Generation Provider Status:</strong> Image synthesis is not configured on this deployment.
+          To activate real local diffusion, configure <code>IMAGE_SD_CLI_PATH</code> or <code>IMAGE_BASE_URL</code> (docs/MEDIA.md).
+          The application safely blocks execution when no model is attached to prevent silent mock generation.
+        </div>
+      )}
+
       <form className="card" onSubmit={handleSubmit}>
         <div className="form-row">
           <label style={{ flex: 1, minWidth: 240 }}>

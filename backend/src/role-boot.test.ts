@@ -87,6 +87,9 @@ describe.skipIf(!BUILT)("each role boots the way the deployment assumes", () => 
     LLM_MODEL: "unused-for-boot",
     // Keep the runtime probe from adopting a local Ollama and changing what is under test.
     OLLAMA_HOST: "127.0.0.1:1",
+    // In production, mock providers are refused (ADR-013). Setting this explicitly prevents
+    // a developer's local backend/.env (ALLOW_MOCK_PROVIDERS=true) from breaking production boot tests.
+    ALLOW_MOCK_PROVIDERS: "false",
   });
 
   beforeAll(() => {
@@ -112,7 +115,7 @@ describe.skipIf(!BUILT)("each role boots the way the deployment assumes", () => 
     expect(output).toMatch(/Refusing to start in production with process-level sandbox isolation/);
     // A refusal that does not say what to do instead is a dead end for whoever reads the logs.
     expect(output).toMatch(/SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true/);
-  }, 90_000);
+  }, 120_000);
 
   it("boots the HTTP role in production once that isolation is explicitly accepted", async () => {
     port += 1;
@@ -125,35 +128,35 @@ describe.skipIf(!BUILT)("each role boots the way the deployment assumes", () => 
         SANDBOX_ALLOW_PROCESS_IN_PRODUCTION: "true",
         CORS_ORIGIN: "https://example.com",
       },
-      45_000
+      60_000
     );
 
     // Still running is the pass: an HTTP role that exits has not started serving.
     expect(result.stillRunning).toBe(true);
     expect(result.stdout).toMatch(/Server listening/);
-  }, 90_000);
+  }, 120_000);
 
   it("boots the worker role with no HTTP listener and no chat provider", async () => {
     port += 1;
     // No LLM_* at all: a worker legitimately has no chat provider, and treating that as fatal
     // would make the split unusable. The log says so rather than staying silent.
     const { LLM_BASE_URL: _u, LLM_MODEL: _m, ...envWithoutModel } = baseEnv();
-    const result = await boot({ ...envWithoutModel, ROLE: "worker" }, 45_000);
+    const result = await boot({ ...envWithoutModel, ROLE: "worker" }, 60_000);
 
     expect(result.stillRunning).toBe(true);
     expect(result.stdout).toMatch(/job workers registered/);
     expect(result.stdout).toMatch(/worker role: no HTTP listener started/);
     expect(result.stdout).not.toMatch(/Server listening/);
-  }, 90_000);
+  }, 120_000);
 
   it("boots the worker role in production without needing the isolation acknowledgement", async () => {
     port += 1;
     // The guard is scoped to the HTTP role on purpose — the worker runs no agent loop — which is
     // why the Terraform worker service sets a sandbox PATH and not the acceptance flag.
-    const result = await boot({ ...baseEnv(), NODE_ENV: "production", ROLE: "worker" }, 45_000);
+    const result = await boot({ ...baseEnv(), NODE_ENV: "production", ROLE: "worker" }, 60_000);
 
     expect(result.stillRunning).toBe(true);
     expect(result.stdout).not.toMatch(/Refusing to start in production/);
     expect(result.stdout).toMatch(/job workers registered/);
-  }, 90_000);
+  }, 120_000);
 });

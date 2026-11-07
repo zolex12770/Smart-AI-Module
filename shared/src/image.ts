@@ -6,7 +6,7 @@ import { z } from "zod";
  * load-bearing per that doc: no two real providers support the same parameter set, so
  * callers check capabilities rather than assuming a parameter is honored.
  */
-export const aspectRatioSchema = z.enum(["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"]);
+export const aspectRatioSchema = z.enum(["1:1", "3:2", "2:3", "4:3", "3:4", "16:9", "9:16"] as const);
 export type AspectRatio = z.infer<typeof aspectRatioSchema>;
 
 export const imageGenerationRequestSchema = z.object({
@@ -14,7 +14,7 @@ export const imageGenerationRequestSchema = z.object({
   negativePrompt: z.string().optional(),
   aspectRatio: aspectRatioSchema.default("1:1"),
   seed: z.number().int().optional(),
-  quality: z.enum(["fast", "standard", "high"]).default("fast"),
+  quality: z.enum(["fast", "standard", "high"] as const).default("fast"),
 });
 export type ImageGenerationRequest = z.infer<typeof imageGenerationRequestSchema>;
 

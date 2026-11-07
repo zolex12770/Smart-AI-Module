@@ -86,7 +86,7 @@ const optionalPositiveInt = z.preprocess(
  * `.shape`. `SECRET_CONFIG_KEYS` is derived from the keys, so the keys need a name.
  */
 const envFields = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  NODE_ENV: z.enum(["development", "test", "production"] as const).default("development"),
   /**
    * The interface to listen on — docs/26_DECISIONS.md ADR-113. Unset: 127.0.0.1 outside production
    * and 0.0.0.0 in production. It used to be 0.0.0.0 always, so a developer's `npm run dev` served
@@ -107,7 +107,7 @@ const envFields = z.object({
   // Defaults to "all" so local dev (where PGlite permits only one process per data dir,
   // ADR-025) keeps working unchanged; Cloud Run sets "api" on the service and "worker" on
   // the worker pool (infrastructure/terraform/main.tf).
-  ROLE: z.enum(["all", "api", "worker"]).default("all"),
+  ROLE: z.enum(["all", "api", "worker"] as const).default("all"),
   // Real PostgreSQL via PGlite (docs/26_DECISIONS.md ADR-025) — a directory, not a
   // single file, since Postgres persists multiple files there.
   DATABASE_DIR: z.string().default("./data/pgdata"),
@@ -139,13 +139,13 @@ const envFields = z.object({
   CLAMD_HOST: optionalString,
   CLAMD_PORT: z.coerce.number().int().positive().default(3310),
   // Not z.coerce.boolean(): that treats the string "false" as true.
-  UPLOAD_SCAN_REQUIRED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  UPLOAD_SCAN_REQUIRED: z.enum(["true", "false"] as const).default("false").transform((v) => v === "true"),
   // docs/26_DECISIONS.md ADR-030: the long-form video render stage shells out to a system
   // ffmpeg binary rather than bundling one via npm. Defaults to resolving "ffmpeg" on PATH;
   // override for an environment where it's installed somewhere non-standard.
   FFMPEG_PATH: z.string().default("ffmpeg"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
-  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
+  LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"] as const).default("info"),
 
   // --- Self-hosted / provider-neutral model runtime (ADR-056) --------------------------
   // Any OpenAI-compatible `/v1` endpoint: Ollama, vLLM, llama.cpp, LM Studio, or a gateway.
@@ -157,7 +157,7 @@ const envFields = z.object({
    * user after a restart waits for a multi-gigabyte load — measured at over five minutes from a
    * cold disk, long enough for Ollama's own load deadline to fail the request.
    */
-  LLM_WARMUP: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  LLM_WARMUP: z.enum(["true", "false"] as const).default("true").transform((v) => v === "true"),
   /**
    * How long the boot warm-up waits for the local model to load (DL-22). Only the warm-up uses
    * it; ordinary calls keep the adapter's 300-second silence deadline. A cold load of a 7B model
@@ -199,7 +199,7 @@ const envFields = z.object({
    * because the useful direction of a network restriction is naming what IS permitted.
    */
   WEB_FETCH_ALLOWLIST: optionalString,
-  LLM_SUPPORTS_TOOLS: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  LLM_SUPPORTS_TOOLS: z.enum(["true", "false"] as const).default("true").transform((v) => v === "true"),
   /**
    * Whether the deterministic MOCK providers — a canned chat model, a labelled placeholder
    * image, an animated GIF standing in for video — may be registered at all.
@@ -211,7 +211,7 @@ const envFields = z.object({
    * and the E2E server, which need deterministic providers to exercise the UI, set it
    * explicitly. Refused in production below.
    */
-  ALLOW_MOCK_PROVIDERS: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  ALLOW_MOCK_PROVIDERS: z.enum(["true", "false"] as const).default("false").transform((v) => v === "true"),
   // Embeddings from the same runtime — real semantic retrieval with no hosted provider.
   EMBEDDING_BASE_URL: optionalString,
   EMBEDDING_MODEL: optionalString,
@@ -225,8 +225,8 @@ const envFields = z.object({
   IMAGE_BASE_URL: optionalString,
   IMAGE_MODEL: optionalString,
   IMAGE_API_KEY: optionalString,
-  IMAGE_SUPPORTS_NEGATIVE_PROMPT: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
-  IMAGE_SUPPORTS_SEED: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  IMAGE_SUPPORTS_NEGATIVE_PROMPT: z.enum(["true", "false"] as const).default("false").transform((v) => v === "true"),
+  IMAGE_SUPPORTS_SEED: z.enum(["true", "false"] as const).default("false").transform((v) => v === "true"),
   /**
    * Longest edge for the OpenAI-compatible image adapter, in pixels — ADR-129.
    *
@@ -252,7 +252,7 @@ const envFields = z.object({
   // offline synthesiser and needs no server at all, but exists only on Windows. Unset means the
   // pipeline renders WITHOUT narration and says so (`audioStatus: skipped_no_narration`) rather
   // than muxing silence and calling it a voice-over.
-  SPEECH_PROVIDER: z.enum(["openai", "sapi", "piper", "none"]).default("none"),
+  SPEECH_PROVIDER: z.enum(["openai", "sapi", "piper", "none"] as const).default("none"),
   SPEECH_BASE_URL: optionalString,
   SPEECH_MODEL: optionalString,
   SPEECH_API_KEY: optionalString,
@@ -268,7 +268,7 @@ const envFields = z.object({
   // so the deployment has to say WHICH one. `replicate` is the only implementation today;
   // an unrecognised name fails the boot rather than being ignored into a silent no-capability
   // state, which is the whole point of parsing configuration here.
-  VIDEO_PROVIDER: z.enum(["replicate"]).optional(),
+  VIDEO_PROVIDER: z.enum(["replicate"] as const).optional(),
   VIDEO_API_TOKEN: optionalString,
   // Replicate pins a model VERSION hash, not a model name — the same name republished is a
   // different model with different inputs, so reproducibility depends on the exact version.
@@ -294,7 +294,7 @@ const envFields = z.object({
 
   // --- Security (ADR-049 / ADR-055) -----------------------------------------------------
   // Session cookies are Secure in production; this allows plain HTTP for local development.
-  COOKIE_SECURE: z.enum(["true", "false"]).optional(),
+  COOKIE_SECURE: z.enum(["true", "false"] as const).optional(),
   /**
    * How the session cookie is scoped across sites — docs/26_DECISIONS.md ADR-070.
    *
@@ -307,7 +307,7 @@ const envFields = z.object({
    * otherwise (local development over plain HTTP, where the two run on the same host and
    * `None` would be rejected for not being Secure).
    */
-  COOKIE_SAMESITE: z.enum(["lax", "none", "strict"]).optional(),
+  COOKIE_SAMESITE: z.enum(["lax", "none", "strict"] as const).optional(),
   /**
    * Attempts per 10 minutes, per IP, for signup and login — docs/26_DECISIONS.md ADR-070.
    *
@@ -327,9 +327,9 @@ const envFields = z.object({
   SESSION_TTL_DAYS: z.coerce.number().int().positive().max(365).default(30),
   // `docker` gives real container isolation for agent-run commands; `process` is the
   // development fallback and is refused in production unless explicitly acknowledged.
-  SANDBOX_RUNTIME: z.enum(["docker", "process"]).default("process"),
+  SANDBOX_RUNTIME: z.enum(["docker", "process"] as const).default("process"),
   SANDBOX_IMAGE: z.string().default("node:22-alpine"),
-  SANDBOX_ALLOW_PROCESS_IN_PRODUCTION: z.enum(["true", "false"]).default("false").transform((v) => v === "true"),
+  SANDBOX_ALLOW_PROCESS_IN_PRODUCTION: z.enum(["true", "false"] as const).default("false").transform((v) => v === "true"),
   SANDBOX_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   SANDBOX_MEMORY_MB: z.coerce.number().int().positive().default(512),
   /**
@@ -341,7 +341,7 @@ const envFields = z.object({
    * token may reasonably decide the recall is not worth doubling the calls, and that decision
    * should not require a code change.
    */
-  MEMORY_EXTRACTION_ENABLED: z.enum(["true", "false"]).default("true").transform((v) => v === "true"),
+  MEMORY_EXTRACTION_ENABLED: z.enum(["true", "false"] as const).default("true").transform((v) => v === "true"),
   // Bootstrap the first administrator on an empty database. Ignored once any user exists.
   BOOTSTRAP_ADMIN_EMAIL: optionalString,
   BOOTSTRAP_ADMIN_PASSWORD: optionalString,

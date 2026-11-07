@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 
 /**
@@ -11,7 +12,10 @@ import { defineConfig, devices } from "@playwright/test";
  * match the version this Playwright release would download. Pointing at it is better than
  * failing to run E2E at all.
  */
-const chromiumPath = process.env.PLAYWRIGHT_CHROMIUM_PATH;
+const defaultWindowsChrome = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+const chromiumPath =
+  process.env.PLAYWRIGHT_CHROMIUM_PATH ??
+  (process.platform === "win32" && existsSync(defaultWindowsChrome) ? defaultWindowsChrome : undefined);
 
 export default defineConfig({
   testDir: "./e2e",

@@ -125,4 +125,11 @@ describe("Audio page", () => {
       expect(String(post?.[0])).toContain("/api/v1/audio/gen-1/cancel");
     });
   });
+  it("renders honest speech synthesis architecture and technical disclosures", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => json({ generations: [] })));
+    render(<AudioPage />);
+    expect(screen.getByText(/Windows SAPI 5\.4 \/ Native Local OS Speech/i)).toBeInTheDocument();
+    expect(screen.getByText(/Local Deterministic Audio Subsystem/i)).toBeInTheDocument();
+    expect(screen.getByText(/16-bit PCM Linear RIFF WAV Container/i)).toBeInTheDocument();
+  });
 });

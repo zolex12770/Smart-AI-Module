@@ -11,7 +11,7 @@ import { z } from "zod";
  * itself rather than in any one adapter.
  */
 
-export const chatRoleSchema = z.enum(["system", "user", "assistant", "tool"]);
+export const chatRoleSchema = z.enum(["system", "user", "assistant", "tool"] as const);
 export type ChatRole = z.infer<typeof chatRoleSchema>;
 
 /** A tool invocation the MODEL asked for. `arguments` is already JSON-parsed. */
@@ -43,7 +43,7 @@ export const toolSpecSchema = z.object({
 });
 export type ToolSpec = z.infer<typeof toolSpecSchema>;
 
-export const toolChoiceSchema = z.enum(["auto", "none", "required"]);
+export const toolChoiceSchema = z.enum(["auto", "none", "required"] as const);
 export type ToolChoice = z.infer<typeof toolChoiceSchema>;
 
 export const chatRequestSchema = z.object({
@@ -62,7 +62,7 @@ export const chatRequestSchema = z.object({
    * Providers with no such mode (Anthropic) ignore it, so a caller still validates what comes
    * back. It is a guarantee about SYNTAX only; the shape is still the caller's to check.
    */
-  responseFormat: z.enum(["text", "json_object"]).optional(),
+  responseFormat: z.enum(["text", "json_object"] as const).optional(),
 });
 export type ChatRequest = z.infer<typeof chatRequestSchema>;
 

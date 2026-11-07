@@ -740,7 +740,11 @@ export function registerChatRoute(app: FastifyInstance, ctx: AppContext): void {
                 "chat stream failed"
               );
               await recordPartialUsage("provider_error");
-              send({ type: "error", message: "The model provider failed to respond. Please try again." });
+              const errorMessage =
+                err instanceof Error && err.message
+                  ? err.message
+                  : "The model provider failed to respond. Please check provider configuration and try again.";
+              send({ type: "error", message: errorMessage });
             }
           }
         );

@@ -4,8 +4,9 @@ import { SessionProvider } from "./lib/session-context";
 import { AppChrome } from "./lib/app-chrome";
 
 export const metadata: Metadata = {
-  title: "AI Agent Platform",
-  description: "Chat, agent tasks, coding agent, image/video generation, RAG, and memory",
+  title: "NirnayAI — Independent Autonomous AI Platform",
+  description:
+    "Fully independent, self-hosted, multimodal autonomous AI platform with local models, persistent memory, coding agent, document intelligence, and privacy-first architecture.",
 };
 
 /**

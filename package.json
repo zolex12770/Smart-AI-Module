@@ -2,6 +2,15 @@
   "name": "ai-agent-platform",
   "private": true,
   "version": "0.1.0",
+  "overrides": {
+    "body-parser": "2.4.0",
+    "zod": "4.6.7",
+    "fast-uri": "4.2.3",
+    "ajv": {
+      "fast-uri": "3.1.9"
+    },
+    "ip-address": "10.7.5"
+  },
   "workspaces": [
     "frontend",
     "backend",
@@ -29,6 +38,7 @@
     "setup": "node scripts/setup.mjs",
     "doctor": "node scripts/doctor.mjs",
     "test:e2e": "npm run test:e2e --workspace=@ai-platform/web",
+    "benchmark": "node scripts/benchmark-suite.mjs",
     "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {

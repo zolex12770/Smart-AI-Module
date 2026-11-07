@@ -23,6 +23,8 @@ import {
   type TokenUsage,
   type ToolCall,
   type ToolCallResult,
+  TERMINAL_TASK_STATES,
+  isValidTaskTransition,
 } from "@ai-platform/shared";
 import { v4 as uuid } from "uuid";
 import { noEditYetNotice } from "./edit-progress.js";
@@ -33,7 +35,7 @@ import { UNTRUSTED_CONTENT_SYSTEM_PROMPT, wrapUntrustedContent } from "./trust-b
 import { verifyNodeOutput, type TestSuiteSpec, type VerificationContext } from "./verify.js";
 import { withSpan } from "@ai-platform/observability";
 
-const TERMINAL_TASK_STATES = ["COMPLETED", "FAILED", "CANCELLED"] as const;
+// TERMINAL_TASK_STATES imported from @ai-platform/shared
 const TERMINAL_NODE_STATUSES = ["completed", "failed", "cancelled", "skipped"] as const;
 
 /**
@@ -1793,8 +1795,22 @@ export class AgentEngine {
   private async finalizeTask(taskId: string, nodes: TaskNodeRecord[]): Promise<void> {
     const failed = nodes.find((n) => n.status === "failed");
     if (failed) {
-      await this.transitionTask(taskId, "FAILED", "engine", { errorMessage: failed.errorMessage });
-      this.emit(taskId, { type: "failed", taskId, error: failed.errorMessage ?? "Task failed." });
+      const anyCompleted = nodes.some((n) => n.status === "completed");
+      const targetState = anyCompleted ? "PARTIALLY_COMPLETED" : "FAILED";
+      await this.transitionTask(taskId, targetState, "engine", { errorMessage: failed.errorMessage });
+      if (anyCompleted) {
+        this.emit(taskId, {
+          type: "partially_completed",
+          taskId,
+          error: failed.errorMessage ?? "Task partially completed with node failures.",
+        });
+      } else {
+        this.emit(taskId, {
+          type: "failed",
+          taskId,
+          error: failed.errorMessage ?? "Task failed.",
+        });
+      }
       return;
     }
 
@@ -2060,6 +2076,12 @@ export class AgentEngine {
     if (updated) this.emit(node.rootTaskId, { type: "node", taskId: node.rootTaskId, node: updated });
   }
 
+  async blockTask(taskId: string, reason: string, actor = "engine"): Promise<void> {
+    await this.runExclusive(taskId, async () => {
+      await this.transitionTask(taskId, "BLOCKED", actor, { reason });
+    });
+  }
+
   private async transitionTask(
     taskId: string,
     toState: Task["state"],
@@ -2068,6 +2090,14 @@ export class AgentEngine {
     output?: Record<string, unknown>
   ): Promise<void> {
     const current = await this.deps.taskRepo.getUnscoped(taskId);
+    if (current && (TERMINAL_TASK_STATES as readonly string[]).includes(current.state)) {
+      // Terminal states are permanent: prevent state corruption
+      return;
+    }
+    if (current && !isValidTaskTransition(current.state, toState)) {
+      // Guard against illegal state machine transitions
+      return;
+    }
     await this.deps.taskRepo.updateState(taskId, toState, {
       output,
       errorMessage: patch?.errorMessage,

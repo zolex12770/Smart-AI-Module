@@ -12,21 +12,21 @@ import { z } from "zod";
  */
 
 /** Organization-wide role. `owner` is the only role that can delete the organization. */
-export const orgRoleSchema = z.enum(["owner", "admin", "member"]);
+export const orgRoleSchema = z.enum(["owner", "admin", "member"] as const);
 export type OrgRole = z.infer<typeof orgRoleSchema>;
 
 /** Per-project role. `viewer` is read-only; `editor` may run agents and spend quota. */
-export const projectRoleSchema = z.enum(["admin", "editor", "viewer"]);
+export const projectRoleSchema = z.enum(["admin", "editor", "viewer"] as const);
 export type ProjectRole = z.infer<typeof projectRoleSchema>;
 
-export const accountStatusSchema = z.enum(["active", "suspended", "deleted"]);
+export const accountStatusSchema = z.enum(["active", "suspended", "deleted"] as const);
 export type AccountStatus = z.infer<typeof accountStatusSchema>;
 
 /**
  * The permission vocabulary. Every protected route names the permission it needs, so a
  * route's authorization requirement is declared at the route rather than inferred.
  */
-export const permissionSchema = z.enum([
+ export const permissionSchema = z.enum([
   "project:read",
   "project:write",
   "project:admin",
@@ -43,7 +43,7 @@ export const permissionSchema = z.enum([
   "usage:read",
   "apikey:manage",
   "org:admin",
-]);
+] as const);
 export type Permission = z.infer<typeof permissionSchema>;
 
 const VIEWER: Permission[] = ["project:read", "files:read", "memory:read", "usage:read"];

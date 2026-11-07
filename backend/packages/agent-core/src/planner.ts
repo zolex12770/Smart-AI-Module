@@ -323,6 +323,11 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
     throw new Error('planTask: a "fix_failing_test" task requires a non-empty `testFile`.');
   }
 
+  const isPython = testFile.endsWith(".py");
+  const defaultCommand = isPython ? "python" : "node";
+  const command = typeof input.testCommand === "string" && input.testCommand.trim() ? input.testCommand.trim() : defaultCommand;
+  const args = Array.isArray(input.testArgs) ? (input.testArgs as string[]) : [testFile];
+
   for (const toolId of CODING_AGENT_REQUIRED_TOOLS) requireTool(toolId, lookupTool);
   const allowedTools = [
     ...CODING_AGENT_REQUIRED_TOOLS,
@@ -340,7 +345,7 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
   const goal = [
     `A test in this workspace is failing. Fix the code so that it passes.`,
     ``,
-    `The test is run as: node ${testFile}`,
+    `The test is run as: ${command} ${args.join(" ")}`,
     `Working directory, relative to the workspace root: ${testDir}`,
     ``,
     `Work in this loop, and do not stop before the test is green:`,
@@ -373,7 +378,7 @@ function planFixFailingTest(input: Record<string, unknown>, lookupTool: ToolLook
       // turns, and the loop's own iteration and token limits are the real bound.
       timeoutMs: 10 * 60_000,
       verificationMethod: "test_suite",
-      verificationSpec: { command: "node", args: [testFile], workspaceRoot: testDir, timeoutMs: 60_000 },
+      verificationSpec: { command, args, workspaceRoot: testDir, timeoutMs: 60_000 },
       approvalRequired: PLANNER_LEVEL_APPROVAL_REQUIRED,
     },
   ];

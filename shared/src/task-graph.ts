@@ -22,11 +22,56 @@ export const taskStateSchema = z.enum([
   "VERIFYING",
   "RETRYING",
   "PAUSED",
+  "BLOCKED",
   "CANCELLED",
+  "PARTIALLY_COMPLETED",
   "COMPLETED",
   "FAILED",
-]);
+] as const);
 export type TaskState = z.infer<typeof taskStateSchema>;
+
+export const TERMINAL_TASK_STATES = [
+  "COMPLETED",
+  "PARTIALLY_COMPLETED",
+  "FAILED",
+  "BLOCKED",
+  "CANCELLED",
+] as const;
+
+export const LEGAL_TASK_TRANSITIONS: Record<TaskState, readonly TaskState[]> = {
+  IDLE: ["UNDERSTANDING", "PLANNING", "EXECUTING", "CANCELLED", "BLOCKED"],
+  UNDERSTANDING: ["PLANNING", "EXECUTING", "FAILED", "CANCELLED", "BLOCKED"],
+  PLANNING: ["WAITING_FOR_APPROVAL", "EXECUTING", "FAILED", "CANCELLED", "BLOCKED"],
+  WAITING_FOR_APPROVAL: ["EXECUTING", "PAUSED", "CANCELLED", "BLOCKED", "FAILED"],
+  EXECUTING: [
+    "WAITING_FOR_APPROVAL",
+    "WAITING_FOR_MODEL",
+    "WAITING_FOR_TOOL",
+    "VERIFYING",
+    "RETRYING",
+    "PAUSED",
+    "BLOCKED",
+    "PARTIALLY_COMPLETED",
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+  ],
+  WAITING_FOR_MODEL: ["EXECUTING", "WAITING_FOR_TOOL", "RETRYING", "FAILED", "CANCELLED", "BLOCKED"],
+  WAITING_FOR_TOOL: ["EXECUTING", "WAITING_FOR_APPROVAL", "RETRYING", "FAILED", "CANCELLED", "BLOCKED"],
+  VERIFYING: ["EXECUTING", "COMPLETED", "PARTIALLY_COMPLETED", "FAILED", "RETRYING", "CANCELLED"],
+  RETRYING: ["EXECUTING", "FAILED", "PARTIALLY_COMPLETED", "CANCELLED", "BLOCKED"],
+  PAUSED: ["EXECUTING", "CANCELLED", "FAILED"],
+  BLOCKED: ["EXECUTING", "CANCELLED", "FAILED"],
+  COMPLETED: [],
+  PARTIALLY_COMPLETED: [],
+  FAILED: [],
+  CANCELLED: [],
+};
+
+export function isValidTaskTransition(from: TaskState, to: TaskState): boolean {
+  if (from === to) return true;
+  return LEGAL_TASK_TRANSITIONS[from]?.includes(to) ?? false;
+}
 
 export const nodeStatusSchema = z.enum([
   "pending",
@@ -43,7 +88,7 @@ export const nodeStatusSchema = z.enum([
   "failed",
   "cancelled",
   "skipped",
-]);
+] as const);
 export type NodeStatus = z.infer<typeof nodeStatusSchema>;
 
 export const nodeTypeSchema = z.enum([
@@ -53,7 +98,7 @@ export const nodeTypeSchema = z.enum([
   "conditional",
   "loop",
   "sub_agent",
-]);
+] as const);
 export type NodeType = z.infer<typeof nodeTypeSchema>;
 
 export const verificationMethodSchema = z.enum([
@@ -71,15 +116,15 @@ export const verificationMethodSchema = z.enum([
   "test_suite",
   "model_judge",
   "human",
-]);
+] as const);
 export type VerificationMethod = z.infer<typeof verificationMethodSchema>;
 
-export const failureClassSchema = z.enum(["retryable-execution", "plan-invalidating"]);
+export const failureClassSchema = z.enum(["retryable-execution", "plan-invalidating"] as const);
 export type FailureClass = z.infer<typeof failureClassSchema>;
 
 export const retryPolicySchema = z.object({
   maxAttempts: z.number().int().min(1).default(1),
-  backoff: z.enum(["none", "fixed", "exponential"]).default("none"),
+  backoff: z.enum(["none", "fixed", "exponential"] as const).default("none"),
   classifyFailureAs: failureClassSchema.nullable().default(null),
 });
 export type RetryPolicy = z.infer<typeof retryPolicySchema>;
@@ -91,7 +136,7 @@ export type RetryPolicy = z.infer<typeof retryPolicySchema>;
  * itself how many turns and which actions the task needs. The task graph remains the
  * orchestration and state layer; the intelligence inside one node is the model's.
  */
-export const nodeKindSchema = z.enum(["model_call", "tool_call", "reasoning"]);
+export const nodeKindSchema = z.enum(["model_call", "tool_call", "reasoning"] as const);
 export type NodeKind = z.infer<typeof nodeKindSchema>;
 
 export const taskNodeSchema = z.object({
@@ -164,7 +209,7 @@ export const taskTypeSchema = z.enum([
    * this one is what the platform does when the work is not known in advance.
    */
   "autonomous",
-]);
+] as const);
 export type TaskType = z.infer<typeof taskTypeSchema>;
 
 export const createTaskRequestSchema = z.object({
@@ -201,6 +246,7 @@ export type TaskEvent =
   | { type: "node"; taskId: string; node: TaskNode }
   | { type: "transition"; taskId: string; transition: TaskTransition }
   | { type: "completed"; taskId: string; output: Record<string, unknown> }
+  | { type: "partially_completed"; taskId: string; error?: string }
   | { type: "failed"; taskId: string; error: string }
   /**
    * What the model is DOING inside a reasoning node — docs/26_DECISIONS.md ADR-134.
