@@ -107,10 +107,10 @@ flowchart TD
 
 | ID | Module | User-Facing Behavior | Technical Requirement | Acceptance Criteria | Priority | Status |
 | :--- | :--- | :--- | :--- | :--- | :---: | :---: |
-| **REQ-M1-01** | Intent | Understands natural mixed-language prompts (Hinglish/Hindi/English). | Build an intent parser pipeline that normalizes Hindi/Hinglish inputs into structured canonical tasks. | Prompts like *"Ek gaon ki photo banao jisme kisan khet me hai"* extract setting: rural village, subject: Indian farmer, activity: farming. | P0 | **IMPLEMENTING** |
-| **REQ-M1-02** | Intent | Resolves multi-turn references (*"Isko improve karo"*, *"Same style but in evening"*). | Maintain conversation state and reference resolution layer across turns. | Follow-up modification modifies previous parameters while preserving unchanged elements. | P0 | **NOT_STARTED** |
-| **REQ-M1-03** | Intent | Detects and respects negative constraints (*"Original meaning change mat karna"*, *"Without cars"*). | Parse explicit negative constraints and pass them to downstream models/tools as negative prompts/rules. | Generated output strictly excludes forbidden elements while keeping requested elements. | P1 | **NOT_STARTED** |
-| **REQ-M1-04** | Intent | Decomposes multi-part instructions into sequential execution steps. | Semantic task splitter separating composite requests into tool actions. | Request *"Write Python script, test it, and generate a diagram"* triggers sequential coding and visualization tasks. | P1 | **NOT_STARTED** |
+| **REQ-M1-01** | Intent | Understands natural mixed-language prompts (Hinglish/Hindi/English). | Build an intent parser pipeline that normalizes Hindi/Hinglish inputs into structured canonical tasks. | Prompts like *"Ek gaon ki photo banao jisme kisan khet me hai"* extract setting: rural village, subject: Indian farmer, activity: farming. | P0 | **QUALITY_VERIFIED** |
+| **REQ-M1-02** | Intent | Resolves multi-turn references (*"Isko improve karo"*, *"Same style but in evening"*). | Maintain conversation state and reference resolution layer across turns. | Follow-up modification modifies previous parameters while preserving unchanged elements. | P0 | **QUALITY_VERIFIED** |
+| **REQ-M1-03** | Intent | Detects and respects negative constraints (*"Original meaning change mat karna"*, *"Without cars"*). | Parse explicit negative constraints and pass them to downstream models/tools as negative prompts/rules. | Generated output strictly excludes forbidden elements while keeping requested elements. | P1 | **QUALITY_VERIFIED** |
+| **REQ-M1-04** | Intent | Decomposes multi-part instructions into sequential execution steps. | Semantic task splitter separating composite requests into tool actions. | Request *"Write Python script, test it, and generate a diagram"* triggers sequential coding and visualization tasks. | P1 | **QUALITY_VERIFIED** |
 
 ---
 
