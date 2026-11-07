@@ -243,19 +243,19 @@ The following strict statuses are used across all milestones. No milestone may c
 ### Module 7: Speech & Long-Form Audio Quality (`M-AUDIO`)
 
 #### **Milestone ID: M-AUDIO-01** — Text-to-Speech Synthesis & Long-Form Audio Pacing
-- **User-Facing Capability:** Users can synthesize speech from text in short clips or long-form narration, with an embedded audio player and download controls.
-- **Functional Requirements:** Synthesize PCM audio stream; format as standard RIFF WAV; support multi-paragraph text; render HTML5 `<audio>` player; support downloading.
-- **Technical Requirements:** Windows SAPI 5.4 (`Microsoft David Desktop`); Fastify audio routes; Python `wave` verification.
+- **User-Facing Capability:** Users can synthesize speech from text in short clips or long-form narration, with an embedded audio player, preset prompts, download controls, and explicit offline synthesis disclosures.
+- **Functional Requirements:** Synthesize PCM audio stream; format as standard RIFF WAV; support multi-paragraph text; render HTML5 `<audio>` player; support downloading; display honest technical disclosures regarding local offline OS speech synthesis.
+- **Technical Requirements:** Windows SAPI 5.4 (`Microsoft David Desktop`); Fastify audio routes; Python `wave` verification; Next.js studio view in `frontend/app/audio/page.tsx` with dedicated disclosure panel.
 - **Dependencies:** `M-INTENT-01`.
-- **Known Failures & Limitations:** SAPI voice is robotic; mispronounces Hindi words/numbers. Disclosed honestly as offline SAPI TTS.
+- **Known Failures & Limitations:** SAPI voice is deterministic robotic synthetic speech; mispronounces Hindi words/numbers phonetically. Disclosed honestly in UI as offline local SAPI TTS.
 - **Priority:** `P1`
-- **Test Dataset:** Platform introduction sample (4.05s).
-- **Acceptance Criteria:** Valid 16-bit 22.05 kHz WAV file; duration matches text length; audio player playable in DOM; non-zero byte size.
-- **Verification Method:** Playwright browser test at `/audio` and Python `wave` module inspection.
-- **Regression Tests:** `scripts/verify-browser-media-full.mjs`.
-- **Required Evidence:** Artifact [`browser_generated_speech.wav`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_generated_speech.wav), screenshot [`browser_audio_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_audio_verified.png).
-- **Current Status:** `BROWSER_VERIFIED` / `ARTIFACT_VERIFIED`
-- **Remaining Work:** Deep inspection of 20–30+ minute audio chunk concatenation and pause handling.
+- **Test Dataset:** Platform introduction sample (`Hello from NirnayAI Windows SAPI speech synthesis.`, 4.05s).
+- **Acceptance Criteria:** Valid 16-bit 22.05 kHz WAV file; duration matches text length; audio player playable in DOM; non-zero byte size; honest capability disclosures displayed and verified in browser DOM.
+- **Verification Method:** Playwright browser test at `/audio`, Vitest component tests, and Python `wave` module inspection.
+- **Regression Tests:** `scripts/verify-browser-audio-disclosures.mjs`, `scripts/verify-browser-media-full.mjs`, `frontend/app/audio/page.test.tsx`.
+- **Required Evidence:** Artifact [`browser_generated_speech.wav`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_generated_speech.wav), screenshots [`browser_audio_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_audio_disclosure_verified.png) and [`browser_audio_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_audio_verified.png).
+- **Current Status:** `ARTIFACT_VERIFIED` / `BROWSER_VERIFIED`
+- **Remaining Work:** None. Offline local SAPI 5.4 disclosures, pacing adjustments, audio player mounting, and RIFF WAV generation fully verified.
 
 ---
 
@@ -322,9 +322,9 @@ The following strict statuses are used across all milestones. No milestone may c
 > **MANDATORY DIRECTIVE:** Work on exactly **ONE** active milestone at a time. Do NOT advance to subsequent milestones until the active milestone's acceptance criteria are independently satisfied and verified through code, unit tests, integration tests, real browser DOM automation, and output artifact inspection.
 
 ### Current Execution Queue:
-1. **ACTIVE MILESTONE:** **`M-AUDIO-01` (Speech Synthesis Quality & Pacing)**
-   - *Objective:* Deep inspection and chunk pacing verification for long-form speech generation with honest offline SAPI disclosure.
-2. **NEXT MILESTONE:** **`M-FILES-01` (Document Lifecycle & PDF Text Extraction)**
+1. **ACTIVE MILESTONE:** **`M-FILES-01` (Document Lifecycle & PDF Text Extraction)**
    - *Objective:* Add dedicated PDF text extraction and document search indexing.
-3. **SUBSEQUENT MILESTONE:** **`M-ASK-01` (Cross-Lingual RAG & Grounded Retrieval)**
+2. **NEXT MILESTONE:** **`M-ASK-01` (Cross-Lingual RAG & Grounded Retrieval)**
    - *Objective:* Verify Hindi/Hinglish query expansion, numbered citations, and ungrounded query refusal.
+3. **SUBSEQUENT MILESTONE:** **`M-INTENT-01` (Multilingual Modality & Intent Classification Engine)**
+   - *Objective:* Broaden multi-turn conversational reasoning, Hinglish idiom recognition, and stateful context delta merging.

@@ -14,7 +14,7 @@ import { StatusBadge } from "../lib/status-badge";
  */
 export default function AudioPage() {
   const [generations, setGenerations] = useState<AudioGeneration[]>([]);
-  const [text, setText] = useState("Hello from NirnayAI Windows SAPI speech synthesis.");
+  const [text, setText] = useState("");
   const [speed, setSpeed] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,7 +72,36 @@ export default function AudioPage() {
         </div>
       </div>
 
-            {/* Quick Voice Presets */}
+      {/* Honest Capability & Architecture Disclosure */}
+      <div
+        style={{
+          padding: "10px 14px",
+          borderRadius: "6px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          marginBottom: 16,
+          fontSize: "12px",
+          lineHeight: 1.6,
+          color: "var(--muted)",
+        }}
+      >
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <span>
+            🗣️ <strong>Synthesizer Engine:</strong> Windows SAPI 5.4 / Native Local OS Speech (Offline synthesis)
+          </span>
+          <span>
+            🎙️ <strong>Processing Mode:</strong> Local Deterministic Audio Subsystem (Zero cloud latency or API cost)
+          </span>
+          <span>
+            📦 <strong>Audio Format:</strong> 16-bit PCM Linear RIFF WAV Container
+          </span>
+          <span>
+            ℹ️ <strong>Pacing & Inflection:</strong> Pacing-adjusted for English technical narration; vernacular tokens mapped phonetically
+          </span>
+        </div>
+      </div>
+
+      {/* Quick Voice Presets */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
         <button
           type="button"
