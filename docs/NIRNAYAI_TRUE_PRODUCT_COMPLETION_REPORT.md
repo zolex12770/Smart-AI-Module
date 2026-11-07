@@ -300,3 +300,21 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
 
 
 
+
+### 12.5 Milestone M-FEEDBACK-01: Persistent Feedback Telemetry & Database Integration
+- **PostgreSQL Persistence Engine:** Created `user_feedback` table in PGlite PostgreSQL database with indexes on `project_id` and `conversation_id`.
+- **Fastify API Routes:** Implemented `POST /api/v1/feedback` and `GET /api/v1/feedback` in [`backend/src/routes/v1/feedback.ts`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/backend/src/routes/v1/feedback.ts), protected by session/API-key authorization with strict project scoping.
+- **Dynamic Telemetry Aggregation:** `GET /api/v1/feedback` dynamically computes and serves:
+  - `totalCount`: Total number of feedback ratings recorded.
+  - `satisfiedCount`, `partiallySatisfiedCount`, `needsImprovementCount`: Count per satisfaction tier.
+  - `satisfactionRate`: Calculated satisfaction percentage $\frac{\text{satisfied} + \text{partially\_satisfied}}{\text{total}} \times 100$.
+  - `categoryBreakdown`: Dynamic dictionary of failure category tags (e.g. `{"Missed constraint": 4}`).
+- **Frontend Telemetry Dispatch:** Connected satisfaction rating buttons and refinement pills in [`frontend/app/chat/ChatView.tsx`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/frontend/app/chat/ChatView.tsx) to call `submitFeedback()` via [`frontend/app/lib/api.ts`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/frontend/app/lib/api.ts).
+- **Empirical Browser Verification:** Verified via [`scripts/verify-feedback-telemetry.mjs`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/scripts/verify-feedback-telemetry.mjs):
+  - Browser logged in via One-Click Sign In.
+  - User asked technical questions on `quicksort` and `bubble sort`.
+  - User rated responses `👍 Satisfied` and `👎 Needs Improvement` with `🎯 Refine Constraints`.
+  - Browser issued `POST http://localhost:8787/api/v1/feedback` $\rightarrow$ received `201 Created`.
+  - Browser queried `GET http://localhost:8787/api/v1/feedback` $\rightarrow$ received `200 OK` with 12 real database rows in PostgreSQL.
+  - Full screenshot artifact captured: [`browser_feedback_persistence_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_feedback_persistence_verified.png).
+- **Status:** **M-FEEDBACK-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.

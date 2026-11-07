@@ -22,6 +22,7 @@ import { registerPlatformRoutes } from "./routes/v1/platform.js";
 import { registerUsageRoute } from "./routes/v1/usage.js";
 import { registerVideoRoutes } from "./routes/v1/videos.js";
 import { registerWorkspaceRoutes } from "./routes/v1/workspace.js";
+import { registerFeedbackRoutes } from "./routes/v1/feedback.js";
 
 export const UPLOAD_MAX_BYTES = 25 * 1024 * 1024;
 
@@ -220,6 +221,7 @@ export async function buildServer(config: AppConfig, ctx: AppContext, logger: Lo
   registerVideoRoutes(app, ctx);
   registerUsageRoute(app, ctx);
   registerPlatformRoutes(app, ctx);
+  registerFeedbackRoutes(app, ctx);
 
   return app;
 }

@@ -9,6 +9,7 @@ import {
   listConversations,
   listModels,
   renameConversation,
+  submitFeedback,
   type Conversation,
   type Message,
   type ModelInfo,
@@ -57,6 +58,27 @@ export default function ChatView({
   const [chatModel, setChatModel] = useState<ModelInfo | null | undefined>(undefined);
   const conversationIdRef = useRef<string | undefined>(conversationId);
   const controllerRef = useRef<AbortController | null>(null);
+
+  const rateMessage = (
+    msgIndex: number,
+    rating: "satisfied" | "partially_satisfied" | "needs_improvement",
+    displayLabel: string,
+    tag?: string
+  ) => {
+    setSatisfactionRatings((prev) => ({
+      ...prev,
+      [msgIndex]: { rating: displayLabel, tag: tag ?? prev[msgIndex]?.tag },
+    }));
+
+    void submitFeedback({
+      conversationId: conversationIdRef.current,
+      messageIndex: msgIndex,
+      rating,
+      categoryTag: tag,
+    }).catch((err: unknown) => {
+      console.warn("Feedback telemetry submission failed:", err);
+    });
+  };
 
   useEffect(() => {
     // `projectId` is in the dependency list because the sidebar is project-scoped server-side
@@ -436,7 +458,7 @@ export default function ChatView({
                     <>
                       <button
                         type="button"
-                        onClick={() => setSatisfactionRatings((prev) => ({ ...prev, [i]: { rating: "Satisfied" } }))}
+                        onClick={() => rateMessage(i, "satisfied", "Satisfied")}
                         style={{
                           background: "transparent",
                           border: "1px solid var(--border)",
@@ -451,7 +473,7 @@ export default function ChatView({
                       </button>
                       <button
                         type="button"
-                        onClick={() => setSatisfactionRatings((prev) => ({ ...prev, [i]: { rating: "Partially Satisfied" } }))}
+                        onClick={() => rateMessage(i, "partially_satisfied", "Partially Satisfied")}
                         style={{
                           background: "transparent",
                           border: "1px solid var(--border)",
@@ -466,7 +488,7 @@ export default function ChatView({
                       </button>
                       <button
                         type="button"
-                        onClick={() => setSatisfactionRatings((prev) => ({ ...prev, [i]: { rating: "Needs Improvement" } }))}
+                        onClick={() => rateMessage(i, "needs_improvement", "Needs Improvement")}
                         style={{
                           background: "transparent",
                           border: "1px solid var(--border)",
@@ -486,7 +508,8 @@ export default function ChatView({
                       <button
                         type="button"
                         onClick={() => {
-                          setSatisfactionRatings((prev) => ({ ...prev, [i]: { ...prev[i], tag: "Missed constraint" } }));
+                          const currentRating = satisfactionRatings[i]?.rating === "Needs Improvement" ? "needs_improvement" : "partially_satisfied";
+                          rateMessage(i, currentRating, satisfactionRatings[i]?.rating || "Needs Improvement", "Missed constraint");
                           void sendPrompt("Please refine the previous response: ensure all negative and explicit constraints are strictly respected.");
                         }}
                         style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "1px 6px", fontSize: "10px", cursor: "pointer", color: "var(--fg)" }}
@@ -496,7 +519,8 @@ export default function ChatView({
                       <button
                         type="button"
                         onClick={() => {
-                          setSatisfactionRatings((prev) => ({ ...prev, [i]: { ...prev[i], tag: "Simpler explanation" } }));
+                          const currentRating = satisfactionRatings[i]?.rating === "Needs Improvement" ? "needs_improvement" : "partially_satisfied";
+                          rateMessage(i, currentRating, satisfactionRatings[i]?.rating || "Needs Improvement", "Simpler explanation");
                           void sendPrompt("Please refine the previous response: explain in simpler terms with a clear step-by-step example.");
                         }}
                         style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "1px 6px", fontSize: "10px", cursor: "pointer", color: "var(--fg)" }}

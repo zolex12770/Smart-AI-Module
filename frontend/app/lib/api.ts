@@ -614,3 +614,44 @@ export const ragQuery = (question: string, topK?: number) =>
     method: "POST",
     body: JSON.stringify(topK === undefined ? { question } : { question, topK }),
   });
+
+// --- Feedback & Telemetry -------------------------------------------------------------
+
+export interface FeedbackSubmission {
+  conversationId?: string;
+  messageIndex?: number;
+  rating: "satisfied" | "partially_satisfied" | "needs_improvement";
+  categoryTag?: string;
+  userNotes?: string;
+}
+
+export interface FeedbackSummary {
+  feedback: Array<{
+    id: string;
+    projectId: string;
+    userId: string;
+    conversationId: string | null;
+    messageIndex: number | null;
+    rating: "satisfied" | "partially_satisfied" | "needs_improvement";
+    categoryTag: string | null;
+    userNotes: string | null;
+    createdAt: string;
+  }>;
+  metrics: {
+    total: number;
+    satisfiedCount: number;
+    partiallySatisfiedCount: number;
+    needsImprovementCount: number;
+    satisfactionRate: number;
+    categoryBreakdown: Record<string, number>;
+  };
+}
+
+export const submitFeedback = (payload: FeedbackSubmission) =>
+  request<{ ok: true; id: string; rating: string; categoryTag: string | null; createdAt: string }>("/api/v1/feedback", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const getFeedbackSummary = () =>
+  request<FeedbackSummary>("/api/v1/feedback");
