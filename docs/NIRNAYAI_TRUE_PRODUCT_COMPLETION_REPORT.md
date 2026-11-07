@@ -333,3 +333,17 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
   - `scripts/verify-browser-tasks-and-coding.mjs`: PASSED (live browser execution and status badge `COMPLETED` verified).
   - Screenshots: [`browser_coding_task_generalized_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_coding_task_generalized_verified.png) and [`browser_coding_task_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_coding_task_verified.png).
 - **Status:** **M-CODING-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.
+
+### 12.7 Milestone M-IMAGES-01: Text-Conditioned Diffusion, Honest Disclosures & Gallery Verification
+- **Honest Cloud Diffusion Disclosure:** Enhanced [`frontend/app/images/page.tsx`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/frontend/app/images/page.tsx) with a dedicated runtime disclosure panel explicitly notifying users:
+  - **Inference Host:** Remote Cloud Diffusion via Pollinations FLUX.1 on dedicated GPU clusters (not running on local integrated graphics).
+  - **Synthesis Mode:** Text-to-Image Diffusion Latents (distinguishing new latent generation from latent-to-latent editing).
+  - **Watermark Notice:** Free-tier output carries upstream `pollinations.ai` watermark.
+- **Gallery & Controls:**
+  - Gallery cards render synthesized diffusion assets with `StatusBadge`.
+  - Download button enables full binary PNG download.
+- **Empirical Verification:**
+  - `frontend/app/images/page.test.tsx`: 4/4 Vitest tests passing.
+  - `scripts/verify-browser-images-disclosures.mjs`: PASSED (100% verified in headless Chrome).
+  - Screenshot captured: [`browser_images_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_images_disclosure_verified.png).
+- **Status:** **M-IMAGES-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.

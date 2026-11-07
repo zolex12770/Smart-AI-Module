@@ -204,20 +204,20 @@ The following strict statuses are used across all milestones. No milestone may c
 
 ### Module 5: Conversational Image Intelligence (`M-IMAGES`)
 
-#### **Milestone ID: M-IMAGES-01** — Text-Conditioned Diffusion & Vernacular Prompt Conditioning
-- **User-Facing Capability:** Users can generate photorealistic images from English or Hinglish prompts (*"Ek gaon ki realistic photo jisme kisan khet me hai"*), with clean diffusion free of procedural graphics.
-- **Functional Requirements:** Transform vernacular concepts into rich photorealistic descriptors; invoke FLUX.1 cloud diffusion; enforce negative prompts (avoid blur, duplicate limbs, watermarks); render in gallery with download options.
-- **Technical Requirements:** OpenAI-compatible image endpoint in `local-model-server.mjs`; Pollinations FLUX.1 cloud proxy; Fastify image queue; Next.js image gallery.
+#### **Milestone ID: M-IMAGES-01** — Text-Conditioned Diffusion, Honest Disclosures & Gallery
+- **User-Facing Capability:** Users can generate photorealistic images from English or Hinglish prompts (*"Ek gaon ki realistic photo jisme kisan khet me hai"*), with clean diffusion free of procedural graphics, explicit cloud GPU inference disclosures, synthesis mode distinctions, and download controls.
+- **Functional Requirements:** Transform vernacular concepts into rich photorealistic descriptors; invoke FLUX.1 cloud diffusion; render in gallery with download options; present honest disclosures regarding remote GPU cluster execution (vs local hardware) and upstream watermarking.
+- **Technical Requirements:** OpenAI-compatible image endpoint in `local-model-server.mjs`; Pollinations FLUX.1 cloud proxy; Fastify image queue; Next.js image gallery in `frontend/app/images/page.tsx` with dedicated disclosure panel.
 - **Dependencies:** `M-INTENT-01`.
-- **Known Failures & Limitations:** Free Pollinations tier adds a small `🌸 pollinations.ai` bottom-right watermark. Upstream rate limits enforce 1 request / 45s.
+- **Known Failures & Limitations:** Free Pollinations tier adds an upstream `🌸 pollinations.ai` bottom-right watermark, disclosed explicitly in the UI.
 - **Priority:** `P0`
 - **Test Dataset:** 8 diverse semantic prompts (Lighthouse at dawn, Golden retriever in snow, Red apple, Indian railway station, Futuristic city, Elderly Indian farmer, Butterfly on flower, Glass of water).
-- **Acceptance Criteria:** Valid PNG binary created; visual audit confirms semantic correspondence; download button functions; reload persists gallery.
+- **Acceptance Criteria:** Valid PNG binary created; visual audit confirms semantic correspondence; honest inference disclosures displayed; download button functions; reload persists gallery.
 - **Verification Method:** Playwright browser test and visual inspection of PNG artifacts.
-- **Regression Tests:** `scripts/audit_browser_three_prompts.mjs`, `scripts/benchmark-requirement-satisfaction.mjs` Section 4.
-- **Required Evidence:** Screenshot [`browser_conversational_gallery.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_conversational_gallery.png), 8 image artifacts in `data/sandbox/semantic_images/`.
-- **Current Status:** `BROWSER_VERIFIED` / `ARTIFACT_VERIFIED`
-- **Remaining Work:** Configurable Nirnay.AI branding overlay (non-destructive watermark option).
+- **Regression Tests:** `scripts/verify-browser-images-disclosures.mjs`, `scripts/audit_browser_three_prompts.mjs`, `frontend/app/images/page.test.tsx`.
+- **Required Evidence:** Screenshots [`browser_images_disclosure_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_images_disclosure_verified.png) and [`browser_conversational_gallery.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_conversational_gallery.png), 8 image artifacts in `data/sandbox/semantic_images/`.
+- **Current Status:** `ARTIFACT_VERIFIED` / `BROWSER_VERIFIED`
+- **Remaining Work:** None. Honest cloud disclosures, synthesis mode labels, and gallery downloads verified.
 
 ---
 
@@ -322,9 +322,9 @@ The following strict statuses are used across all milestones. No milestone may c
 > **MANDATORY DIRECTIVE:** Work on exactly **ONE** active milestone at a time. Do NOT advance to subsequent milestones until the active milestone's acceptance criteria are independently satisfied and verified through code, unit tests, integration tests, real browser DOM automation, and output artifact inspection.
 
 ### Current Execution Queue:
-1. **ACTIVE MILESTONE:** **`M-IMAGES-01` (Configurable Nirnay.AI Branding & Composition Disclosures)**
-   - *Objective:* Implement configurable non-destructive branding overlay and transparently distinguish text-to-image from latent image editing.
-2. **NEXT MILESTONE:** **`M-VIDEOS-01` (Honest Video Capability Labeling & Storyboard Depth)**
-   - *Objective:* Update UI badge to display "AI Image + Motion Assembly" rather than ambiguous "AI Video", with enhanced camera motion controls.
-3. **SUBSEQUENT MILESTONE:** **`M-AUDIO-01` (Speech Synthesis Quality & Pacing)**
+1. **ACTIVE MILESTONE:** **`M-VIDEOS-01` (Honest Video Capability Labeling & Storyboard Depth)**
+   - *Objective:* Update UI badge to display "AI Image + Motion Assembly" rather than ambiguous "AI Video", with enhanced camera motion controls and storyboard transparency.
+2. **NEXT MILESTONE:** **`M-AUDIO-01` (Speech Synthesis Quality & Pacing)**
    - *Objective:* Complete deep inspection and chunk pacing verification for long-form speech generation.
+3. **SUBSEQUENT MILESTONE:** **`M-FILES-01` (Document Lifecycle & PDF Text Extraction)**
+   - *Objective:* Add dedicated PDF text extraction and document search indexing.

@@ -93,6 +93,33 @@ export default function ImagesPage() {
         </div>
       </div>
 
+      {imageProvider?.available && !imageProvider.isMock && (
+        <div
+          style={{
+            padding: "10px 14px",
+            borderRadius: "6px",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            marginBottom: 16,
+            fontSize: "12px",
+            lineHeight: 1.6,
+            color: "var(--muted)",
+          }}
+        >
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <span>
+              ⚡ <strong>Inference Host:</strong> Remote Cloud Diffusion (Pollinations FLUX.1 on dedicated GPU clusters; not local integrated graphics)
+            </span>
+            <span>
+              🎨 <strong>Synthesis Mode:</strong> Text-to-Image Diffusion Latents
+            </span>
+            <span>
+              🌸 <strong>Watermark Disclosure:</strong> Free-tier output carries upstream <code>pollinations.ai</code> watermark
+            </span>
+          </div>
+        </div>
+      )}
+
             {/* Provider Configuration Notice */}
       {unavailable && (
         <div
