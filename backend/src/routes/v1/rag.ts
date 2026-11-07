@@ -20,6 +20,7 @@ import {
 import { estimateLlmCostUsd, estimatePromptTokens } from "@ai-platform/model-router";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
+import { sharedIntentEngine } from "@ai-platform/agent-core";
 import type { AppContext } from "../../context.js";
 import { requireProject } from "../../plugins/auth.js";
 
@@ -340,7 +341,14 @@ export function registerRagRoutes(app: FastifyInstance, ctx: AppContext): void {
           // ADR-158 — the same operator calibration the agent's search tool gets.
           ...(ctx.ragMaxDistance !== undefined ? { maxDistance: ctx.ragMaxDistance } : {}),
         },
-        { projectId, query: parsed.data.question, topK: parsed.data.topK ?? 5 }
+        {
+          projectId,
+          query: (() => {
+            const exp = sharedIntentEngine.expandCrossLingualRagTerms(parsed.data.question);
+            return exp.length > 0 ? `${parsed.data.question} ${exp.join(" ")}` : parsed.data.question;
+          })(),
+          topK: parsed.data.topK ?? 5,
+        }
       );
 
       if (!ctx.embeddings.isDeterministicFallback) {

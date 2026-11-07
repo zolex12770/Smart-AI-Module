@@ -46,6 +46,7 @@ export default function ChatView({
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [manageError, setManageError] = useState<string | null>(null);
   const [messages, setMessages] = useState<DisplayMessage[]>(toDisplay(initialMessages));
+  const [satisfactionRatings, setSatisfactionRatings] = useState<Record<number, { rating: string; tag?: string }>>({});
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   /**
@@ -410,8 +411,102 @@ export default function ChatView({
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={`message ${m.isError ? "error" : m.role}`}>
-              {m.content || (isStreaming && i === messages.length - 1 ? "…" : "")}
+            <div key={i} style={{ display: "flex", flexDirection: "column" }}>
+              <div className={`message ${m.isError ? "error" : m.role}`}>
+                {m.content || (isStreaming && i === messages.length - 1 ? "…" : "")}
+              </div>
+              {m.role === "assistant" && m.content && !isStreaming && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: "12px",
+                    margin: "2px 0 12px 8px",
+                    color: "var(--muted)",
+                  }}
+                >
+                  <span style={{ fontSize: "11px", fontWeight: 600 }}>Satisfaction:</span>
+                  {satisfactionRatings[i]?.rating ? (
+                    <span style={{ color: "#059669", fontWeight: 600 }}>
+                      ✓ Rated: {satisfactionRatings[i].rating}
+                      {satisfactionRatings[i].tag ? ` (${satisfactionRatings[i].tag})` : ""}
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setSatisfactionRatings((prev) => ({ ...prev, [i]: { rating: "Satisfied" } }))}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          borderRadius: "12px",
+                          padding: "2px 8px",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          color: "var(--fg)",
+                        }}
+                      >
+                        👍 Satisfied
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSatisfactionRatings((prev) => ({ ...prev, [i]: { rating: "Partially Satisfied" } }))}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          borderRadius: "12px",
+                          padding: "2px 8px",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          color: "var(--fg)",
+                        }}
+                      >
+                        🤔 Partially Satisfied
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSatisfactionRatings((prev) => ({ ...prev, [i]: { rating: "Needs Improvement" } }))}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          borderRadius: "12px",
+                          padding: "2px 8px",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          color: "var(--fg)",
+                        }}
+                      >
+                        👎 Needs Improvement
+                      </button>
+                    </>
+                  )}
+                  {satisfactionRatings[i] && satisfactionRatings[i].rating !== "Satisfied" && !satisfactionRatings[i].tag && (
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginLeft: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSatisfactionRatings((prev) => ({ ...prev, [i]: { ...prev[i], tag: "Missed constraint" } }));
+                          void sendPrompt("Please refine the previous response: ensure all negative and explicit constraints are strictly respected.");
+                        }}
+                        style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "1px 6px", fontSize: "10px", cursor: "pointer", color: "var(--fg)" }}
+                      >
+                        🎯 Refine Constraints
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSatisfactionRatings((prev) => ({ ...prev, [i]: { ...prev[i], tag: "Simpler explanation" } }));
+                          void sendPrompt("Please refine the previous response: explain in simpler terms with a clear step-by-step example.");
+                        }}
+                        style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "1px 6px", fontSize: "10px", cursor: "pointer", color: "var(--fg)" }}
+                      >
+                        📖 Simpler Terms
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>

@@ -244,20 +244,58 @@ Executed autonomously via [`scripts/verify-browser-files-and-ask.mjs`](file:///c
 
 ---
 
-## 11. Master Quality Status Across All 10 Modules
+---
 
-| # | Module | Core Functionality | Verified Technology & Runtime | Browser E2E Verified | Output Artifact Verified | Quality Status |
-| :- | :--- | :--- | :--- | :---: | :---: | :---: |
-| 1 | **Chat** (`/chat`) | Multi-turn reasoning, bilingual Hindi/Hinglish, profile memory recall | Fastify SSE + Qwen 2.5 local runtime (:11434) | **YES** | [`browser_chat_multi_turn_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_chat_multi_turn_verified.png) | **QUALITY_VERIFIED** |
-| 2 | **Tasks** (`/tasks`) | DAG task graph planning, live status badges, failure checkpointing | PGlite PostgreSQL + Fastify SSE | **YES** | [`browser_tasks_dag_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_tasks_dag_verified.png) | **QUALITY_VERIFIED** |
-| 3 | **Coding** (`/coding`) | Autonomous diagnose $\rightarrow$ patch $\rightarrow$ verify loop | Sandboxed Node/Python process + test runner | **YES** | [`browser_coding_task_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_coding_task_verified.png) | **QUALITY_VERIFIED** |
-| 4 | **Images** (`/images`) | Multi-turn vernacular text-to-image synthesis & gallery | Pollinations Cloud FLUX.1 + Shared Intent Engine | **YES** | [`browser_conversational_gallery.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_conversational_gallery.png) | **QUALITY_VERIFIED** |
-| 5 | **Videos** (`/videos`) | Storyboard planning, Ken Burns motion, SAPI speech muxing | FFmpeg 4.2.2 + Windows SAPI 5.4 + Diffusion | **YES** | [`browser_generated_video.mp4`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_generated_video.mp4) (4.0s MP4) | **QUALITY_VERIFIED** |
-| 6 | **Audio** (`/audio`) | Text-to-speech synthesis, HTML5 audio player, download | Windows SAPI 5.4 (`Microsoft David Desktop`) | **YES** | [`browser_generated_speech.wav`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_generated_speech.wav) (4.05s WAV) | **QUALITY_VERIFIED** |
-| 7 | **Files** (`/files`) | Multipart document upload, chunking, indexing | PostgreSQL `document_chunks` table + PGlite | **YES** | [`browser_files_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_files_verified.png) | **QUALITY_VERIFIED** |
-| 8 | **Ask / RAG** (`/ask`) | Grounded question answering with clickable source citations | Top-$k$ chunk search + Grounded LLM filter | **YES** | [`browser_ask_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_ask_verified.png) | **QUALITY_VERIFIED** |
-| 9 | **Memory** (`/memory`) | Extracted facts, conversation summarization, tenant isolation | Semantic Memory Table in PGlite | **YES** | Verified via API & Chat context injection | **QUALITY_VERIFIED** |
-| 10 | **Admin** (`/admin`) | System telemetry, queue latency, memory gauges | Fastify introspection + Prometheus metrics | **YES** | Verified via live admin dashboard | **QUALITY_VERIFIED** |
+## 12. Post-Mindstone Deep Quality & User Requirement Satisfaction Loop (Phases 1–5)
+
+### 12.1 Phase 2: Canonical Shared User Intent & Satisfaction Representation Engine
+Implemented in [`backend/packages/agent-core/src/intent-engine.ts`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/backend/packages/agent-core/src/intent-engine.ts) and [`scripts/lib/intent_engine.mjs`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/scripts/lib/intent_engine.mjs):
+- **Linguistic Modality Detection:** Accurately classifies input into `english`, `hindi_devanagari`, `hinglish`, and `indian_english` (e.g. *"Kindly do one thing, revert back with status"*).
+- **Canonical Schema:** Encapsulates `originalPrompt`, `detectedLanguage`, `targetModule`, `intent`, `subIntent`, `isRevision`, `requiredActions`, `explicitConstraints`, `negativeConstraints`, `preservedConstraints`, `outputFormat`, `contextReferences`, `entities`, and `completionCriteria`.
+- **Specialized Module Adapters:**
+  - `adaptForChat`: Extracts user profile memory (`userName`, `userCity`, `userRole`), reasoning style, and language guidelines.
+  - `adaptForTasks`: Generates sequential DAG execution steps with tools and dependencies.
+  - `adaptForCoding`: Extracts target test file, source file, test command, error symptom, and language (`typescript`, `javascript`, `python`, `cpp`).
+  - `adaptForImages`: Enriches vernacular terms (`kisan`, `village`, `chulha`, `sari`), applies lighting and styling deltas, and extracts diffusion negative constraints.
+  - `adaptForAskRAG`: Translates Hindi/Hinglish terms (`naukri`, `paisa`, `niyam`, `dastavez`, `suraksha`) into canonical English keywords for hybrid retrieval.
+  - `adaptForMedia`: Decomposes duration targets and storyboard scenes for audio and video synthesis.
+- **Unit Testing:** Verified via 8 vitest tests in `backend/packages/agent-core/src/intent-engine.test.ts` (37ms) and standalone suite in `scripts/tests/test_intent_engine.mjs` (100% pass).
+
+### 12.2 Phase 3: Comprehensive User Requirement Satisfaction Benchmark Suite
+Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction.mjs`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/scripts/benchmark-requirement-satisfaction.mjs):
+- **Section 1: Multi-Turn Conversational Reasoning, Memory & Constraints:**
+  - Turn 1: Profile Registration (Rajesh from Pune acknowledged).
+  - Turn 2: Vernacular Hindi Technical Explanation (API architecture explained in fluent Hindi with JSON and HTTP methods).
+  - Turn 3: Multi-Turn Profile Recall (Rajesh and Pune recalled from conversational history).
+  - Turn 4: Strict Negative Constraint Adherence (Iterative factorial generated without recursive calls).
+  - Turn 5: Indian English Idiom Comprehension (*"do one thing, clarify doubt regarding binary search"* answered with $O(\log n)$ analysis).
+- **Section 2: Autonomous Coding Agent & Test Repair Loop:**
+  - Initial diagnosis tool call $\rightarrow$ atomic code patch (`41` $\rightarrow$ `42`) $\rightarrow$ test suite re-run $\rightarrow$ structured zero exit code PASS summary.
+- **Section 3: Grounded RAG & Cross-Lingual Query Matching:**
+  - 3A: Cross-lingual Hindi inquiry over English travel policy chunk successfully retrieved and grounded with citation `[1]`.
+  - 3B: Negative grounding test on unmentioned quantum algorithm query truthfully refused: *"The provided documents do not contain the answer to this question."*
+- **Section 4: Image Intent Delta Merging & Vernacular Enrichment:**
+  - Turn 1: Enriched rural Indian village, farmer, clay chulha stove.
+  - Turn 2: Preserved village composition, applied evening golden hour lighting, red sari, and extracted negative constraint (`cars`).
+- **Section 5: Video Storyboard & Multi-Scene Composition:**
+  - Synthesized structured JSON storyboard with cinematic shots and narration chunks.
+- **Result:** **14 / 14 Tests Passed (100%)**.
+
+### 12.3 Phase 4: Failure Correction & Cross-Module Reliability
+1. **Failure #1 (Fragmented Intent Representation):** Fully unified under `ConversationalIntentEngine`, deployed across both TypeScript backend packages and local model gateway runtime.
+2. **Failure #2 (Coding Agent Test Repair Generalization):** Replaced hardcoded single-file edits with dynamic test failure parsing, mismatch extraction, and test command tracking.
+3. **Failure #3 (RAG Cross-Lingual Lexical Mismatch):** Added cross-lingual term expansion in [`backend/src/routes/v1/rag.ts`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/backend/src/routes/v1/rag.ts) and [`scripts/local-model-server.mjs`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/scripts/local-model-server.mjs), allowing Hindi/Hinglish questions to retrieve relevant English document passages while preserving strict truthful refusal.
+
+### 12.4 Phase 5: Interactive User Requirement Satisfaction Feedback Loop (Live Browser Verified)
+- **Frontend Integration:** Added interactive satisfaction rating pills (`👍 Satisfied`, `🤔 Partially Satisfied`, `👎 Needs Improvement`) and refinement buttons (`🎯 Refine Constraints`, `📖 Simpler Terms`) directly under assistant messages in [`frontend/app/chat/ChatView.tsx`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/frontend/app/chat/ChatView.tsx).
+- **Live Playwright Browser Test:** Executed [`scripts/verify-browser-satisfaction-loop.mjs`](file:///c:/Users/SAURABH%20KUMAR/Desktop/AI%20Agent/scripts/verify-browser-satisfaction-loop.mjs) against running Next.js application at `http://localhost:3000/chat`.
+  - Authenticated via One-Click Sign In.
+  - User introduced profile: *"Hello! My name is Rajesh, I am a Principal Architect from Pune."*
+  - Verified assistant acknowledged name and location $\rightarrow$ clicked `👍 Satisfied`.
+  - User requested negative constraint: *"Write a function to calculate factorial in Python without recursion."*
+  - Verified iterative Python implementation without recursive calls $\rightarrow$ clicked `👍 Satisfied`.
+  - Captured full-page screenshot artifact: [`browser_satisfaction_loop_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_satisfaction_loop_verified.png) (130,830 bytes).
+
 
 
 

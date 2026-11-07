@@ -18,7 +18,11 @@ assert.strictEqual(
   engine.detectLanguage("Ek village ki realistic image banao, old man aur woman khana bana rahe hain"),
   "hinglish"
 );
-console.log("✓ Language detection verified for English, Hindi Devanagari, and Hinglish.");
+assert.strictEqual(
+  engine.detectLanguage("Kindly do one thing, revert back with the latest project status"),
+  "indian_english"
+);
+console.log("✓ Language detection verified for English, Hindi Devanagari, Hinglish, and Indian English.");
 
 // -----------------------------------------------------------------------------
 // Test 2: Intent Classification
@@ -44,6 +48,22 @@ assert.strictEqual(
   engine.classifyIntent("Explain the difference between TCP and UDP with examples"),
   "CHAT_REASONING"
 );
+assert.strictEqual(
+  engine.classifyIntent("Based on file, what are the company travel limits?"),
+  "DOCUMENT_QA"
+);
+assert.strictEqual(
+  engine.classifyIntent("Automate this autonomous multi-step pipeline"),
+  "TASK_EXECUTION"
+);
+assert.strictEqual(
+  engine.classifyIntent("Do you remember who am I?"),
+  "MEMORY_OPERATION"
+);
+assert.strictEqual(
+  engine.classifyIntent("Check current quota and server status"),
+  "ADMIN_OPERATION"
+);
 console.log("✓ Intent classification verified across all core task categories.");
 
 // -----------------------------------------------------------------------------
@@ -51,13 +71,16 @@ console.log("✓ Intent classification verified across all core task categories.
 // -----------------------------------------------------------------------------
 console.log("\n[Test 3] Constraint & Negative Instruction Extraction...");
 const constraints = engine.extractConstraints(
-  "Draw a futuristic city without cars, avoid pollution, and original meaning change mat karna"
+  "Draw a futuristic city without cars, avoid pollution, bina smoke ke, and original meaning change mat karna in TypeScript with O(log n)"
 );
 console.log("  Extracted constraints:", constraints);
 assert.ok(constraints.negativeConstraints.some((c) => c.includes("cars")));
 assert.ok(constraints.negativeConstraints.some((c) => c.includes("pollution")));
+assert.ok(constraints.negativeConstraints.some((c) => c.includes("smoke")));
 assert.ok(constraints.preservedConstraints.includes("PRESERVE_SEMANTIC_MEANING"));
-console.log("✓ Negative constraints and preservation rules accurately extracted.");
+assert.ok(constraints.explicitConstraints.includes("FORMAT_TYPESCRIPT"));
+assert.ok(constraints.explicitConstraints.includes("COMPLEXITY_O_LOG_N"));
+console.log("✓ Negative constraints, preservation rules, and format constraints accurately extracted.");
 
 // -----------------------------------------------------------------------------
 // Test 4: Multi-Turn Context & Reference Resolution (The Village Benchmark)
@@ -88,11 +111,9 @@ const turn2 = engine.processTurn(
 );
 console.log("  Turn 2 Enhanced:", turn2.enhancedPrompt);
 assert.strictEqual(turn2.isRevision, true);
-// Verify composition preservation
 assert.ok(turn2.enhancedPrompt.includes("rural Indian village"));
 assert.ok(turn2.enhancedPrompt.includes("cooking fresh food"));
 assert.ok(turn2.enhancedPrompt.includes("village children"));
-// Verify delta application
 assert.ok(turn2.enhancedPrompt.includes("evening sunset lighting"));
 assert.ok(turn2.enhancedPrompt.includes("vibrant red"));
 
@@ -109,5 +130,40 @@ assert.ok(turn3.enhancedPrompt.includes("professional"));
 assert.ok(turn3.enhancedPrompt.includes("rural Indian village"));
 assert.ok(turn3.enhancedPrompt.includes("evening sunset lighting"));
 assert.ok(turn3.enhancedPrompt.includes("vibrant red"));
+
+// -----------------------------------------------------------------------------
+// Test 5: Module Adapters (Coding, Tasks, Ask/RAG, Chat)
+// -----------------------------------------------------------------------------
+console.log("\n[Test 5] Module Adapters Verification...");
+
+// Coding Adapter
+const codingState = engine.processTurn("s-code", "Fix failing assertion in math.test.js in TypeScript");
+const codingAdapter = engine.adaptForCoding(codingState);
+assert.strictEqual(codingAdapter.actionType, "fix_test");
+assert.strictEqual(codingAdapter.testFile, "math.test.js");
+assert.strictEqual(codingAdapter.language, "typescript");
+console.log("✓ Coding adapter verified.");
+
+// Task Adapter (DAG)
+const taskState = engine.processTurn("s-task", "Diagnose and fix failing unit test in math.test.js");
+const taskAdapter = engine.adaptForTasks(taskState);
+assert.ok(taskAdapter.steps.length >= 3);
+assert.ok(taskAdapter.steps[1].dependencies.includes(1));
+console.log("✓ Task DAG adapter verified.");
+
+// RAG Adapter (Cross-Lingual Hindi to English query expansion)
+const ragState = engine.processTurn("s-rag", "Company me naukri aur policy ke niyam kya hain?");
+const ragAdapter = engine.adaptForAskRAG(ragState);
+assert.ok(ragAdapter.canonicalEnglishTerms.includes("job"));
+assert.ok(ragAdapter.canonicalEnglishTerms.includes("rules"));
+assert.strictEqual(ragAdapter.requiresGroundedCitations, true);
+console.log("✓ RAG cross-lingual adapter verified.");
+
+// Chat Adapter (Memory + Tone)
+const chatState = engine.processTurn("s-chat", "My name is Rajesh, Software Architect from Pune. Explain recursion.");
+const chatAdapter = engine.adaptForChat(chatState);
+assert.strictEqual(chatAdapter.userProfile.name, "Rajesh");
+assert.strictEqual(chatAdapter.userProfile.city, "Pune");
+console.log("✓ Chat adapter verified.");
 
 console.log("\n=== ALL INTENT ENGINE UNIT TESTS PASSED (100%) ===");
