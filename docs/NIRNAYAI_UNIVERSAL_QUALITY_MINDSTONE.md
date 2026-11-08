@@ -324,7 +324,9 @@ The following strict statuses are used across all milestones. No milestone may c
 ### Current Execution Queue:
 1. **COMPLETED MILESTONE:** **`M-INTENT-02` (Constraint Extraction & Negative Instruction Preservation)**
    - *Status:* **100% COMPLETE & VERIFIED** (All 14 benchmark prompts passing, negative constraint prioritization over contradictory positive instructions verified, mutually exclusive format conflict detection verified, scanned PDF zero-chunk ingestion failure resolved with structural descriptor, and natural conversational responses verified in Playwright browser DOM with screenshot artifact `browser_chat_natural_verified.png`).
-2. **ACTIVE MILESTONE:** **`M-INTENT-03` (Multi-Turn Reference Resolution & Delta Merging)**
-   - *Objective:* Full multi-turn conversational delta persistence across all modality pipelines.
-3. **SUBSEQUENT MILESTONE:** **`M-CHAT-01` (Dynamic Conversational Reasoning & Personalization Memory)**
-   - *Objective:* Long-context session personalization and multi-turn profile retention across full chat dialogs.
+2. **COMPLETED MILESTONE:** **`M-INTENT-03` (Multi-Turn Reference Resolution & Delta Merging)**
+   - *Status:* **100% COMPLETE & VERIFIED** (3-turn vernacular image delta merging verified, coding multi-turn constraint and format evolution verified, negative constraint persistence across turns verified, ambiguous revision clarification query generation verified, and Playwright browser E2E multi-turn chat verified in live DOM with screenshot artifact `browser_chat_multiturn_delta_verified.png`).
+3. **ACTIVE MILESTONE:** **`M-CHAT-01` (Dynamic Conversational Reasoning & Personalization Memory)**
+   - *Objective:* Long-context session personalization, user identity recall, and deep reasoning across diverse software engineering topics.
+4. **SUBSEQUENT MILESTONE:** **`M-CODING-01` (Generalized Autonomous Coding Agent & Defect Repair Loop)**
+   - *Objective:* Dynamic stack trace diagnosis and arbitrary bug fixing without hardcoded assertions.

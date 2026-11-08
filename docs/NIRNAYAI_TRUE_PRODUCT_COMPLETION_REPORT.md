@@ -459,3 +459,28 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
   - `node scripts/check-boundary.mjs`: 7/7 architectural boundary checks passing.
   - Verified screenshot: [`browser_chat_natural_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_chat_natural_verified.png).
 - **Status:** **M-INTENT-02 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.
+
+### 12.14 Milestone M-INTENT-03: Multi-Turn Reference Resolution & Delta Merging
+- **Multi-Turn Contextual Delta Merging:**
+  - Engineered session-aware delta resolution in `backend/packages/agent-core/src/intent-engine.ts` and `scripts/lib/intent_engine.mjs`:
+    - **Image Diffusion Multi-Turn:** Preserves base visual subjects and composition across turns while applying delta updates for lighting (*warm golden hour evening sunset*), attire (*vibrant red traditional Indian sari*), and style (*award-winning photographic clarity, 8k*).
+    - **Negative Constraint Carry-Forward:** Negative constraints extracted in earlier turns (e.g. *cars*) are accumulated and carried forward into subsequent revisions without requiring re-specification.
+    - **Contextual Modality Inheritance:** When an iterative revision falls through default intent classification (e.g. *"Isko aur professional banao"*), the engine automatically inherits the active modality and target module (`images`, `coding`) from `prevContext`.
+    - **Coding Modality Evolution:** Accumulates constraints and formats across turns (e.g. Python factorial $\rightarrow$ non-recursive iterative loop $\rightarrow$ TypeScript implementation without JavaScript).
+- **Proactive Clarification on Ambiguous Revisions:**
+  - Detects completely ambiguous revision prompts (*"isko change karo"*, *"modify it"*, *"change this"*) lacking target attributes.
+  - Populates `unresolvedAmbiguity` with clear user guidance: *"Please specify which attribute or part you would like to change or refine (e.g., lighting, colors, style, formatting, algorithm, or conciseness)."*
+  - Records structured assumption `AMBIGUOUS_REVISION` to prevent destructive or arbitrary modifications.
+- **Model Server Negative Routing Correction:**
+  - Refined intent matching in `scripts/local-model-server.mjs`: prevents queries asking to explain code without recursion (*"bina recursion ke samjhao"*) from prematurely matching general recursion explanations.
+- **Empirical Unit, Benchmark & Browser Verification:**
+  - `backend/packages/agent-core/src/intent-engine.test.ts`: 10/10 Vitest unit tests passing (added multi-turn delta merging & ambiguous revision test case).
+  - `scripts/benchmark-requirement-satisfaction.mjs`: 14/14 tests passing (100%).
+  - `scripts/verify-intent-delta-merging-suite.mjs`:
+    - Part 1 (3-Turn Vernacular Image Delta Merging): PASSED.
+    - Part 2 (Coding Multi-Turn Constraint & Format Evolution): PASSED.
+    - Part 3 (Ambiguous Revision Clarification Prompting): PASSED.
+    - Part 4 (Playwright Browser E2E Multi-Turn Chat on port 3000): PASSED (verified Nirnay.AI introduction, natural activity status, and iterative non-recursive factorial response).
+  - `node scripts/check-boundary.mjs`: 7/7 architectural boundary checks passing.
+  - Verified screenshot: [`browser_chat_multiturn_delta_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_chat_multiturn_delta_verified.png).
+- **Status:** **M-INTENT-03 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.

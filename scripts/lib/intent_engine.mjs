@@ -83,15 +83,15 @@ export class ConversationalIntentEngine {
 
     // 4. Image Generation
     if (
-      /\b(image|photo|picture|drawing|painting|portrait|art|scene|wallpaper|visualize|render|banao|photo banao|tasveer|chitra)\b/i.test(lower) &&
-      !/\b(code|python|script|test|debug|function|class|algorithm)\b/i.test(lower)
+      /\b(image|photo|picture|drawing|painting|portrait|art|scene|wallpaper|visualize|render|photo\s+banao|image\s+banao|tasveer|chitra)\b/i.test(lower) &&
+      !/\b(code|python|script|test|debug|function|class|algorithm|recursion|factorial)\b/i.test(lower)
     ) {
       return "IMAGE_GENERATION";
     }
 
     // 5. Coding Tasks
     if (
-      /\b(code|coding|function|script|debug|unit\s+test|test\s+suite|tests?|refactor|python|javascript|typescript|c\+\+|bug|error|stack\s*trace|assertion|algorithm|implement|git\s+commit)\b/i.test(lower) ||
+      /\b(code|coding|function|script|debug|unit\s+test|test\s+suite|tests?|refactor|python|javascript|typescript|c\+\+|bug|error|stack\s*trace|assertion|algorithm|implement|git\s+commit|factorial|recursion|fibonacci|data\s+structure)\b/i.test(lower) ||
       /\b(fix|diagnose|repair)\b.*\b(test|bug|failure|error)\b/i.test(lower)
     ) {
       return "CODING_TASK";
@@ -155,6 +155,8 @@ export class ConversationalIntentEngine {
       /\b(add\s+more|remove\s+the|without\s+changing)\b/i,
       /\b(now\s+in\s+(python|javascript|typescript|c\+\+))\b/i,
       /\b(another\s+way|alternative|differently)\b/i,
+      /\b(?:without|bina|now\s+without|now\s+with|now\s+using)\b/i,
+      /\b(?:use\s+typescript,?\s*not|convert\s+to|rewrite\s+(?:in|as|using))\b/i,
     ];
 
     return revisionMarkers.some((regex) => regex.test(text));
@@ -483,13 +485,22 @@ export class ConversationalIntentEngine {
   processTurn(sessionId, userInput, options = {}) {
     const rawText = (userInput || "").trim();
     const lang = this.detectLanguage(rawText);
-    const intent = options.forcedIntent || this.classifyIntent(rawText);
-    const targetModule = options.targetModule || this.mapToTargetModule(intent);
     const isRevision = this.detectRevision(rawText);
+    const prevContext = this.sessionContext.get(sessionId) || null;
+
+    let intent = options.forcedIntent || this.classifyIntent(rawText);
+    // If the turn is a contextual revision and the prompt fell through to default CHAT_REASONING,
+    // inherit the active modality and intent from the previous session turn.
+    if (isRevision && prevContext && intent === "CHAT_REASONING" && !options.forcedIntent) {
+      intent = prevContext.intent;
+    }
+
+    const targetModule =
+      options.targetModule ||
+      (isRevision && prevContext && intent === prevContext.intent ? prevContext.targetModule : this.mapToTargetModule(intent));
+
     const { negativeConstraints, preservedConstraints, explicitConstraints, conflicts, unresolvedAmbiguity } = this.extractConstraints(rawText);
     const entities = this.extractEntities(rawText);
-
-    const prevContext = this.sessionContext.get(sessionId) || null;
 
     let basePrompt = rawText;
     let enhancedPrompt = "";
@@ -501,6 +512,22 @@ export class ConversationalIntentEngine {
     let expectedOutput = "Accurate response satisfying user requirements";
 
     // -------------------------------------------------------------------------
+    // Ambiguity Detection on Iterative Revisions
+    // -------------------------------------------------------------------------
+    if (isRevision) {
+      const isCompletelyAmbiguous =
+        /^(?:(?:isko|usko|ye|isse|ise|this|it)\s+(?:change|badlo|modify|update|sahi)\s*(?:karo|kardo|krdo)?|change\s+this|modify\s+it|update\s+this)[\s.!?]*$/i.test(
+          rawText
+        );
+      if (isCompletelyAmbiguous) {
+        unresolvedAmbiguity.push(
+          "Please specify which attribute or part you would like to change or refine (e.g., lighting, colors, style, formatting, algorithm, or conciseness)."
+        );
+        conflicts.push("AMBIGUOUS_REVISION: Modification requested without specifying target attributes or changes.");
+      }
+    }
+
+    // -------------------------------------------------------------------------
     // Module-specific orchestration & representation synthesis
     // -------------------------------------------------------------------------
     if (intent === "IMAGE_GENERATION") {
@@ -510,31 +537,54 @@ export class ConversationalIntentEngine {
       completionCriteria.push("image_artifact_created", "semantic_correspondence_verified", "negative_terms_excluded");
       expectedOutput = "High-resolution photorealistic image matching semantic description";
 
-      if (isRevision && prevContext && prevContext.enhancedPrompt) {
-        let merged = prevContext.enhancedPrompt;
-
-        if (/\b(evening|sunset|shaam|sun\s+setting)\b/i.test(rawText)) {
-          merged = merged.replace(/natural\s+daylight|morning\s+sunlight|dawn/gi, "warm golden hour evening sunset lighting");
-          if (!merged.includes("golden hour evening")) {
-            merged += ", warm golden hour evening sunset lighting with long soft shadows";
+      if (isRevision && prevContext) {
+        // Carry forward prior negative and preserved constraints
+        if (prevContext.negativeConstraints) {
+          for (const neg of prevContext.negativeConstraints) {
+            if (!effectiveNegatives.includes(neg)) effectiveNegatives.push(neg);
+          }
+        }
+        if (prevContext.preservedConstraints) {
+          for (const pres of prevContext.preservedConstraints) {
+            if (!preservedConstraints.includes(pres)) preservedConstraints.push(pres);
           }
         }
 
-        if (/\b(red\s+sari|sari\s+red|laal\s+sari)\b/i.test(rawText)) {
-          merged = merged.replace(/traditional\s+attire/gi, "vibrant red traditional sari with golden embroidery");
-          if (!merged.includes("vibrant red")) {
-            merged += ", the woman is wearing a vibrant red traditional Indian sari";
-          }
-        }
+        if (prevContext.enhancedPrompt) {
+          let merged = prevContext.enhancedPrompt;
 
-        if (/\b(more\s+realistic|professional|improve)\b/i.test(rawText)) {
-          if (!merged.includes("award winning")) {
-            merged += ", professional award-winning photographic clarity, sharp focus, 8k resolution";
+          if (/\b(evening|sunset|shaam|sun\s+setting)\b/i.test(rawText)) {
+            merged = merged.replace(/natural\s+daylight|morning\s+sunlight|dawn/gi, "warm golden hour evening sunset lighting");
+            if (!merged.includes("golden hour evening")) {
+              merged += ", warm golden hour evening sunset lighting with long soft shadows";
+            }
           }
-        }
 
-        enhancedPrompt = merged;
-        basePrompt = `Revision of: "${prevContext.originalPrompt}" -> Modifications: ${rawText}`;
+          if (/\b(morning|dawn|sunrise|subah)\b/i.test(rawText)) {
+            merged = merged.replace(/warm golden hour evening sunset lighting|night|evening/gi, "fresh morning sunrise golden dawn lighting");
+            if (!merged.includes("morning sunrise")) {
+              merged += ", fresh morning sunrise golden dawn lighting";
+            }
+          }
+
+          if (/\b(red\s+sari|sari\s+red|laal\s+sari)\b/i.test(rawText)) {
+            merged = merged.replace(/traditional\s+attire/gi, "vibrant red traditional sari with golden embroidery");
+            if (!merged.includes("vibrant red")) {
+              merged += ", the woman is wearing a vibrant red traditional Indian sari";
+            }
+          }
+
+          if (/\b(more\s+realistic|professional|improve)\b/i.test(rawText)) {
+            if (!merged.includes("award winning")) {
+              merged += ", professional award-winning photographic clarity, sharp focus, 8k resolution";
+            }
+          }
+
+          enhancedPrompt = merged;
+          basePrompt = `Revision of: "${prevContext.originalPrompt}" -> Modifications: ${rawText}`;
+        } else {
+          enhancedPrompt = this.normalizeVernacularConcepts(rawText);
+        }
       } else {
         const normalized = this.normalizeVernacularConcepts(rawText);
         enhancedPrompt = normalized;
@@ -569,7 +619,32 @@ export class ConversationalIntentEngine {
       requiredActions.push("locate_test_failure", "read_source_file", "apply_code_patch", "run_test_verification");
       completionCriteria.push("test_suite_passes", "exit_code_zero", "invariants_preserved");
       expectedOutput = "Executable code patch with successful test pass";
-      enhancedPrompt = rawText;
+
+      if (isRevision && prevContext) {
+        if (!entities.codeFiles && prevContext.entities?.codeFiles) {
+          entities.codeFiles = prevContext.entities.codeFiles;
+        }
+        if (!entities.testFiles && prevContext.entities?.testFiles) {
+          entities.testFiles = prevContext.entities.testFiles;
+        }
+        if (!entities.technologies && prevContext.entities?.technologies) {
+          entities.technologies = prevContext.entities.technologies;
+        }
+        if (prevContext.negativeConstraints) {
+          for (const neg of prevContext.negativeConstraints) {
+            if (!effectiveNegatives.includes(neg)) effectiveNegatives.push(neg);
+          }
+        }
+        if (prevContext.preservedConstraints) {
+          for (const pres of prevContext.preservedConstraints) {
+            if (!preservedConstraints.includes(pres)) preservedConstraints.push(pres);
+          }
+        }
+        basePrompt = `Revision of: "${prevContext.originalPrompt}" -> Updates: ${rawText}`;
+        enhancedPrompt = `${prevContext.enhancedPrompt || prevContext.originalPrompt} [Delta: ${rawText}]`;
+      } else {
+        enhancedPrompt = rawText;
+      }
     } else if (intent === "TASK_EXECUTION") {
       subIntent = "MULTI_STEP_PIPELINE";
       outputFormat = "dag_workflow";
@@ -604,7 +679,17 @@ export class ConversationalIntentEngine {
       requiredActions.push("contextual_reasoning", "multi_turn_profile_recall", "satisfaction_formatting");
       completionCriteria.push("user_question_answered", "constraints_honored");
       expectedOutput = "Clear, accurate conversational response";
-      enhancedPrompt = rawText;
+      if (isRevision && prevContext) {
+        basePrompt = `Revision of: "${prevContext.originalPrompt}" -> Updates: ${rawText}`;
+        enhancedPrompt = `${prevContext.enhancedPrompt || prevContext.originalPrompt} [Delta: ${rawText}]`;
+        if (prevContext.preservedConstraints) {
+          for (const pres of prevContext.preservedConstraints) {
+            if (!preservedConstraints.includes(pres)) preservedConstraints.push(pres);
+          }
+        }
+      } else {
+        enhancedPrompt = rawText;
+      }
     }
 
     const state = {

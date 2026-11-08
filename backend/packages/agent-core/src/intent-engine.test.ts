@@ -205,4 +205,47 @@ describe("ConversationalIntentEngine in agent-core", () => {
     expect(cConflict.conflicts.length).toBeGreaterThan(0);
     expect(cConflict.negativeConstraints).toContain("recursion"); // Negative constraint prioritized
   });
+
+  it("verifies M-INTENT-03 multi-turn delta merging and ambiguous revision clarification", () => {
+    const multiSession = "session-multiturn-intent-03";
+
+    // Turn 1: Initial image prompt
+    const turn1 = engine.processTurn(
+      multiSession,
+      "Ek village ki realistic image banao, old man aur woman khana bana rahe hain aur bachche khel rahe hain."
+    );
+    expect(turn1.isRevision).toBe(false);
+    expect(turn1.targetModule).toBe("images");
+    expect(turn1.enhancedPrompt).toContain("rural Indian village");
+
+    // Turn 2: Follow-up delta: evening light + red sari + negative cars
+    const turn2 = engine.processTurn(
+      multiSession,
+      "Same image but evening light, woman ki sari red honi chahiye, avoid cars."
+    );
+    expect(turn2.isRevision).toBe(true);
+    expect(turn2.targetModule).toBe("images");
+    expect(turn2.enhancedPrompt).toContain("rural Indian village");
+    expect(turn2.enhancedPrompt).toContain("golden hour evening sunset");
+    expect(turn2.enhancedPrompt).toContain("vibrant red");
+    expect(turn2.negativeConstraints).toContain("cars");
+
+    // Turn 3: Follow-up polish: more realistic, preserve original meaning
+    const turn3 = engine.processTurn(
+      multiSession,
+      "Isko aur professional banao, but original meaning change mat karna."
+    );
+    expect(turn3.isRevision).toBe(true);
+    expect(turn3.enhancedPrompt).toContain("award-winning photographic clarity");
+    expect(turn3.negativeConstraints).toContain("cars"); // negative constraint preserved from turn 2
+    expect(turn3.preservedConstraints).toContain("PRESERVE_SEMANTIC_MEANING");
+
+    // Test Ambiguous revision: "isko change karo"
+    const ambigSession = "session-ambiguous-01";
+    engine.processTurn(ambigSession, "Write a Python script to sort an array.");
+    const ambigTurn = engine.processTurn(ambigSession, "isko change karo");
+    expect(ambigTurn.isRevision).toBe(true);
+    expect(ambigTurn.unresolvedAmbiguity.length).toBeGreaterThan(0);
+    expect(ambigTurn.unresolvedAmbiguity[0]).toContain("Please specify which attribute or part you would like to change");
+  });
 });

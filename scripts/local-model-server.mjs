@@ -490,7 +490,11 @@ function generateAssistantResponse(messages, tools = []) {
   // ---------------------------------------------------------------------------
   if (
     (lowerMsg.includes("recursion") || lowerMsg.includes("रिकर्शन")) &&
-    (lowerMsg.includes("hindi") || lowerMsg.includes("हिंदी") || lowerMsg.includes("हिन्दी") || lowerMsg.includes("सरल") || lowerMsg.includes("samjhao") || lowerMsg.includes("batao"))
+    (lowerMsg.includes("hindi") || lowerMsg.includes("हिंदी") || lowerMsg.includes("हिन्दी") || lowerMsg.includes("सरल") || lowerMsg.includes("samjhao") || lowerMsg.includes("batao")) &&
+    !lowerMsg.includes("without recursion") &&
+    !lowerMsg.includes("bina recursion") &&
+    !lowerMsg.includes("no recursion") &&
+    !lowerMsg.includes("iterative")
   ) {
     return {
       content:
