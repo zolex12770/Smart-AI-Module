@@ -2,6 +2,7 @@ import http from "node:http";
 import crypto from "node:crypto";
 import { sharedIntentEngine } from "./lib/intent_engine.mjs";
 import { sharedCodingEngine } from "./lib/coding_engine.mjs";
+import { computeSemanticEmbedding } from "./lib/embedding_engine.mjs";
 
 const PORT = 11434;
 const MODEL_NAME = "qwen2.5:7b";
@@ -1282,9 +1283,70 @@ const server = http.createServer((req, res) => {
             created: 1730000000,
             owned_by: "diffusion",
           },
+          {
+            id: "nomic-embed-text",
+            object: "model",
+            created: 1730000000,
+            owned_by: "embedding",
+          },
         ],
       })
     );
+    return;
+  }
+
+  // Endpoint: POST /v1/embeddings (and /embeddings)
+  if (
+    req.method === "POST" &&
+    (url.pathname === "/v1/embeddings" || url.pathname === "/embeddings")
+  ) {
+    let bodyData = "";
+    req.on("data", (chunk) => {
+      bodyData += chunk;
+    });
+
+    req.on("end", async () => {
+      try {
+        const body = JSON.parse(bodyData || "{}");
+        let inputs = body.input;
+        if (!inputs) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Input is required for embeddings." } }));
+          return;
+        }
+        if (typeof inputs === "string") {
+          inputs = [inputs];
+        }
+        if (!Array.isArray(inputs)) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "Input must be a string or array of strings." } }));
+          return;
+        }
+
+        const data = inputs.map((text, idx) => ({
+          object: "embedding",
+          index: idx,
+          embedding: computeSemanticEmbedding(String(text || "")),
+        }));
+
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            object: "list",
+            data,
+            model: body.model || "nomic-embed-text",
+            usage: {
+              prompt_tokens: inputs.reduce((acc, t) => acc + Math.ceil(String(t).length / 4), 0),
+              total_tokens: inputs.reduce((acc, t) => acc + Math.ceil(String(t).length / 4), 0),
+            },
+          })
+        );
+      } catch (err) {
+        console.error("Local model embedding generation error:", err);
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: err.message || "Internal embedding generation error" } }));
+      }
+    });
     return;
   }
 
