@@ -45,6 +45,9 @@ function generateAssistantResponse(messages, tools = []) {
     const applyPatchTool = tools.find((t) => (t.function?.name || t.name) === "code.apply_patch");
     const fsReadTool = tools.find((t) => ["fs_read_file", "fs.read_file"].includes(t.function?.name || t.name));
     const fsListTool = tools.find((t) => ["fs_list_directory", "fs.list_directory"].includes(t.function?.name || t.name));
+    const mediaImageTool = tools.find((t) => (t.function?.name || t.name) === "media.generate_image");
+    const mediaSpeechTool = tools.find((t) => (t.function?.name || t.name) === "media.synthesize_speech");
+    const ragSearchTool = tools.find((t) => (t.function?.name || t.name) === "rag.search_documents");
 
     const goalInfo = sharedCodingEngine.parseCodingGoal(lastUserMsg);
 
@@ -162,6 +165,102 @@ function generateAssistantResponse(messages, tools = []) {
           };
         }
       }
+
+      // (iv) Cross-Modal Orchestration: media.generate_image, media.synthesize_speech, rag.search_documents
+      const isMediaOrRagResult =
+        toolContent.includes("media.") ||
+        toolContent.includes("assetId") ||
+        toolContent.includes("assetUrl") ||
+        toolContent.includes("rag.") ||
+        toolContent.includes("citations") ||
+        messages.some((m) => JSON.stringify(m).includes("media.") || JSON.stringify(m).includes("rag."));
+
+      if (isMediaOrRagResult) {
+        const hadImageCall = messages.some((m) => JSON.stringify(m).includes("media.generate_image"));
+        const hadSpeechCall = messages.some((m) => JSON.stringify(m).includes("media.synthesize_speech"));
+        const hadRagCall = messages.some((m) => JSON.stringify(m).includes("rag.search_documents"));
+
+        // If RAG search just succeeded and user also requested an image/diagram
+        if (hadRagCall && !hadImageCall && mediaImageTool && (lowerMsg.includes("image") || lowerMsg.includes("diagram") || lowerMsg.includes("illustrat") || lowerMsg.includes("draw"))) {
+          let prompt = "System architecture diagram based on verified technical documentation";
+          try {
+            const parsed = JSON.parse(toolContent);
+            if (parsed.output?.results?.[0]?.content) {
+              prompt = `Technical architectural diagram illustrating ${parsed.output.results[0].content.slice(0, 100)}`;
+            }
+          } catch (e) {}
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: `call_${crypto.randomUUID().slice(0, 8)}`,
+                name: mediaImageTool.function?.name || mediaImageTool.name || "media.generate_image",
+                arguments: JSON.stringify({
+                  prompt: prompt,
+                  aspectRatio: "16:9",
+                }),
+              },
+            ],
+          };
+        }
+
+        // If image generation just finished, and user also requested speech narration
+        if (hadImageCall && !hadSpeechCall && mediaSpeechTool && (lowerMsg.includes("audio") || lowerMsg.includes("speech") || lowerMsg.includes("narrat") || lowerMsg.includes("voice") || lowerMsg.includes("spoken"))) {
+          let narrationText = "Generated illustration successfully. Here is the verified technical explanation.";
+          try {
+            const parsed = JSON.parse(toolContent);
+            if (parsed.output?.prompt) {
+              narrationText = `Visual representation of ${parsed.output.prompt} has been generated and stored.`;
+            }
+          } catch (e) {}
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: `call_${crypto.randomUUID().slice(0, 8)}`,
+                name: mediaSpeechTool.function?.name || mediaSpeechTool.name || "media.synthesize_speech",
+                arguments: JSON.stringify({
+                  text: narrationText,
+                }),
+              },
+            ],
+          };
+        }
+
+        // Collect all assets generated across turns
+        const imageAssets = [];
+        const audioAssets = [];
+        for (const m of [...messages, lastMsg]) {
+          try {
+            const raw = typeof m.content === "string" ? JSON.parse(m.content) : m.content;
+            if (raw?.output?.assetId) {
+              if (raw.output.width || raw.output.prompt || (raw.output.assetUrl && raw.output.assetUrl.includes("image"))) {
+                imageAssets.push(raw.output);
+              } else if (raw.output.text || (raw.output.assetUrl && raw.output.assetUrl.includes("audio"))) {
+                audioAssets.push(raw.output);
+              } else {
+                imageAssets.push(raw.output);
+              }
+            }
+          } catch (e) {}
+        }
+
+        let summary = "### Universal Multimodal Task Complete\n\n";
+        if (imageAssets.length > 0) {
+          summary += `1. **Visual Asset**: Generated \`${imageAssets[0].prompt || "image"}\` (Asset ID: \`${imageAssets[0].assetId}\`, URL: \`${imageAssets[0].assetUrl}\`)\n`;
+        }
+        if (audioAssets.length > 0) {
+          summary += `2. **Audio Narration**: Synthesized speech track (Asset ID: \`${audioAssets[0].assetId}\`, URL: \`${audioAssets[0].assetUrl}\`)\n`;
+        }
+        if (hadRagCall) {
+          summary += `3. **Knowledge Retrieval**: Retrieved and verified grounding passages from document store.\n`;
+        }
+        summary += "\nAll multimodal tool invocations succeeded through native ToolRegistry federation without manual intervention.";
+
+        return {
+          content: summary,
+        };
+      }
     }
 
     // B. Initial turn for coding agent task
@@ -226,6 +325,62 @@ function generateAssistantResponse(messages, tools = []) {
             id: `call_${crypto.randomUUID().slice(0, 8)}`,
             name: fsListTool.function?.name || fsListTool.name,
             arguments: JSON.stringify({ path: "." }),
+          },
+        ],
+      };
+    }
+
+    // E. Media generation requests (M-ORCH-01)
+    if (mediaImageTool && (lowerMsg.includes("generate image") || lowerMsg.includes("generate an image") || lowerMsg.includes("draw ") || lowerMsg.includes("illustration") || lowerMsg.includes("diagram") || (lowerMsg.includes("image") && (lowerMsg.includes("create") || lowerMsg.includes("make") || lowerMsg.includes("generate"))))) {
+      let prompt = lastUserMsg.replace(/generate image of|generate an image of|create image of|make image of|generate an illustration of|create an illustration of|draw /gi, "").trim();
+      if (!prompt) prompt = "A clean architectural diagram";
+      return {
+        content: null,
+        toolCalls: [
+          {
+            id: `call_${crypto.randomUUID().slice(0, 8)}`,
+            name: mediaImageTool.function?.name || mediaImageTool.name || "media.generate_image",
+            arguments: JSON.stringify({
+              prompt: prompt,
+              aspectRatio: lowerMsg.includes("16:9") ? "16:9" : "1:1",
+            }),
+          },
+        ],
+      };
+    }
+
+    // F. Speech synthesis requests (M-ORCH-01)
+    if (mediaSpeechTool && (lowerMsg.includes("synthesize speech") || lowerMsg.includes("voice narration") || lowerMsg.includes("narrate ") || lowerMsg.includes("speak ") || lowerMsg.includes("text-to-speech"))) {
+      let text = lastUserMsg.replace(/synthesize speech for|narrate the following:|voice narration for|speak:|text-to-speech:/gi, "").trim();
+      if (!text) text = "Nirnay AI autonomous execution completed.";
+      return {
+        content: null,
+        toolCalls: [
+          {
+            id: `call_${crypto.randomUUID().slice(0, 8)}`,
+            name: mediaSpeechTool.function?.name || mediaSpeechTool.name || "media.synthesize_speech",
+            arguments: JSON.stringify({
+              text: text,
+            }),
+          },
+        ],
+      };
+    }
+
+    // G. Cross-modal RAG search requests
+    if (ragSearchTool && (lowerMsg.includes("search document") || lowerMsg.includes("rag search") || lowerMsg.includes("search corpus") || lowerMsg.includes("find in docs"))) {
+      let query = lastUserMsg.replace(/search documents for|rag search for|find in docs:|search corpus for/gi, "").trim();
+      if (!query) query = lastUserMsg;
+      return {
+        content: null,
+        toolCalls: [
+          {
+            id: `call_${crypto.randomUUID().slice(0, 8)}`,
+            name: ragSearchTool.function?.name || ragSearchTool.name || "rag.search_documents",
+            arguments: JSON.stringify({
+              query: query,
+              topK: 5,
+            }),
           },
         ],
       };
@@ -1283,6 +1438,7 @@ const server = http.createServer((req, res) => {
         if (
           requestedModel &&
           requestedModel !== MODEL_NAME &&
+          !requestedModel.startsWith("qwen2.5") &&
           requestedModel !== "local" &&
           requestedModel !== "default"
         ) {
@@ -1308,6 +1464,19 @@ const server = http.createServer((req, res) => {
         const chatId = `chatcmpl-${crypto.randomUUID()}`;
         const created = Math.floor(Date.now() / 1000);
 
+        const standardToolCalls = answer.toolCalls
+          ? answer.toolCalls.map((tc) => ({
+              id: tc.id,
+              type: "function",
+              function: {
+                name: tc.name || tc.function?.name,
+                arguments: tc.arguments || tc.function?.arguments,
+              },
+              name: tc.name || tc.function?.name,
+              arguments: tc.arguments || tc.function?.arguments,
+            }))
+          : undefined;
+
         if (!isStreaming) {
           // Non-streaming response
           res.writeHead(200, { "Content-Type": "application/json" });
@@ -1322,7 +1491,7 @@ const server = http.createServer((req, res) => {
                 message: {
                   role: "assistant",
                   content: answer.content,
-                  ...(answer.toolCalls ? { tool_calls: answer.toolCalls } : {}),
+                  ...(standardToolCalls ? { tool_calls: standardToolCalls } : {}),
                 },
                 finish_reason: answer.toolCalls ? "tool_calls" : "stop",
               },

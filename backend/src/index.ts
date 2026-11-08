@@ -50,6 +50,7 @@ import {
   type AssetStore,
   watchForCancellation,
   type SpeechProvider,
+  createMediaTools,
 } from "@ai-platform/media";
 import { estimateLlmCostUsd, estimatePromptTokens, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import {
@@ -906,6 +907,16 @@ async function main() {
     { provider: speech?.name ?? null, available: speech !== null },
     speech ? "speech provider registered" : "no speech provider configured — long-form video renders without narration"
   );
+
+  // Register media tools (image generation, speech synthesis) into ToolRegistry
+  // enabling universal orchestrator and autonomous agent multi-modal workflows (M-ORCH-01).
+  for (const { definition, handler } of createMediaTools({
+    imageProvider,
+    speech,
+    assetStore,
+  })) {
+    toolRegistry.register(definition, handler);
+  }
 
   if (runs.workers) {
     if (scanner) {

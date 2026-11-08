@@ -12,3 +12,4 @@ export * from "./video-script.js";
 export * from "./subtitles.js";
 export * from "./failure-message.js";
 export * from "./cancellation-watch.js";
+export * from "./tools.js";
