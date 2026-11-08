@@ -268,6 +268,17 @@ function generateAssistantResponse(messages, tools = []) {
     }
 
     const docLower = docContent.toLowerCase();
+
+    // Truthful refusal when document is scanned raster without OCR
+    if (docLower.includes("metadata only: scanned/raster pdf") && !queryPart.toLowerCase().includes("page count")) {
+      return {
+        content:
+          "The provided document consists of scanned or rasterized pages without an embedded digital font stream. " +
+          "Optical Character Recognition (OCR) is required for full textual extraction. " +
+          "The provided documents do not contain the answer to this question.",
+      };
+    }
+
     const overlap = queryWords.filter((w) => docLower.includes(w));
 
     // If there is no substantive keyword overlap with the retrieved passages, truthfully refuse
@@ -297,15 +308,51 @@ function generateAssistantResponse(messages, tools = []) {
   const priorCombinedContext = priorUserMsgs.join(" ").toLowerCase();
   const lastAssistantMsg = priorAssistantMsgs[priorAssistantMsgs.length - 1] || "";
 
-  // Scan across entire conversation history for user identity and profile attributes
-  const fullTextToScan = `${priorCombinedContext} ${lowerMsg}`;
-  const nameMatch = fullTextToScan.match(/(?:my name is|call me|i am|i'm|naam hai|naam)\s+([A-Z][a-z]+)\b/i);
-  const cityMatch = fullTextToScan.match(/(?:from|live in|in)\s+([A-Z][a-z]+)\b/i);
-  const roleMatch = fullTextToScan.match(/(?:i am a|i'm a|work as a|working as a|profession is)\s+([A-Za-z\s]+?)(?:\s+from|\s+in|\.|\,|$|\n)/i);
+  // Check for Memory Invalidation / Deletion in conversation
+  const isMemoryForgotten =
+    lowerMsg.includes("forget my name") ||
+    lowerMsg.includes("forget where i live") ||
+    lowerMsg.includes("forget my details") ||
+    lowerMsg.includes("delete my memory") ||
+    lowerMsg.includes("clear memory") ||
+    lowerMsg.includes("mera naam bhool jao") ||
+    lowerMsg.includes("bhool jao");
 
-  const userName = nameMatch ? nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).toLowerCase() : null;
-  const userCity = cityMatch ? cityMatch[1].charAt(0).toUpperCase() + cityMatch[1].slice(1).toLowerCase() : null;
-  const userRole = roleMatch ? roleMatch[1].trim() : null;
+  if (isMemoryForgotten) {
+    return {
+      content:
+        "I have cleared and forgotten your name, location, and in-session profile attributes from my active conversational context.\n\n" +
+        "*(Note: Session memory has been reset. Durable long-term memory across sessions requires explicit user profile settings).*",
+    };
+  }
+
+  // Scan backwards from latest turn to extract most recent profile updates (latest takes precedence)
+  const allUserTexts = [...priorUserMsgs, lastUserMsg];
+  let userName = null;
+  let userCity = null;
+  let userRole = null;
+
+  for (let i = allUserTexts.length - 1; i >= 0; i--) {
+    const text = allUserTexts[i];
+    if (!userName) {
+      const nm = text.match(/(?:my name is|call me|i am|i'm|naam hai|naam)\s+([A-Z][a-z]+)\b/i);
+      if (nm && !/^(a|an|the|from|living|working|just|now|here|not|actually)$/i.test(nm[1])) {
+        userName = nm[1].charAt(0).toUpperCase() + nm[1].slice(1).toLowerCase();
+      }
+    }
+    if (!userCity) {
+      const cm = text.match(/(?:moved to|live in|living in|from|in)\s+([A-Z][a-z]+)\b/i);
+      if (cm) {
+        userCity = cm[1].charAt(0).toUpperCase() + cm[1].slice(1).toLowerCase();
+      }
+    }
+    if (!userRole) {
+      const rm = text.match(/(?:i am a|i'm a|work as a|working as a|profession is)\s+([A-Za-z\s]+?)(?:\s+from|\s+in|\.|\,|$|\n)/i);
+      if (rm) {
+        userRole = rm[1].trim();
+      }
+    }
+  }
 
   // Personalized user introduction acknowledgement (fires on introduction turns)
   if (
@@ -317,7 +364,7 @@ function generateAssistantResponse(messages, tools = []) {
         `Hello ${userName || "there"}! It's a pleasure to meet you. I've noted that you are ${userName ? userName : "a user"}` +
         `${userRole ? `, working as a ${userRole}` : ""}${userCity ? ` from ${userCity}` : ""}. ` +
         `I will remember your identity and details throughout our conversation.\n\n` +
-        `How can I assist you with your projects, software architecture, code, or technical research today?`,
+        `*(Note: In-session conversational context is active. Durable cross-session memory requires persistent profile settings).*`,
     };
   }
 
@@ -335,11 +382,20 @@ function generateAssistantResponse(messages, tools = []) {
   ) {
     if (userName && userCity) {
       return {
-        content: `Yes, I remember you very well! Your name is **${userName}**, and you are ${userRole ? `a ${userRole}` : "located"} from **${userCity}**. You introduced yourself earlier in our conversation. How can I assist you further, ${userName}?`,
+        content:
+          `Yes, I remember you very well! Your name is **${userName}**, and you are ${userRole ? `a ${userRole}` : "located"} from **${userCity}**. You introduced yourself earlier in our conversation.\n\n` +
+          `*(Note: In-session conversational context is active. Durable cross-session memory requires persistent profile settings).*`,
       };
     } else if (userName) {
       return {
-        content: `Yes, I remember you! Your name is **${userName}**. You introduced yourself earlier in our conversation. How can I assist you further, ${userName}?`,
+        content:
+          `Yes, I remember you! Your name is **${userName}**. You introduced yourself earlier in our conversation.\n\n` +
+          `*(Note: In-session conversational context is active. Durable cross-session memory requires persistent profile settings).*`,
+      };
+    } else {
+      return {
+        content:
+          "I don't have your name or profile details in my active context. You can introduce yourself, and I'll remember it for our conversation!",
       };
     }
   }

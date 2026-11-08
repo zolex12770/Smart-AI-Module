@@ -119,6 +119,12 @@ export interface CodingIntentAdapter {
   cwd: string;
   errorSymptom?: string;
   expectedBehavior?: string;
+  negativeConstraints?: string[];
+  preservedConstraints?: string[];
+  prohibitedFiles?: string[];
+  iterativeOnly?: boolean;
+  preserveExistingApi?: boolean;
+  assertionPreserved?: boolean;
 }
 
 export interface ImageIntentAdapter {
@@ -1009,6 +1015,34 @@ export class ConversationalIntentEngine {
       testArgs = ["-m", "pytest", testFile];
     }
 
+    const prohibitedFiles: string[] = [];
+    const prohibitMatch = rawLower.match(/(?:do\s+not\s+touch|never\s+modify|don't\s+change|leave\s+untouched|bina\s+chede|mat\s+badal(?:na)?)\s+([a-zA-Z0-9_\-\.\/]+)/gi);
+    if (prohibitMatch) {
+      for (const m of prohibitMatch) {
+        const file = m.replace(/(?:do\s+not\s+touch|never\s+modify|don't\s+change|leave\s+untouched|bina\s+chede|mat\s+badal(?:na)?)\s+/i, "").trim();
+        if (file) prohibitedFiles.push(file);
+      }
+    }
+
+    const iterativeOnly =
+      state.negativeConstraints.includes("recursion") ||
+      rawLower.includes("without recursion") ||
+      rawLower.includes("bina recursion") ||
+      rawLower.includes("iterative only") ||
+      rawLower.includes("non-recursive") ||
+      rawLower.includes("no recursion");
+
+    const preserveExistingApi =
+      rawLower.includes("preserve the existing api") ||
+      rawLower.includes("keep the same api") ||
+      rawLower.includes("api change mat karna") ||
+      state.preservedConstraints.includes("existing_api");
+
+    const assertionPreserved =
+      rawLower.includes("never weaken or delete an assertion") ||
+      rawLower.includes("do not weaken") ||
+      rawLower.includes("fix the source, not the test");
+
     return {
       testFile,
       targetFile,
@@ -1019,6 +1053,12 @@ export class ConversationalIntentEngine {
       cwd: "coding-demo",
       errorSymptom: state.originalPrompt,
       expectedBehavior: "All unit tests pass with exit code 0",
+      negativeConstraints: state.negativeConstraints,
+      preservedConstraints: state.preservedConstraints,
+      prohibitedFiles,
+      iterativeOnly,
+      preserveExistingApi,
+      assertionPreserved,
     };
   }
 

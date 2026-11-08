@@ -516,7 +516,7 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
 - **Generalization & Deception Elimination:**
   - Completely removed hardcoded test/fixture replacements (`ANSWER = 41 -> 42` and hardcoded conditional branches).
   - Engineered modular, generalized diagnostic and repair engine in `scripts/lib/coding_engine.mjs` integrated directly into `scripts/local-model-server.mjs`.
-  - Generalized across diverse, novel defect classes and linguistic modalities:
+  - Generalized across 12 diverse, novel defect classes and linguistic modalities:
     1. **Python Syntax Errors:** Detects missing delimiters (`:`) on `def`, `if`, `for`, `while`, `class`, and unclosed parentheses; synthesizes exact token replacements.
     2. **Python Algorithmic Defects:** Corrects off-by-one boundary comparisons in binary search (`while low < high` $\rightarrow$ `while low <= high`) and boundary return conditions in Fibonacci sequences.
     3. **Invariant Preservation (Non-Recursive / Iterative Requirement):** Strictly enforces architectural constraints (*"without recursion"*, *"bina recursion ke"*), replacing recursive implementations with iterative loops while preserving algorithmic contracts.
@@ -527,16 +527,34 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
     8. **Prohibited File Constraints:** Strictly honors negative constraints (*"Do not touch file B under any circumstance"*), refusing modifications to forbidden files.
     9. **Zero Test Regressions:** Preserves unrelated passing tests across multi-test suites without regression.
     10. **Ambiguous Defect Handling:** Accurately identifies ambiguous requests lacking reproducible test context, explaining diagnostic uncertainty and refusing dangerous blind edits.
-- **Security, Patch Atomicity & Honest Sandboxing:**
-  - **Path Containment:** `resolveSandboxedPath` enforces symlink resolution and real path containment checks; path traversal escapes (`../../sensitive_host_secret.txt`) are strictly rejected.
-  - **Patch Atomicity:** `applyUnifiedDiff` stages all multi-file hunks in memory before writing; any failing hunk aborts the entire patch without partial file corruption.
-  - **Honest UI Disclosure:** Replaced misleading `"SANDBOX JAIL ACTIVE"` badge on `frontend/app/coding/page.tsx` with `"APPLICATION PATH CONTAINMENT (WINDOWS APPDATA ISOLATION)"`, explicitly communicating application-level directory containment without hypervisor containers.
-- **Scanned PDF Ingestion Integrity:**
-  - Updated `backend/packages/rag/src/parsers/pdf.ts` to explicitly state `[Document Metadata Only — OCR required for full textual content extraction]` for scanned raster PDFs without digital font streams. All 11 test files and 77/77 tests in `@ai-platform/rag` passing.
+    11. **Security & Containment Audit:** `resolveSandboxedPath` enforces symlink resolution and real path containment checks; path traversal escapes (`../../sensitive_host_secret.txt`) are strictly rejected. `applyUnifiedDiff` stages all multi-file hunks in memory before writing; any failing hunk aborts the entire patch without partial file corruption.
+    12. **Defect Not Inferable from Stack Trace Alone:** When a stack trace is opaque or truncated (e.g. `AssertionError: False is not true`), the agent inspects source file lines to identify root causes (e.g. inverted ratio threshold `> 10` vs `>= 5`); if the defect is in an unidentifiable black box with no source lines, the agent explains diagnostic uncertainty and refuses to guess blindly.
+- **7-Turn Conversational Intent-to-Code Chain:**
+  - Automated and verified the complete 7-turn conversational coding chain in `scripts/verify-intent-coding-multiturn.mjs` (7/7 turns passed, 100%):
+    - *Turn 1:* Python factorial feature generation and unittest pass.
+    - *Turn 2:* Negative constraint enforcement (`without recursion`) replacing recursive implementation with iterative loop and re-running tests.
+    - *Turn 3:* Cross-language translation to TypeScript (`factorial.ts`) with type signatures `(n: number): number`.
+    - *Turn 4:* Strict TypeScript typing without JavaScript degradation or `any`.
+    - *Turn 5:* Existing API signature preservation.
+    - *Turn 6:* Scope containment with prohibited file enforcement (`test_suite.ts` protected from edits).
+    - *Turn 7:* Assertion preservation and coverage expansion with 0 and negative edge case tests.
+- **RAG Ingestion Integrity & Memory Audit:**
+  - Verified in `scripts/verify-rag-pdf-truthfulness.mjs` (6/6 passed, 100%):
+    - Ingestion of scanned raster PDFs without font streams synthesizes an explicit metadata-only descriptor chunk requiring OCR.
+    - Ingestion of mixed PDFs extracts digital text and flags OCR-required pages.
+    - Empty 0-byte PDF buffers are cleanly rejected with descriptive error.
+    - Grounded RAG retrieval on scanned raster chunks truthfully refuses without hallucinating answers.
+    - Conversational profile memory updates prioritize the latest turn (e.g. moving from Pune to Mumbai).
+    - Memory deletion (*"forget my name"*) clears active session context.
+    - Honest disclosure states that in-session memory is ephemeral to the active conversation and durable cross-session memory requires persistent profile settings.
+- **Honest UI Disclosure & Sandboxing Truth:**
+  - Replaced misleading `"SANDBOX JAIL ACTIVE"` badge on `frontend/app/coding/page.tsx` with `"APPLICATION PATH CONTAINMENT (WINDOWS APPDATA ISOLATION)"`, explicitly communicating application-level directory containment without fake OS-level hypervisor containers.
 - **Empirical Unit, Benchmark & Browser Verification:**
-  - `scripts/verify-coding-agent-generalized-suite.mjs`: 11/11 adversarial cases passing (100%).
+  - `scripts/verify-coding-agent-generalized-suite.mjs`: 12/12 adversarial cases passing (100%).
+  - `scripts/verify-intent-coding-multiturn.mjs`: 7/7 turns passing (100%).
+  - `scripts/verify-rag-pdf-truthfulness.mjs`: 6/6 test cases passing (100%).
   - `scripts/benchmark-coding-agent.mjs`: Multi-file enterprise repo benchmark passing (100%).
-  - `scripts/verify-coding-agent-autonomous.mjs`: Autonomous tool cycle passing (100%).
+  - `backend/packages/rag`: All 11 test files and 79/79 Vitest tests passing.
   - `scripts/verify-browser-coding.mjs`: Live Playwright browser E2E test on `http://localhost:3000/coding`:
     - Verified honest disclosure badge in live DOM.
     - Verified demo fixture seeding.

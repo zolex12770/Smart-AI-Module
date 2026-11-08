@@ -23,6 +23,10 @@ const PDFJS_DIST_ROOT = fileURLToPath(new URL(".", import.meta.resolve("pdfjs-di
  * the document rather than throwing an unhandled zero-chunks crash.
  */
 export async function extractPdfText(buffer: Buffer): Promise<string> {
+  if (!buffer || buffer.length === 0) {
+    throw new Error("Empty PDF buffer received (0 bytes). Cannot extract document content.");
+  }
+
   const loadingTask = getDocument({
     data: new Uint8Array(buffer),
     standardFontDataUrl: `${PDFJS_DIST_ROOT}standard_fonts/`,
@@ -34,6 +38,8 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
   try {
     const doc = await loadingTask.promise;
     const pageTexts: string[] = [];
+    let scannedPagesCount = 0;
+
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
       const page = await doc.getPage(pageNumber);
       const content = await page.getTextContent();
@@ -43,17 +49,27 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
         pageText += item.str;
         pageText += item.hasEOL ? "\n" : "";
       }
-      pageTexts.push(pageText.trim());
+      const trimmed = pageText.trim();
+      if (trimmed.length > 0) {
+        pageTexts.push(trimmed);
+      } else {
+        scannedPagesCount++;
+      }
     }
-    const extracted = pageTexts.filter((p) => p.length > 0).join("\n\n");
-    if (extracted.trim().length > 0) {
-      return extracted;
+
+    if (pageTexts.length > 0) {
+      if (scannedPagesCount > 0) {
+        pageTexts.push(
+          `[Notice: ${scannedPagesCount} of ${doc.numPages} page(s) in this PDF are raster/image-only without embedded digital font streams. Text was extracted from selectable pages; OCR is required for complete extraction of scanned pages.]`
+        );
+      }
+      return pageTexts.join("\n\n");
     }
 
     // Graceful handling for scanned / raster-only PDFs:
     // If pages exist but have zero digital font stream text, synthesize a structural
     // descriptor chunk with page count and document metadata so ingestion can succeed
-    // without an unhandled zero-chunk failure.
+    // without an unhandled zero-chunk failure, while explicitly flagging OCR requirement.
     if (doc.numPages > 0) {
       let title = "";
       let author = "";
@@ -74,7 +90,7 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
       if (subject) metaParts.push(`Subject: ${subject}`);
       const metaInfoStr = metaParts.length > 0 ? ` (${metaParts.join(", ")})` : "";
 
-      return `[Document: Scanned/Raster PDF — ${doc.numPages} page(s)${metaInfoStr}. Note: This document consists of image-based or rasterized pages without an embedded digital font stream. Metadata-only descriptor indexed; OCR required for full textual extraction.]`;
+      return `[Document Metadata Only: Scanned/Raster PDF — ${doc.numPages} page(s)${metaInfoStr}. Note: This document consists exclusively of image-based or rasterized pages without an embedded digital font stream. Metadata-only descriptor indexed; OCR required for full textual content extraction.]`;
     }
 
     return "";
