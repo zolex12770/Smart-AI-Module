@@ -133,4 +133,76 @@ describe("ConversationalIntentEngine in agent-core", () => {
     expect(chatAdapter.userProfile.role).toContain("Software Architect");
     expect(chatAdapter.reasoningStyle).toBe("concise");
   });
+
+  it("verifies all 14 mandatory M-INTENT-02 constraint prompts and conflict detection", () => {
+    // 1. Write factorial in Python without recursion.
+    const c1 = engine.extractConstraints("Write factorial in Python without recursion.");
+    expect(c1.negativeConstraints).toContain("recursion");
+    expect(c1.explicitConstraints).toContain("FORMAT_PYTHON");
+
+    // 2. Do not change the original meaning.
+    const c2 = engine.extractConstraints("Do not change the original meaning.");
+    expect(c2.preservedConstraints).toContain("PRESERVE_SEMANTIC_MEANING");
+
+    // 3. Avoid cars.
+    const c3 = engine.extractConstraints("Avoid cars.");
+    expect(c3.negativeConstraints).toContain("cars");
+
+    // 4. Keep the same composition.
+    const c4 = engine.extractConstraints("Keep the same composition.");
+    expect(c4.preservedConstraints).toContain("PRESERVE_STYLE_AND_COMPOSITION");
+
+    // 5. Only change the lighting.
+    const c5 = engine.extractConstraints("Only change the lighting.");
+    expect(c5.preservedConstraints).toContain("PRESERVE_ALL_EXCEPT_LIGHTING");
+    expect(c5.explicitConstraints).toContain("DELTA_LIGHTING_ONLY");
+
+    // 6. Do not modify any other file.
+    const c6 = engine.extractConstraints("Do not modify any other file.");
+    expect(c6.preservedConstraints).toContain("PRESERVE_UNMODIFIED_FILES");
+    expect(c6.negativeConstraints).toContain("modify other files");
+
+    // 7. Explain in Hindi, but keep technical terms in English.
+    const c7 = engine.extractConstraints("Explain in Hindi, but keep technical terms in English.");
+    expect(c7.explicitConstraints).toContain("EXPLAIN_HINDI");
+    expect(c7.explicitConstraints).toContain("TECHNICAL_TERMS_ENGLISH");
+
+    // 8. Make it shorter without removing important information.
+    const c8 = engine.extractConstraints("Make it shorter without removing important information.");
+    expect(c8.explicitConstraints).toContain("CONCISE_SUMMARY");
+    expect(c8.preservedConstraints).toContain("PRESERVE_ESSENTIAL_INFORMATION");
+
+    // 9. Use TypeScript, not JavaScript.
+    const c9 = engine.extractConstraints("Use TypeScript, not JavaScript.");
+    expect(c9.explicitConstraints).toContain("FORMAT_TYPESCRIPT");
+    expect(c9.negativeConstraints).toContain("javascript");
+    expect(c9.explicitConstraints).not.toContain("FORMAT_JAVASCRIPT");
+
+    // 10. Do not add dependencies.
+    const c10 = engine.extractConstraints("Do not add dependencies.");
+    expect(c10.negativeConstraints).toContain("dependencies");
+
+    // 11. Bina recursion ke factorial banao.
+    const c11 = engine.extractConstraints("Bina recursion ke factorial banao.");
+    expect(c11.negativeConstraints).toContain("recursion");
+
+    // 12. Koi gaadi mat dikhana.
+    const c12 = engine.extractConstraints("Koi gaadi mat dikhana.");
+    expect(c12.negativeConstraints).toContain("cars");
+
+    // 13. Original meaning change mat karna.
+    const c13 = engine.extractConstraints("Original meaning change mat karna.");
+    expect(c13.preservedConstraints).toContain("PRESERVE_SEMANTIC_MEANING");
+
+    // 14. Sirf sari ka color red karo, baaki same rakho.
+    const c14 = engine.extractConstraints("Sirf sari ka color red karo, baaki same rakho.");
+    expect(c14.preservedConstraints).toContain("PRESERVE_ALL_EXCEPT_TARGET");
+    expect(c14.explicitConstraints).toContain("TARGET_COLOR_RED");
+    expect(c14.explicitConstraints).toContain("TARGET_ELEMENT_SARI");
+
+    // Conflict test: With and without recursion
+    const cConflict = engine.extractConstraints("Write factorial in Python with recursion and without recursion.");
+    expect(cConflict.conflicts.length).toBeGreaterThan(0);
+    expect(cConflict.negativeConstraints).toContain("recursion"); // Negative constraint prioritized
+  });
 });

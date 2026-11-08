@@ -68,6 +68,15 @@ describe("extractPdfText (real pdfjs-dist parsing)", () => {
     expect(text).toBe("Page one content\n\nPage two content");
   });
 
+  it("handles scanned/image-only PDF with zero text by returning structural descriptor", async () => {
+    const scannedPdf = buildMinimalPdf([[]]);
+
+    const text = await extractPdfText(scannedPdf);
+
+    expect(text).toContain("[Document: Scanned/Raster PDF — 1 page(s)");
+    expect(text).toContain("image-based or rasterized pages");
+  });
+
   it("throws a real, catchable error for a non-PDF buffer", async () => {
     await expect(extractPdfText(Buffer.from("this is not a pdf file"))).rejects.toThrow();
   });

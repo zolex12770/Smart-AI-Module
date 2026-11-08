@@ -430,3 +430,32 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
   - `scripts/tests/test_intent_engine.mjs`: 5/5 test groups passing (100% language detection and intent classification verified).
   - `scripts/benchmark-requirement-satisfaction.mjs`: 14/14 tests passing across multi-turn reasoning and module adapters.
 - **Status:** **M-INTENT-01 UNIT & BENCHMARK VERIFIED (100% COMPLETE)**.
+
+### 12.13 Milestone M-INTENT-02: Structured Constraint Extraction, Invariant Preservation & Conflict Resolution
+- **Structured Constraint Parsing Engine:**
+  - Implemented structured constraint classification in `backend/packages/agent-core/src/intent-engine.ts` and `scripts/lib/intent_engine.mjs` returning:
+    - `negativeConstraints`: explicit forbidden elements, algorithms, libraries, or patterns (`without recursion`, `avoid cars`, `do not add dependencies`, `koi gaadi mat dikhana`, `bina recursion ke`).
+    - `preservedConstraints`: mandatory invariants preserved across transformations (`PRESERVE_SEMANTIC_MEANING`, `PRESERVE_STYLE_AND_COMPOSITION`, `PRESERVE_UNMODIFIED_FILES`, `PRESERVE_ALL_EXCEPT_LIGHTING`, `PRESERVE_ALL_EXCEPT_TARGET`).
+    - `explicitConstraints`: mandatory target formats and delta specifications (`FORMAT_PYTHON`, `FORMAT_TYPESCRIPT`, `EXPLAIN_HINDI`, `TECHNICAL_TERMS_ENGLISH`, `CONCISE_SUMMARY`, `DELTA_LIGHTING_ONLY`).
+    - `conflicts`: detected semantic contradictions between requested constraints.
+    - `unresolvedAmbiguity`: system-generated clarification prompts for mutually exclusive user options.
+- **Strict Constraint Priority & Conflict Resolution:**
+  - Contradictory instructions (e.g. *with recursion* and *without recursion* simultaneously) trigger conflict detection with negative constraints prioritized over positive ones.
+  - Mutually exclusive formats (e.g. *TypeScript and JavaScript* simultaneously) generate proactive clarification queries rather than silent arbitrary choice.
+- **Chat Conversational Experience & De-Robotization:**
+  - Eliminated rigid `### Technical Analysis: ...` boilerplate fallback in `scripts/local-model-server.mjs`.
+  - Added dedicated warm, context-aware handlers for status inquiries (*"what are you doing"*, *"kya kar rahe ho"*), identity (*"who are you"*, *"tum kaun ho"*), and capabilities (*"what can you do"*).
+  - Dynamic fallback distinguishes general/conversational prompts from technical engineering requests.
+- **Graceful Scanned/Raster PDF Ingestion:**
+  - In `backend/packages/rag/src/parsers/pdf.ts`, when a PDF contains pages (`doc.numPages > 0`) but has zero digital font stream text, extracts document metadata (`Title`, `Author`, `Subject`, `numPages`) and returns a valid structural descriptor chunk.
+  - Eliminates unhandled zero-chunk exceptions in `backend/packages/rag/src/ingest.ts`, allowing scanned PDFs to transition to `READY` status in PostgreSQL.
+- **Empirical Unit, Benchmark & Browser Verification:**
+  - `backend/packages/agent-core/src/intent-engine.test.ts`: 9/9 Vitest unit tests passing.
+  - `backend/packages/rag/src/parsers/pdf.test.ts`: 4/4 Vitest unit tests passing.
+  - `scripts/verify-intent-constraints-suite.mjs`:
+    - 14/14 mandatory benchmark constraint prompts passing (100%).
+    - 3/3 conflict resolution scenarios verified.
+    - Playwright browser E2E test on port 3000 verified natural assistant response and confirmed complete absence of robotic boilerplate.
+  - `node scripts/check-boundary.mjs`: 7/7 architectural boundary checks passing.
+  - Verified screenshot: [`browser_chat_natural_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_chat_natural_verified.png).
+- **Status:** **M-INTENT-02 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.

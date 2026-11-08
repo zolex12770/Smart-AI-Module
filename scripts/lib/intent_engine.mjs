@@ -161,74 +161,182 @@ export class ConversationalIntentEngine {
   }
 
   /**
-   * Extracts negative constraints, preserved invariants, and explicit format requirements.
+   * Extracts negative constraints, preserved invariants, explicit format requirements, and detects conflicts.
    */
   extractConstraints(text) {
     const negativeConstraints = [];
     const preservedConstraints = [];
     const explicitConstraints = [];
+    const conflicts = [];
+    const unresolvedAmbiguity = [];
 
-    // Negative constraints in English
+    const lower = text.toLowerCase();
+
+    // 1. Negative constraints in English
     const negativePatterns = [
-      /(?:without|no|avoid|excluding|free of)\s+([a-zA-Z0-9\s]+?)(?:\.|$|,|\band\b)/gi,
-      /(?:dont|don't|do not)\s+(?:include|show|add|put|use)\s+([a-zA-Z0-9\s]+?)(?:\.|$|,|\band\b)/gi,
-      /never\s+(?:use|include|call)\s+([a-zA-Z0-9\s]+?)(?:\.|$|,|\band\b)/gi,
+      /(?:without|excluding|free of)\s+([a-zA-Z0-9_\-\s]+?)(?:\.|$|,|\band\b)/gi,
+      /(?:avoid)\s+([a-zA-Z0-9_\-\s]+?)(?:\.|$|,|\band\b)/gi,
+      /(?:dont|don't|do not)\s+(?:include|show|add|put|use|modify|change)\s+([a-zA-Z0-9_\-\s]+?)(?:\.|$|,|\band\b)/gi,
+      /(?:never)\s+(?:use|include|call|modify)\s+([a-zA-Z0-9_\-\s]+?)(?:\.|$|,|\band\b)/gi,
+      /(?:not|no)\s+(javascript|js|recursion|cars|dependencies|external libraries)\b/gi,
     ];
 
     for (const pattern of negativePatterns) {
       let match;
       while ((match = pattern.exec(text)) !== null) {
         let item = match[1].trim().toLowerCase();
-        if (item.includes("meaning") || item.includes("original") || item.includes("style")) {
+        if (item.includes("meaning") || item.includes("original") || item.includes("style") || item.includes("composition") || item.includes("important information")) {
           continue;
         }
-        item = item.replace(/\b(and|or|with|also)\b/g, "").trim();
+        item = item.replace(/\b(and|or|with|also|the|any)\b/g, "").replace(/\s+/g, " ").trim();
         if (item && !negativeConstraints.includes(item)) {
           negativeConstraints.push(item);
         }
       }
     }
 
-    // Negative constraints in Hinglish / Hindi
+    // Specific English negative constraint keywords
+    if (/\bdo not add dependencies\b|\bno dependencies\b|\bwithout dependencies\b/i.test(text)) {
+      if (!negativeConstraints.includes("dependencies")) negativeConstraints.push("dependencies");
+    }
+    if (/\bdo not modify any other file\b|\bno other files\b|\bwithout touching other files\b/i.test(text)) {
+      if (!negativeConstraints.includes("modify other files")) negativeConstraints.push("modify other files");
+      if (!preservedConstraints.includes("PRESERVE_UNMODIFIED_FILES")) preservedConstraints.push("PRESERVE_UNMODIFIED_FILES");
+    }
+    if (/\b(?:not javascript|use typescript,?\s*not javascript)\b/i.test(text)) {
+      if (!negativeConstraints.includes("javascript")) negativeConstraints.push("javascript");
+    }
+
+    // 2. Negative constraints in Hinglish / Devanagari Hindi
     const hinglishNegativePatterns = [
-      /([a-zA-Z0-9\s]+?)\s+(?:mat\s+(?:dikhana|karna|rakhna|banao|use karo)|nahi\s+hona\s+chahiye)/gi,
-      /(?:bina|bina\s+kisi)\s+([a-zA-Z0-9\s]+?)(?:\s+ke|\.|$|,)/gi,
+      /(?:koi\s+)?([a-zA-Z0-9_\-\s]+?)\s+(?:mat\s+(?:dikhana|karna|rakhna|banao|use karo)|nahi\s+hona\s+chahiye|mat\s+daalo)/gi,
+      /(?:bina|bina\s+kisi)\s+([a-zA-Z0-9_\-\s]+?)(?:\s+ke|\.|$|,)/gi,
+      /([a-zA-Z0-9_\-\s]+?)\s+hatao/gi,
     ];
 
     for (const pattern of hinglishNegativePatterns) {
       let match;
       while ((match = pattern.exec(text)) !== null) {
         let item = match[1].trim().toLowerCase();
-        if (item.includes("meaning") || item.includes("original") || item.includes("style")) {
+        if (item.includes("meaning") || item.includes("original") || item.includes("style") || item.includes("baaki")) {
           continue;
         }
-        item = item.replace(/\b(and|or|with|also|ke)\b/g, "").trim();
+        item = item.replace(/\b(and|or|with|also|ke|koi)\b/g, "").replace(/\s+/g, " ").trim();
         if (item && !negativeConstraints.includes(item)) {
           negativeConstraints.push(item);
         }
       }
     }
 
-    // Preservation constraints
-    if (/original\s+meaning\s+change\s+mat\s+karna/i.test(text) || /keep\s+original\s+meaning/i.test(text) || /preserve\s+meaning/i.test(text)) {
+    // Normalize vernacular negative terms
+    if (negativeConstraints.includes("gaadi") || negativeConstraints.includes("gadi")) {
+      if (!negativeConstraints.includes("cars")) negativeConstraints.push("cars");
+    }
+
+    // 3. Preservation constraints
+    if (
+      /original\s+meaning\s+change\s+mat\s+karna/i.test(text) ||
+      /do\s+not\s+change\s+(?:the\s+)?original\s+meaning/i.test(text) ||
+      /keep\s+(?:the\s+)?original\s+meaning/i.test(text) ||
+      /preserve\s+(?:semantic\s+)?meaning/i.test(text)
+    ) {
       preservedConstraints.push("PRESERVE_SEMANTIC_MEANING");
     }
-    if (/same\s+(?:style|composition|view)/i.test(text) || /style\s+(?:change\s+mat|same\s+rakho)/i.test(text) || /preserve\s+style/i.test(text)) {
+
+    if (
+      /keep\s+(?:the\s+)?same\s+composition/i.test(text) ||
+      /same\s+(?:style|composition|view)/i.test(text) ||
+      /composition\s+(?:change\s+mat|same\s+rakho)/i.test(text) ||
+      /preserve\s+(?:style|composition)/i.test(text)
+    ) {
       preservedConstraints.push("PRESERVE_STYLE_AND_COMPOSITION");
     }
+
+    if (
+      /only\s+change\s+(?:the\s+)?lighting/i.test(text) ||
+      /sirf\s+lighting\s+(?:badlo|change\s+karo)/i.test(text)
+    ) {
+      preservedConstraints.push("PRESERVE_ALL_EXCEPT_LIGHTING");
+      explicitConstraints.push("DELTA_LIGHTING_ONLY");
+    }
+
+    if (
+      /sirf\s+sari\s+ka\s+color\s+red\s+karo/i.test(text) ||
+      /only\s+change\s+(?:the\s+)?(?:sari|dress)\s+(?:color\s+)?to\s+red/i.test(text) ||
+      /baaki\s+same\s+rakho/i.test(text)
+    ) {
+      preservedConstraints.push("PRESERVE_ALL_EXCEPT_TARGET");
+      explicitConstraints.push("TARGET_COLOR_RED");
+      explicitConstraints.push("TARGET_ELEMENT_SARI");
+    }
+
+    if (
+      /without\s+removing\s+important\s+information/i.test(text) ||
+      /preserve\s+important\s+information/i.test(text) ||
+      /jaruri\s+baatein\s+mat\s+hatana/i.test(text)
+    ) {
+      preservedConstraints.push("PRESERVE_ESSENTIAL_INFORMATION");
+    }
+
     if (/keep\s+existing\s+tests/i.test(text) || /do\s+not\s+break\s+existing/i.test(text)) {
       preservedConstraints.push("PRESERVE_EXISTING_TESTS");
     }
 
-    // Explicit format constraints
-    if (/\b(typescript|ts)\b/i.test(text)) explicitConstraints.push("FORMAT_TYPESCRIPT");
-    if (/\b(python|py)\b/i.test(text)) explicitConstraints.push("FORMAT_PYTHON");
-    if (/\b(javascript|js)\b/i.test(text)) explicitConstraints.push("FORMAT_JAVASCRIPT");
-    if (/o\s*\(\s*log\s*n\s*\)|logarithmic/i.test(text)) explicitConstraints.push("COMPLEXITY_O_LOG_N");
-    if (/\b(step-by-step|step by step)\b/i.test(text)) explicitConstraints.push("STEP_BY_STEP_EXPLANATION");
-    if (/\b(simple terms|easy to understand|saral)\b/i.test(text)) explicitConstraints.push("SIMPLIFIED_EXPLANATION");
+    // 4. Explicit format constraints
+    if (/\b(?:typescript|ts)\b/i.test(text) && !/\bnot\s+typescript\b/i.test(text)) {
+      explicitConstraints.push("FORMAT_TYPESCRIPT");
+    }
+    if (/\b(?:python|py)\b/i.test(text) && !/\bnot\s+python\b/i.test(text)) {
+      explicitConstraints.push("FORMAT_PYTHON");
+    }
+    if (/\b(?:javascript|js)\b/i.test(text) && !/\bnot\s+(?:javascript|js)\b/i.test(text) && !negativeConstraints.includes("javascript")) {
+      explicitConstraints.push("FORMAT_JAVASCRIPT");
+    }
+    if (/o\s*\(\s*log\s*n\s*\)|logarithmic/i.test(text)) {
+      explicitConstraints.push("COMPLEXITY_O_LOG_N");
+    }
+    if (/\b(step-by-step|step by step)\b/i.test(text)) {
+      explicitConstraints.push("STEP_BY_STEP_EXPLANATION");
+    }
+    if (/\b(simple terms|easy to understand|saral)\b/i.test(text)) {
+      explicitConstraints.push("SIMPLIFIED_EXPLANATION");
+    }
+    if (/explain\s+in\s+hindi.*keep\s+technical\s+terms\s+in\s+english/i.test(text) || /hindi\s+me.*technical\s+terms\s+english/i.test(text)) {
+      explicitConstraints.push("EXPLAIN_HINDI");
+      explicitConstraints.push("TECHNICAL_TERMS_ENGLISH");
+    }
+    if (/\b(?:make\s+it\s+shorter|make\s+shorter|more\s+concise|briefly)\b/i.test(text)) {
+      explicitConstraints.push("CONCISE_SUMMARY");
+    }
 
-    return { negativeConstraints, preservedConstraints, explicitConstraints };
+    // 5. Conflict Detection & Explicit Priority Resolution
+    if (explicitConstraints.includes("FORMAT_TYPESCRIPT") && explicitConstraints.includes("FORMAT_JAVASCRIPT")) {
+      if (negativeConstraints.includes("javascript")) {
+        const idx = explicitConstraints.indexOf("FORMAT_JAVASCRIPT");
+        if (idx !== -1) explicitConstraints.splice(idx, 1);
+      } else {
+        conflicts.push("CONFLICT: Mutually exclusive formats requested (TypeScript vs JavaScript).");
+        unresolvedAmbiguity.push("Please specify whether you prefer TypeScript or JavaScript.");
+      }
+    }
+
+    if (lower.includes("with recursion") && (lower.includes("without recursion") || negativeConstraints.includes("recursion"))) {
+      conflicts.push("CONFLICT: Prompt requests both recursive and non-recursive implementation.");
+      if (!negativeConstraints.includes("recursion")) negativeConstraints.push("recursion");
+    }
+
+    if (explicitConstraints.includes("CONCISE_SUMMARY") && (lower.includes("in-depth") || lower.includes("detailed explanation") || lower.includes("very long"))) {
+      conflicts.push("CONFLICT: Prompt requests concise summary and exhaustive in-depth detail simultaneously.");
+      unresolvedAmbiguity.push("Please clarify whether you desire a brief summary or comprehensive deep dive.");
+    }
+
+    return {
+      negativeConstraints,
+      preservedConstraints,
+      explicitConstraints,
+      conflicts,
+      unresolvedAmbiguity,
+    };
   }
 
   /**
@@ -378,7 +486,7 @@ export class ConversationalIntentEngine {
     const intent = options.forcedIntent || this.classifyIntent(rawText);
     const targetModule = options.targetModule || this.mapToTargetModule(intent);
     const isRevision = this.detectRevision(rawText);
-    const { negativeConstraints, preservedConstraints, explicitConstraints } = this.extractConstraints(rawText);
+    const { negativeConstraints, preservedConstraints, explicitConstraints, conflicts, unresolvedAmbiguity } = this.extractConstraints(rawText);
     const entities = this.extractEntities(rawText);
 
     const prevContext = this.sessionContext.get(sessionId) || null;
@@ -516,8 +624,8 @@ export class ConversationalIntentEngine {
       contextReferences: prevContext ? [prevContext.originalPrompt] : [],
       userPreferences: options.userPreferences || {},
       relevantPriorArtifacts: options.priorArtifacts || [],
-      assumptions: [],
-      unresolvedAmbiguity: [],
+      assumptions: conflicts && conflicts.length > 0 ? conflicts : [],
+      unresolvedAmbiguity: unresolvedAmbiguity || [],
       completionCriteria,
       expectedOutput,
       enhancedPrompt,

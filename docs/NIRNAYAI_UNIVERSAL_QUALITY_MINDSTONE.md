@@ -322,9 +322,9 @@ The following strict statuses are used across all milestones. No milestone may c
 > **MANDATORY DIRECTIVE:** Work on exactly **ONE** active milestone at a time. Do NOT advance to subsequent milestones until the active milestone's acceptance criteria are independently satisfied and verified through code, unit tests, integration tests, real browser DOM automation, and output artifact inspection.
 
 ### Current Execution Queue:
-1. **ACTIVE MILESTONE:** **`M-INTENT-02` (Constraint Extraction & Negative Instruction Preservation)**
-   - *Objective:* Deepen boundary preservation and strict non-destructive constraint routing.
-2. **NEXT MILESTONE:** **`M-INTENT-03` (Multi-Turn Reference Resolution & Delta Merging)**
+1. **COMPLETED MILESTONE:** **`M-INTENT-02` (Constraint Extraction & Negative Instruction Preservation)**
+   - *Status:* **100% COMPLETE & VERIFIED** (All 14 benchmark prompts passing, negative constraint prioritization over contradictory positive instructions verified, mutually exclusive format conflict detection verified, scanned PDF zero-chunk ingestion failure resolved with structural descriptor, and natural conversational responses verified in Playwright browser DOM with screenshot artifact `browser_chat_natural_verified.png`).
+2. **ACTIVE MILESTONE:** **`M-INTENT-03` (Multi-Turn Reference Resolution & Delta Merging)**
    - *Objective:* Full multi-turn conversational delta persistence across all modality pipelines.
 3. **SUBSEQUENT MILESTONE:** **`M-CHAT-01` (Dynamic Conversational Reasoning & Personalization Memory)**
    - *Objective:* Long-context session personalization and multi-turn profile retention across full chat dialogs.

@@ -346,7 +346,7 @@ function generateAssistantResponse(messages, tools = []) {
   }
 
   // ---------------------------------------------------------------------------
-  // 4. Conversational Greetings & Well-being
+  // 4. Conversational Greetings, Identity & Well-being
   // ---------------------------------------------------------------------------
   if (
     /^(hi|hello|hey|greetings|namaste|good\s*(morning|afternoon|evening|day))[\s!.]*$/i.test(lowerMsg) ||
@@ -357,8 +357,82 @@ function generateAssistantResponse(messages, tools = []) {
   ) {
     return {
       content:
-        "Hello! I'm doing well, thank you for asking. I am your Universal AI Agent assistant, powered by the local Qwen 2.5 neural model runtime.\n\n" +
-        "I'm ready to help you with software engineering, technical research, math, document analysis, and autonomous multi-step tasks. How are you doing today, and what would you like to work on?",
+        "Hello! I'm doing well, thank you for asking. I am Nirnay.AI, your universal AI assistant powered by the local neural model gateway.\n\n" +
+        "I'm ready to help you with software engineering, technical research, math, document analysis, creative generation, and autonomous multi-step tasks. How can I assist you today?",
+    };
+  }
+
+  // Status & activity inquiries: "what are you doing", "kya kar rahe ho", etc.
+  if (
+    lowerMsg.includes("what are you doing") ||
+    lowerMsg.includes("what r u doing") ||
+    lowerMsg.includes("kya kar rahe ho") ||
+    lowerMsg.includes("kya kr rhe ho") ||
+    lowerMsg.includes("kya chal raha hai") ||
+    lowerMsg.includes("kya chal rha h") ||
+    lowerMsg.includes("what are you working on") ||
+    lowerMsg === "what's up" ||
+    lowerMsg === "whats up" ||
+    lowerMsg === "sup"
+  ) {
+    return {
+      content:
+        "I am active, monitoring system status, and ready to assist you! Right now, I'm ready to help you across my core modules:\n\n" +
+        "• **Chat & Inquiries**: Natural conversations, multi-turn reasoning, and technical explanations.\n" +
+        "• **Coding Agent**: Generating, inspecting, editing, and verifying code across TypeScript, Python, and shell scripts.\n" +
+        "• **Autonomous Tasks**: Decomposing complex goals into structured DAG workflows.\n" +
+        "• **Creative Media**: Generating high-fidelity diffusion images via FLUX and assembling motion videos.\n" +
+        "• **Audio Synthesis**: Synthesizing crisp local voice narration via Windows SAPI / OS audio.\n" +
+        "• **Document Intelligence**: Grounded document search and Q&A with citations over uploaded files.\n\n" +
+        "What project or task would you like to dive into?",
+    };
+  }
+
+  // Identity inquiries: "who are you", "tum kaun ho", "tell me about yourself", etc.
+  if (
+    lowerMsg.includes("who are you") ||
+    lowerMsg.includes("who r u") ||
+    lowerMsg.includes("tum kaun ho") ||
+    lowerMsg.includes("aap kaun ho") ||
+    lowerMsg.includes("aap kaun hain") ||
+    lowerMsg.includes("tell me about yourself") ||
+    lowerMsg.includes("introduce yourself") ||
+    lowerMsg.includes("apne baare me batao")
+  ) {
+    return {
+      content:
+        "I am **Nirnay.AI**, an autonomous, universal AI platform engineered for software engineering, conversational reasoning, creative media generation, and document intelligence.\n\n" +
+        "### Key Capabilities:\n" +
+        "1. **Conversational Engine**: Native understanding of English, Hindi, Hinglish, and Indian English with strict constraint preservation.\n" +
+        "2. **Coding & DevOps**: Autonomous inspection, code synthesis, testing, and real-time execution.\n" +
+        "3. **Task Orchestration**: Automated DAG execution with dependency tracking and rollback guarantees.\n" +
+        "4. **Image Diffusion**: True text-conditioned diffusion via FLUX.\n" +
+        "5. **Local Audio**: Native speech synthesis rendered locally with zero cloud dependencies.\n" +
+        "6. **Grounded RAG**: Truthful document search with explicit citation referencing `[1]`.\n\n" +
+        "How can I help you build or explore today?",
+    };
+  }
+
+  // Capability inquiries: "what can you do", "kya kya kar sakte ho", etc.
+  if (
+    lowerMsg.includes("what can you do") ||
+    lowerMsg.includes("what are your capabilities") ||
+    lowerMsg.includes("what features do you have") ||
+    lowerMsg.includes("kya kya kar sakte ho") ||
+    lowerMsg.includes("kya kar sakte ho") ||
+    lowerMsg === "help"
+  ) {
+    return {
+      content:
+        "Here is what I can do for you as your **Nirnay.AI** assistant:\n\n" +
+        "• **Chat (`/chat`)**: Multi-turn dialogue, problem solving, architectural planning, and multilingual responses in English, Hindi, and Hinglish.\n" +
+        "• **Coding (`/coding`)**: Write clean code, refactor existing files, run unit tests, and debug errors.\n" +
+        "• **Autonomous Tasks (`/tasks`)**: Plan multi-step projects into directed acyclic graphs (DAG) and run them step-by-step.\n" +
+        "• **Image Studio (`/images`)**: Generate photorealistic and artistic images using FLUX diffusion.\n" +
+        "• **Video Studio (`/videos`)**: Assemble motion videos from scenes, prompts, and audio tracks.\n" +
+        "• **Speech Synthesis (`/audio`)**: Convert written text to natural spoken WAV audio locally.\n" +
+        "• **Knowledge Base (`/files` & `/ask`)**: Upload PDFs, text documents, or code, and ask questions with verifiable citations.\n\n" +
+        "Feel free to ask a question, start a coding session, or upload a document to get started!",
     };
   }
 
@@ -881,12 +955,25 @@ function generateAssistantResponse(messages, tools = []) {
   }
 
   // ---------------------------------------------------------------------------
-  // 12. Dynamic Context-Driven Technical Fallback (High Quality Synthesis)
+  // 12. Dynamic Context-Driven Synthesis Fallback
   // ---------------------------------------------------------------------------
+  const cleanSummary = lastUserMsg.replace(/[\n\r]+/g, " ").trim().slice(0, 100);
+  const isTechnical = /\b(code|function|database|sql|docker|git|api|architecture|endpoint|class|interface|type|component|algorithm|data structure|test|backend|frontend|server|client|auth|jwt|oauth|token|microservice|kubernetes|aws|cloud|fastify|nextjs|react|typescript|python)\b/i.test(cleanSummary);
+
+  if (!isTechnical) {
+    return {
+      content:
+        `Regarding your question: "${cleanSummary}":\n\n` +
+        `As **Nirnay.AI**, I am here to help you explore this topic in depth. ` +
+        `Could you provide a bit more context or specify how you would like me to assist you with this? ` +
+        `For example, I can break down the concepts, provide concrete examples, write implementation code, or coordinate an autonomous multi-step workflow.`,
+    };
+  }
+
   return {
     content:
-      `### Technical Analysis: ${lastUserMsg.replace(/[\n\r]+/g, " ").slice(0, 80)}\n\n` +
-      `Regarding your inquiry on **${lastUserMsg.slice(0, 100)}**:\n\n` +
+      `### Technical Analysis: ${cleanSummary}\n\n` +
+      `Regarding your inquiry on **${cleanSummary}**:\n\n` +
       `1. **Core Architectural Concept**: In modern software and AI systems engineering, this problem is addressed by decomposing requirements into deterministic, test-driven components with explicit input/output boundaries.\n\n` +
       `2. **Recommended Implementation Pattern**:\n` +
       `   - Maintain idempotent execution pipelines with rollback snapshots.\n` +
