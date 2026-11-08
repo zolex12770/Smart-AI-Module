@@ -1157,13 +1157,17 @@ const server = http.createServer((req, res) => {
         const [wStr, hStr] = sizeStr.split("x");
         const width = Math.min(1024, Math.max(256, parseInt(wStr, 10) || 512));
         const height = Math.min(1024, Math.max(256, parseInt(hStr, 10) || 512));
-        const seed = body.seed !== undefined ? body.seed : Math.floor(Math.random() * 1000000);
+        const explicitSeed = body.seed !== undefined ? parseInt(body.seed, 10) : undefined;
         const model = body.model || "flux";
 
         const sessionId = body.user || body.sessionId || "default-session";
-        const intentResult = sharedIntentEngine.processTurn(sessionId, prompt, { forcedIntent: "IMAGE_GENERATION" });
+        const intentResult = sharedIntentEngine.processTurn(sessionId, prompt, {
+          forcedIntent: "IMAGE_GENERATION",
+          seed: explicitSeed,
+        });
         const finalPrompt = intentResult.enhancedPrompt || prompt;
         const negativePrompt = intentResult.negativeConstraints ? intentResult.negativeConstraints.join(", ") : "";
+        const seed = intentResult.seed !== undefined ? intentResult.seed : Math.floor(Math.random() * 1000000);
 
         console.log(`[local-model-server] Intent processed [${intentResult.detectedLanguage}]: "${finalPrompt.slice(0, 70)}..." (isRevision: ${intentResult.isRevision})`);
 

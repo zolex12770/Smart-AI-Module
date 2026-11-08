@@ -692,8 +692,16 @@ export class ConversationalIntentEngine {
       }
     }
 
+    const seed =
+      options.seed !== undefined
+        ? options.seed
+        : isRevision && prevContext && prevContext.seed !== undefined
+        ? prevContext.seed
+        : Math.floor(Math.random() * 1000000);
+
     const state = {
       sessionId,
+      seed,
       timestamp: Date.now(),
       originalPrompt: rawText,
       detectedLanguage: lang,
@@ -918,6 +926,7 @@ export class ConversationalIntentEngine {
       height: 512,
       isRevision: state.isRevision,
       preservations: state.preservedConstraints,
+      seed: state.seed,
     };
   }
 

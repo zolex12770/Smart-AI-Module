@@ -159,6 +159,25 @@ export default function ImagesPage() {
             {submitting ? "Submitting…" : "Generate"}
           </button>
         </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: "12px", color: "var(--muted)" }}>Quick Presets:</span>
+          {[
+            { label: "🌅 Golden Hour", text: "a lighthouse on a rocky coast during golden hour sunset" },
+            { label: "🌾 Indian Village", text: "Ek gaon ki realistic photo jisme kisan khet me hai, natural daylight" },
+            { label: "🦋 Blue Butterfly", text: "a vibrant blue butterfly perched on a yellow flower, macro photography" },
+            { label: "🏙️ Cyberpunk City", text: "futuristic cyberpunk city with flying vehicles at night, neon lights" },
+          ].map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="btn btn-secondary"
+              style={{ fontSize: "11px", padding: "3px 8px" }}
+              onClick={() => setPrompt(preset.text)}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
       </form>
 
       {error && <p className="error-text">{error}</p>}
@@ -182,9 +201,22 @@ export default function ImagesPage() {
             </p>
             <StatusBadge status={g.status} />
             {g.status === "succeeded" && g.resultAssetId ? (
-              <a className="btn" href={assetUrl(g.resultAssetId)} download style={{ marginLeft: 8 }}>
-                Download
-              </a>
+              <>
+                <a className="btn" href={assetUrl(g.resultAssetId)} download style={{ marginLeft: 8 }}>
+                  Download
+                </a>
+                <button
+                  className="btn btn-secondary"
+                  type="button"
+                  style={{ marginLeft: 8 }}
+                  onClick={() => {
+                    setPrompt(`Same image as "${g.prompt.slice(0, 30)}...", but `);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                >
+                  Refine
+                </button>
+              </>
             ) : null}
             {(g.status === "pending" || g.status === "processing") && (
               <button

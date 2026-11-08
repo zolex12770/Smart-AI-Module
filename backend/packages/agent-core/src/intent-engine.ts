@@ -51,6 +51,7 @@ export interface IntentEntities {
 
 export interface IntentState {
   sessionId: string;
+  seed?: number;
   timestamp: number;
   originalPrompt: string;
   detectedLanguage: LinguisticModality;
@@ -78,6 +79,7 @@ export interface IntentState {
 export interface IntentProcessOptions {
   forcedIntent?: CoreIntent;
   targetModule?: TargetModule;
+  seed?: number;
   userPreferences?: Record<string, unknown>;
   priorArtifacts?: string[];
 }
@@ -138,6 +140,7 @@ export interface ImageIntentAdapter {
   height: number;
   isRevision: boolean;
   preservations: string[];
+  seed?: number;
 }
 
 export interface RagIntentAdapter {
@@ -852,8 +855,16 @@ export class ConversationalIntentEngine {
       }
     }
 
+    const seed =
+      options.seed !== undefined
+        ? options.seed
+        : isRevision && prevContext && prevContext.seed !== undefined
+        ? prevContext.seed
+        : Math.floor(Math.random() * 1000000);
+
     const state: IntentState = {
       sessionId,
+      seed,
       timestamp: Date.now(),
       originalPrompt: rawText,
       detectedLanguage: lang,
@@ -1077,6 +1088,7 @@ export class ConversationalIntentEngine {
       height: 512,
       isRevision: state.isRevision,
       preservations: state.preservedConstraints,
+      seed: state.seed,
     };
   }
 
