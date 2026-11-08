@@ -1,6 +1,15 @@
 import { apiFetch, getSelectedProjectId } from "./auth-client";
 import type { GeneratedImage, ImageGenerationRequest, Task, TaskNode, TaskType, VideoProjectRequest } from "@ai-platform/shared";
 
+export function getApiUrl(): string {
+  if (typeof window !== "undefined") {
+    const { hostname, protocol } = window.location;
+    if (hostname === "127.0.0.1") return `${protocol}//127.0.0.1:8787`;
+    if (hostname === "localhost") return `${protocol}//localhost:8787`;
+  }
+  return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
+}
+
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
 
 // Mirrors of the API's response shapes for `conversations`/`messages` — deliberately local
@@ -135,6 +144,8 @@ export interface ModelInfo {
   model: string;
   isMock: boolean;
   isDefault: boolean;
+  isLocal?: boolean;
+  category?: "real" | "local" | "mock" | "unavailable";
 }
 
 export const listModels = () => request<{ models: ModelInfo[]; default: string | null }>("/api/v1/models");
@@ -556,7 +567,7 @@ export const deleteMemory = (id: string) => request<{ ok: true }>(`/api/v1/memor
  * callers omit it and get the project the rest of the app is scoped to.
  */
 export function assetUrl(assetId: string, projectId?: string | null): string {
-  const url = `${API_URL}/api/v1/assets/${encodeURIComponent(assetId)}`;
+  const url = `${getApiUrl()}/api/v1/assets/${encodeURIComponent(assetId)}`;
   const scope = projectId ?? getSelectedProjectId();
   // No scope means no session has resolved yet; emitting a bare URL keeps the failure a plain
   // 400 from the API rather than a request claiming a project that is not the user's.
@@ -603,3 +614,44 @@ export const ragQuery = (question: string, topK?: number) =>
     method: "POST",
     body: JSON.stringify(topK === undefined ? { question } : { question, topK }),
   });
+
+// --- Feedback & Telemetry -------------------------------------------------------------
+
+export interface FeedbackSubmission {
+  conversationId?: string;
+  messageIndex?: number;
+  rating: "satisfied" | "partially_satisfied" | "needs_improvement";
+  categoryTag?: string;
+  userNotes?: string;
+}
+
+export interface FeedbackSummary {
+  feedback: Array<{
+    id: string;
+    projectId: string;
+    userId: string;
+    conversationId: string | null;
+    messageIndex: number | null;
+    rating: "satisfied" | "partially_satisfied" | "needs_improvement";
+    categoryTag: string | null;
+    userNotes: string | null;
+    createdAt: string;
+  }>;
+  metrics: {
+    total: number;
+    satisfiedCount: number;
+    partiallySatisfiedCount: number;
+    needsImprovementCount: number;
+    satisfactionRate: number;
+    categoryBreakdown: Record<string, number>;
+  };
+}
+
+export const submitFeedback = (payload: FeedbackSubmission) =>
+  request<{ ok: true; id: string; rating: string; categoryTag: string | null; createdAt: string }>("/api/v1/feedback", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const getFeedbackSummary = () =>
+  request<FeedbackSummary>("/api/v1/feedback");

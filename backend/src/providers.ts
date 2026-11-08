@@ -1,6 +1,7 @@
 import { MockImageProvider } from "@ai-platform/image-mock";
 import { SdCppImageProvider } from "@ai-platform/image-sdcpp";
 import { OpenAICompatibleImageProvider } from "@ai-platform/image-openai";
+import { LocalEngineImageProvider } from "@ai-platform/media";
 import { AnthropicProvider } from "@ai-platform/llm-anthropic";
 import { GoogleProvider } from "@ai-platform/llm-google";
 import { LocalOpenAICompatibleProvider } from "@ai-platform/llm-local";
@@ -46,6 +47,7 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
       ? new OpenAICompatibleImageProvider({
           baseUrl: config.IMAGE_BASE_URL,
           model: config.IMAGE_MODEL,
+          name: config.IMAGE_MODEL === "flux" ? "flux-diffusion" : `image-openai-${config.IMAGE_MODEL}`,
           apiKey: config.IMAGE_API_KEY,
           supportsNegativePrompt: config.IMAGE_SUPPORTS_NEGATIVE_PROMPT,
           supportsSeed: config.IMAGE_SUPPORTS_SEED,
@@ -73,6 +75,8 @@ export function selectImageProvider(config: AppConfig): ImageProvider | null {
       timeoutMs: config.IMAGE_SD_TIMEOUT_MS,
     });
   }
+
+  // Procedural art is strictly separated and not substituted for text-to-image
 
   // Only when mocks were asked for explicitly (tests, the E2E server). Otherwise image
   // generation is unavailable and says so — never a placeholder presented as a result.

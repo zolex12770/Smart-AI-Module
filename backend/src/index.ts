@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, existsSync, rmSync, renameSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AgentEngine } from "@ai-platform/agent-core";
@@ -8,6 +8,7 @@ import {
   runMigrations,
   runPostgresMigrations,
   type DrizzleDb,
+  type PgliteDb,
   PgConversationRepository,
   PgMessageRepository,
   PgTaskNodeRepository,
@@ -49,6 +50,7 @@ import {
   type AssetStore,
   watchForCancellation,
   type SpeechProvider,
+  createMediaTools,
 } from "@ai-platform/media";
 import { estimateLlmCostUsd, estimatePromptTokens, ModelRegistry, ModelRouter } from "@ai-platform/model-router";
 import {
@@ -83,6 +85,7 @@ import {
   createFilesystemTools,
   createSearchTools,
   createWebTools,
+  createWebSearchTools,
   createTerminalTools,
   projectWorkspace,
   resolveSandboxedPath,
@@ -123,7 +126,24 @@ async function connectDatabase(
   // ENOENT from `mkdir`. Creating the parent here makes a fresh checkout, a fresh container
   // and a throwaway test database all boot without a manual `mkdir` first.
   mkdirSync(dirname(resolve(config.DATABASE_DIR)), { recursive: true });
-  const db = await createDb(config.DATABASE_DIR);
+  const stalePid = resolve(config.DATABASE_DIR, "postmaster.pid");
+  if (existsSync(stalePid)) {
+    try {
+      rmSync(stalePid, { force: true });
+    } catch {
+      // Ignored
+    }
+  }
+  let db: PgliteDb;
+  try {
+    db = await createDb(config.DATABASE_DIR);
+  } catch (err) {
+    const dir = resolve(config.DATABASE_DIR);
+    const backupDir = `${dir}_corrupt_${Date.now()}`;
+    try { renameSync(dir, backupDir); } catch {}
+    mkdirSync(dir, { recursive: true });
+    db = await createDb(config.DATABASE_DIR);
+  }
   await runMigrations(db);
   return {
     db,
@@ -592,6 +612,7 @@ async function main() {
         ? config.WEB_FETCH_ALLOWLIST.split(",").map((h) => h.trim()).filter(Boolean)
         : undefined,
     }),
+    ...createWebSearchTools(),
     // Metered: this is the path an AGENT takes, and an agent can search in a loop (ADR-131).
     // The RAG route meters its own question separately and therefore passes no meter, so one
     // question is never charged twice.
@@ -886,6 +907,16 @@ async function main() {
     { provider: speech?.name ?? null, available: speech !== null },
     speech ? "speech provider registered" : "no speech provider configured — long-form video renders without narration"
   );
+
+  // Register media tools (image generation, speech synthesis) into ToolRegistry
+  // enabling universal orchestrator and autonomous agent multi-modal workflows (M-ORCH-01).
+  for (const { definition, handler } of createMediaTools({
+    imageProvider,
+    speech,
+    assetStore,
+  })) {
+    toolRegistry.register(definition, handler);
+  }
 
   if (runs.workers) {
     if (scanner) {
@@ -1614,7 +1645,7 @@ async function main() {
       },
       queue: async () => {
         try {
-          await jobQueue.getJob("document.ingest", "health-probe");
+          await jobQueue.getJob("document.ingest", "00000000-0000-0000-0000-000000000000");
           return true;
         } catch {
           return false;

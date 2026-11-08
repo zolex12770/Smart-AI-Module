@@ -194,4 +194,15 @@ describe("Ask screen outcomes", () => {
     await ask();
     expect(await screen.findByRole("heading", { name: "Sources" })).toBeInTheDocument();
   });
+  it("renders honest RAG grounding and citation disclosures", async () => {
+    vi.stubGlobal("fetch", routedFetch() as unknown as typeof fetch);
+    render(
+      <SessionProvider>
+        <AskPage />
+      </SessionProvider>
+    );
+    expect(await screen.findByText(/Strict passage-grounded answering/i)).toBeInTheDocument();
+    expect(screen.getByText(/Numbered bracket references/i)).toBeInTheDocument();
+    expect(screen.getByText(/English, Hindi & Hinglish query expansion/i)).toBeInTheDocument();
+  });
 });

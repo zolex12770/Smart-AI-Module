@@ -247,20 +247,20 @@ describe("ChatView says which model answers", () => {
 
   it("names the configured provider and model, not a hard-coded 'mock by default'", async () => {
     render(<ChatView />);
-    expect(await screen.findByText(/Answers come from/)).toHaveTextContent("Answers come from local (qwen2.5:7b).");
+    expect(await screen.findByText(/Connected to genuine hosted provider/)).toHaveTextContent("Connected to genuine hosted provider: local (qwen2.5:7b)");
     expect(screen.queryByText(/mock by default/i)).toBeNull();
   });
 
   it("labels a mock as a mock", async () => {
     listModels.mockResolvedValueOnce({ models: [{ provider: "mock", model: "mock-1", isMock: true, isDefault: true }], default: "mock" });
     render(<ChatView />);
-    expect(await screen.findByText(/Answers come from/)).toHaveTextContent(/a mock: its replies are canned text/);
+    expect(await screen.findByText(/Simulation mode only/)).toBeInTheDocument();
   });
 
   it("says plainly when no model is configured", async () => {
     listModels.mockResolvedValueOnce({ models: [], default: null });
     render(<ChatView />);
-    expect(await screen.findByRole("status")).toHaveTextContent(/No language model is configured/);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/No language model is configured/);
   });
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { API_URL } from "./api";
+import { API_URL, getApiUrl } from "./api";
 
 /**
  * Browser-side authentication state — docs/26_DECISIONS.md ADR-049.
@@ -140,7 +140,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     if (scope) finalHeaders.set("x-project-id", scope);
   }
 
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(`${getApiUrl()}${path}`, {
     ...rest,
     method,
     headers: finalHeaders,

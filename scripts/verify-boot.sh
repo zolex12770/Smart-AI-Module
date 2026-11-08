@@ -126,21 +126,21 @@ grep -q "providers" "$LAST_LOG" && ok "provider registration logged at boot" || 
 echo
 echo "== 2. PRODUCTION worker role with NO LLM key — the exact Cloud Run worker pool config =="
 echo "   (this is the case that crash-looped before ADR-060)"
-boot_case "prod/worker, no key" 8792 worker NODE_ENV=production ROLE=worker
+boot_case "prod/worker, no key" 8792 worker NODE_ENV=production ROLE=worker ALLOW_MOCK_PROVIDERS=false
 
 echo
 echo "== 3. PRODUCTION api role with a self-hosted runtime configured (no third-party key) =="
 boot_case "prod/api, local runtime" 8793 up \
-  NODE_ENV=production ROLE=api LLM_BASE_URL=http://127.0.0.1:9/v1 LLM_MODEL=local-test SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true
+  NODE_ENV=production ROLE=api ALLOW_MOCK_PROVIDERS=false LLM_BASE_URL=http://127.0.0.1:9/v1 LLM_MODEL=local-test SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true
 
 echo
 echo "== 4. PRODUCTION api role with NO provider at all — must refuse, clearly =="
-boot_case "prod/api, no provider" 8794 exit "no LLM provider is configured, and the mock provider may not run in production" NODE_ENV=production ROLE=api
+boot_case "prod/api, no provider" 8794 exit "no LLM provider is configured, and the mock provider may not run in production" NODE_ENV=production ROLE=api ALLOW_MOCK_PROVIDERS=false
 
 echo
 echo "== 5. PRODUCTION with process-level sandbox — must refuse without explicit opt-in =="
 boot_case "prod/api, process sandbox" 8795 exit "process isolation|SANDBOX_ALLOW_PROCESS_IN_PRODUCTION" \
-  NODE_ENV=production ROLE=api LLM_BASE_URL=http://127.0.0.1:9/v1 LLM_MODEL=local-test \
+  NODE_ENV=production ROLE=api ALLOW_MOCK_PROVIDERS=false LLM_BASE_URL=http://127.0.0.1:9/v1 LLM_MODEL=local-test \
   SANDBOX_RUNTIME=process SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=false
 
 echo
@@ -149,7 +149,7 @@ echo "   (ADR-151: boot used to mkdir ASSETS_ROOT unconditionally, on a filesyst
 echo "    Terraform itself calls read-only, for a directory the cloud store never opens)"
 # "package.json/assets" cannot be created: the parent is a regular file, so mkdirSync throws
 # ENOTDIR — the same shape as EROFS on a read-only container root, and reproducible anywhere.
-boot_case "prod/api, bucket + unwritable ASSETS_ROOT" 8796 up   NODE_ENV=production ROLE=api LLM_BASE_URL=http://127.0.0.1:9/v1 LLM_MODEL=local-test   SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true   ASSETS_BUCKET=verify-boot-bucket ASSETS_ROOT=./package.json/assets
+boot_case "prod/api, bucket + unwritable ASSETS_ROOT" 8796 up   NODE_ENV=production ROLE=api ALLOW_MOCK_PROVIDERS=false LLM_BASE_URL=http://127.0.0.1:9/v1 LLM_MODEL=local-test   SANDBOX_ALLOW_PROCESS_IN_PRODUCTION=true   ASSETS_BUCKET=verify-boot-bucket ASSETS_ROOT=./package.json/assets
 
 echo
 echo "=================================================="

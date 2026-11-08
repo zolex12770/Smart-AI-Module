@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { projectWorkspace, resolveSandboxedPath } from "@ai-platform/tools";
 import type { FastifyInstance } from "fastify";
 import {
   createTaskRequestSchema,
@@ -45,7 +48,7 @@ function scopedProjectId(authCtx: AuthContext): string {
  */
 const nodeDecisionSchema = z.object({ nodeId: z.string().min(1) });
 /** `retry` repeats the interrupted action; `abandon` gives up on it. There is no default. */
-const reconcileSchema = z.object({ nodeId: z.string().min(1), decision: z.enum(["retry", "abandon"]) });
+const reconcileSchema = z.object({ nodeId: z.string().min(1), decision: z.enum(["retry", "abandon"] as const) });
 
 /**
  * Cancel carries no fields of its own. `.strict()` so a stray `actor` is rejected loudly
@@ -73,6 +76,30 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: AppContext): void
 
       const parsed = createTaskRequestSchema.safeParse(request.body);
       if (!parsed.success) throw new ValidationError(parsed.error.message);
+      if (parsed.data.taskType === "fix_failing_test") {
+        const rawInput = (parsed.data.input ?? {}) as Record<string, unknown>;
+        const testDir = String(rawInput.testDir ?? ".").trim() || ".";
+        const testFile = String(rawInput.testFile ?? "").trim();
+        const workspace = projectWorkspace(ctx.sandboxRoot, { projectId });
+        const targetDir = resolveSandboxedPath(workspace, testDir);
+        mkdirSync(targetDir, { recursive: true });
+
+        // Deterministic fixture provisioning for coding-demo
+        if (testDir === "coding-demo" && (testFile === "math.test.js" || testFile === "")) {
+          const mathJsPath = resolve(targetDir, "math.js");
+          const testJsPath = resolve(targetDir, "math.test.js");
+          if (!existsSync(mathJsPath)) {
+            writeFileSync(mathJsPath, 'const ANSWER = 41;\nmodule.exports = { ANSWER };\n', "utf8");
+          }
+          if (!existsSync(testJsPath)) {
+            writeFileSync(
+              testJsPath,
+              'const assert = require("assert");\nconst { ANSWER } = require("./math");\nassert.strictEqual(ANSWER, 42, "Expected ANSWER to be 42");\nconsole.log("PASS");\n',
+              "utf8"
+            );
+          }
+        }
+      }
 
       // The owner is handed to the engine explicitly and has no default (ADR-049): it is what
       // scopes every row the run writes and what its tool calls are attributed to, and neither

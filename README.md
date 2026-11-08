@@ -12,18 +12,10 @@ ffmpeg. Nothing answers with fake output: mock providers exist only for tests, o
 `ALLOW_MOCK_PROVIDERS=true`, and production refuses them. When a capability is not configured,
 it says so.
 
-**Status (2026-09-30, final code `14c94f9`):** [docs/FINAL_PRODUCTION_READINESS_REPORT.md](docs/FINAL_PRODUCTION_READINESS_REPORT.md)
-has the verified status and its evidence. On the Docker Compose stack with real models:
-
-- `npm run verify`: 19/19 gates, including the full-system acceptance (24/24);
-- the attack suite: 11/11;
-- failure injection: 5/5;
-- the browser suite: 11/11.
-
-The coding agent completed its acceptance task but did not complete a second, unrelated task
-with the local 7B model; the report says why. It has not been deployed to a cloud: `terraform
-plan`/`apply` need GCP credentials, so every production cell is `BLOCKED_EXTERNAL`
-([docs/PRODUCTION_DEPLOYMENT_BLOCKER.md](docs/PRODUCTION_DEPLOYMENT_BLOCKER.md)).
+**Current status (2026-10-27):** [MILESTONE_7_FINAL_REPORT.md](MILESTONE_7_FINAL_REPORT.md) is the
+authoritative current report. The verified local tree builds, typechecks and passes its current
+focused test/security gates; live model, media, OCR and cloud integrations remain externally
+blocked. Earlier reports are retained as historical records and are not current evidence.
 
 ## Layout
 
@@ -88,9 +80,9 @@ npm run verify        # every gate, PASS / FAIL / BLOCKED_EXTERNAL; non-zero on 
 
 `npm run verify` runs build, typecheck, lint, unit, integration, the API contract, security,
 Playwright, database, boundary, boot, the real-runtime gates (against a running stack at
-`ACCEPT_API_URL`), Docker and Terraform. On the final tree the automated tests stand at 1284
-passed, 0 failed, 2 skipped, and every gate passes (19/19). The runtime scripts in `scripts/acceptance/` (browser, attacks,
-failure injection, extra scenarios, latency) run against a running stack.
+`ACCEPT_API_URL`), Docker and Terraform. Runtime gates require their actual configured dependencies;
+they are not reported as passed when the host lacks them. Current counts and blocked gates are in
+`TESTING_AND_VERIFICATION_REPORT.md` and `MILESTONE_7_FINAL_REPORT.md`.
 
 [docs/TESTING.md](docs/TESTING.md) describes every layer, and what the acceptance script checks
 in each result.

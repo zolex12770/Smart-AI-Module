@@ -46,9 +46,9 @@
     "@fastify/rate-limit": "^11.2.0",
     "@modelcontextprotocol/server-filesystem": "^2026.7.10",
     "drizzle-orm": "^0.45.2",
-    "fastify": "^5.12.1",
-    "uuid": "^11.0.4",
-    "zod": "^3.25.76"
+    "fastify": "^5.12.7",
+    "uuid": "^14.0.3",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "pino": "^10.3.1",

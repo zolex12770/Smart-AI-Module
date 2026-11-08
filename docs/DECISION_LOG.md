@@ -819,3 +819,64 @@ load takes about 13 minutes.
 **Decision.** `docker-compose.yml` sets `OLLAMA_LOAD_TIMEOUT` to `20m`, which can be overridden,
 and its comment says to keep it aligned with the API's. TROUBLESHOOTING says the same for an
 Ollama run outside compose.
+
+## DL-30: Three more advisories, published on 2026-10-01
+
+CI's dependency audit failed on `main` overnight, on code that had passed it the day before. New
+advisories had been published:
+
+| Package | Severity | Advisory | Update |
+|---|---|---|---|
+| `next` | critical | remote code execution in `next/og` `ImageResponse` | 16.3.3 → 16.3.8 |
+| `fastify` | high | denial of service via an unhandled exception; request-body replacement via an async validation | 5.12.1 → 5.12.5 |
+| `hono` | moderate | — | 4.13.5 → 4.13.12 |
+
+- **Exposure:** the web app does not import `next/og`, so the critical advisory was not reachable
+  here. It was still fixed, because the audit gate must pass.
+- **Fix:** `npm audit fix` without `--force`; only `package-lock.json` changed. The six moderate
+  advisories accepted in SECURITY.md are unchanged.
+- **Verification:** both images were rebuilt, and the full verify, attacks, browser suite and
+  failure injection were re-run on them.
+
+## DL-31: `grep -q` under `pipefail` made a CI step fail on a healthy image
+
+**Context.** CI on `9fcfde8` failed at "Assert the API image boots against a real Postgres". The log
+shows that the image booted: the worker registered all six queues against real Postgres. The step
+still ended with **exit code 141**, which is SIGPIPE.
+
+**Cause.** The step runs `set -euo pipefail` and then `docker logs … | grep -q "job workers
+registered"`. `grep -q` exits at the first match, and that line is the second-to-last of the log.
+When `docker logs` still had the last line to write, it died of SIGPIPE, and `pipefail` made the
+pipeline fail. Whether it fails depends on timing, so it is a latent defect in the check, not a
+flake to re-run. Demonstrated: under `pipefail`, `seq 1 200000 | grep -q "^5$"` exits 141, and
+`… | grep "^5$" >/dev/null` exits 0.
+
+**Fix.** Every `| grep -q` in `ci.yml` (the two boot checks and their running-container checks)
+became `| grep … >/dev/null`, which reads all of its input. `scripts/verify-migrations.sh` had the
+same shape inside `|| MISSING=…`, where a SIGPIPE would report a table missing although it exists.
+It now uses a here-string.
+
+## DL-32: Six more advisories, published by 2026-10-11
+
+`npm audit` on 2026-10-11 reported three critical and three high advisories that had been
+published since DL-30. None of them is in code this repository calls:
+
+| Package | Severity | Advisory | Update | Reached through |
+|---|---|---|---|---|
+| `proxy-addr` | critical | IP spoofing via an IPv4-mapped IPv6 trust subnet (GHSA-jqcg-44mw-7w3h) | 2.0.7 → 2.0.8 | `@modelcontextprotocol/sdk` → `express` only |
+| `shell-quote` | critical | `quote()` command injection after a `{ comment }` token (GHSA-pqg4-j6r4-53mv) | 1.9.0 → 1.12.0 | `concurrently`, a dev dependency |
+| `concurrently` | critical | through `shell-quote` | 10.0.5 → 10.0.6 | root dev dependency |
+| `@modelcontextprotocol/sdk` | high | the OAuth client could send credentials to a server-chosen authorization server (GHSA-6qxp-vccf-f47h) | 1.30.0 → 1.32.1 | `backend/packages/mcp` |
+| `sharp` | high | librsvg CVE-2026-96889 (GHSA-wq5f-xc86-pv6w) | 0.35.4 → 0.35.5 | `next` (web image) |
+| `source-map-js` | high | event-loop denial of service via indexed source-map offsets (GHSA-68fv-2mgg-jv7q) | 1.2.1 → 1.2.2 | `next` → `postcss`, at build time |
+
+- **Exposure:**
+  - The API's `trustProxy` goes through Fastify's own `@fastify/proxy-addr`, not `proxy-addr`.
+  - The MCP client never uses the SDK's `authProvider` (OAuth) hook; see
+    `backend/packages/mcp/src/client.ts`.
+  - The web app does not use `next/image`.
+  - `shell-quote` and `concurrently` are absent from `npm ls --omit=dev`.
+- **Fix:** `npm audit fix` without `--force`; only `package-lock.json` changed. The six moderate
+  advisories accepted in SECURITY.md are unchanged.
+- **Risk:** the one minor-version update is the MCP SDK. The MCP package's 39 tests (stdio,
+  Streamable HTTP, SSE fallback, loopback) pass on 1.32.1.

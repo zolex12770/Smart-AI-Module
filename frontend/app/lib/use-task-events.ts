@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Task, TaskNode, TaskState } from "@ai-platform/shared";
-import { API_URL } from "./api";
+import { API_URL, getApiUrl } from "./api";
 import { getSelectedProjectId } from "./auth-client";
 
 interface TaskEventPayload {
@@ -79,7 +79,7 @@ export function useTaskEvents(taskId: string, initialTask: Task, initialNodes: T
     // `withCredentials` is the other half: without it the browser omits the session cookie on
     // a cross-origin EventSource (the API is a separate deployment, hence `credentials:
     // "include"` in apiFetch), leaving the connection unauthenticated even with a scope.
-    const url = new URL(`${API_URL}/api/v1/agent/tasks/${encodeURIComponent(taskId)}/events`);
+    const url = new URL(`${getApiUrl()}/api/v1/agent/tasks/${encodeURIComponent(taskId)}/events`);
     const projectId = getSelectedProjectId();
     if (projectId) url.searchParams.set("projectId", projectId);
     const source = new EventSource(url.toString(), { withCredentials: true });

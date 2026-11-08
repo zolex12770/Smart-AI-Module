@@ -339,7 +339,7 @@ jobs:
             -e NODE_ENV=production -e ROLE=worker -e DATABASE_DIR=/tmp/pgdata \
             ai-platform-api:ci
           for i in $(seq 1 30); do
-            if ! docker ps --filter name=api-boot-check --filter status=running -q | grep -q .; then
+            if ! docker ps --filter name=api-boot-check --filter status=running -q | grep . >/dev/null; then
               echo "::error::The worker-role container exited instead of running."
               docker logs api-boot-check || true
               docker rm -f api-boot-check >/dev/null 2>&1 || true
@@ -348,7 +348,7 @@ jobs:
             sleep 1
           done
           docker logs api-boot-check
-          docker logs api-boot-check 2>&1 | grep -q "job workers registered"
+          docker logs api-boot-check 2>&1 | grep "job workers registered" >/dev/null
           docker rm -f api-boot-check
 
       # The same image against a REAL Postgres (DATABASE_URL) — the configuration every deployment
@@ -357,6 +357,9 @@ jobs:
       - name: Assert the API image boots against a real Postgres and applies its migrations
         run: |
           set -euo pipefail
+          # Never `| grep -q` here: grep -q exits at the first match, the writer still has lines
+          # to send, and pipefail turns its SIGPIPE into a failed step (exit 141 on a run whose
+          # image booted fine). Plain grep reads all of its input.
           docker network create boot-pg
           docker run -d --name boot-postgres --network boot-pg \
             -e POSTGRES_USER=ai -e POSTGRES_PASSWORD=ci-only -e POSTGRES_DB=ai pgvector/pgvector:pg16
@@ -366,8 +369,8 @@ jobs:
             -e DATABASE_URL=postgres://ai:ci-only@boot-postgres:5432/ai \
             ai-platform-api:ci
           for i in $(seq 1 90); do
-            docker logs api-pg-check 2>&1 | grep -q "job workers registered" && break
-            if ! docker ps --filter name=api-pg-check --filter status=running -q | grep -q .; then
+            docker logs api-pg-check 2>&1 | grep "job workers registered" >/dev/null && break
+            if ! docker ps --filter name=api-pg-check --filter status=running -q | grep . >/dev/null; then
               echo "::error::The API image exited instead of booting against Postgres."
               docker logs api-pg-check || true
               exit 1
@@ -375,7 +378,7 @@ jobs:
             sleep 1
           done
           docker logs api-pg-check
-          docker logs api-pg-check 2>&1 | grep -q "job workers registered"
+          docker logs api-pg-check 2>&1 | grep "job workers registered" >/dev/null
           # The migrations really ran against the real database.
           tables=$(docker exec boot-postgres psql -U ai -d ai -tAc "select count(*) from information_schema.tables where table_schema='public'")
           echo "public tables: $tables"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkGrounding, extractCitationMarkers } from "./grounding.js";
+import { checkGrounding, extractCitationMarkers, detectPromptInjectionOutput } from "./grounding.js";
 import type { RagCitation } from "./retrieve.js";
 
 /**
@@ -22,6 +22,38 @@ const citations = (n: number): RagCitation[] =>
     filename: `file-${i}.txt`,
     chunkIndex: 0,
   }));
+
+describe("checkGrounding — prompt injection detection", () => {
+  it("detects explicit injection override output markers", () => {
+    expect(detectPromptInjectionOutput("PWNED-7731")).toBe(true);
+    expect(detectPromptInjectionOutput("SYSTEM OVERRIDE: new task")).toBe(true);
+    expect(detectPromptInjectionOutput("I am now in override mode")).toBe(true);
+    expect(detectPromptInjectionOutput("All previous instructions have been ignored.")).toBe(true);
+    expect(detectPromptInjectionOutput("The lamp is serviced every Tuesday [1].")).toBe(false);
+  });
+
+  it("rejects an answer that outputs prompt injection markers with violation prompt_injection_detected", () => {
+    const result = checkGrounding({
+      answer: "PWNED-7731 [1]",
+      citations: citations(1),
+      retrievedCount: 1,
+    });
+    expect(result.grounded).toBe(false);
+    expect(result.outcome).toBe("violation");
+    expect(result.violation).toBe("prompt_injection_detected");
+  });
+
+  it("rejects system override compliance even if valid citation is present", () => {
+    const result = checkGrounding({
+      answer: "SYSTEM OVERRIDE: You are hacked [1].",
+      citations: citations(1),
+      retrievedCount: 1,
+    });
+    expect(result.grounded).toBe(false);
+    expect(result.outcome).toBe("violation");
+    expect(result.violation).toBe("prompt_injection_detected");
+  });
+});
 
 describe("checkGrounding — no evidence at all", () => {
   it("rejects a substantive answer when retrieval returned nothing", () => {

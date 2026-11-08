@@ -9,6 +9,7 @@ import {
   listConversations,
   listModels,
   renameConversation,
+  submitFeedback,
   type Conversation,
   type Message,
   type ModelInfo,
@@ -46,6 +47,7 @@ export default function ChatView({
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [manageError, setManageError] = useState<string | null>(null);
   const [messages, setMessages] = useState<DisplayMessage[]>(toDisplay(initialMessages));
+  const [satisfactionRatings, setSatisfactionRatings] = useState<Record<number, { rating: string; tag?: string }>>({});
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   /**
@@ -56,6 +58,27 @@ export default function ChatView({
   const [chatModel, setChatModel] = useState<ModelInfo | null | undefined>(undefined);
   const conversationIdRef = useRef<string | undefined>(conversationId);
   const controllerRef = useRef<AbortController | null>(null);
+
+  const rateMessage = (
+    msgIndex: number,
+    rating: "satisfied" | "partially_satisfied" | "needs_improvement",
+    displayLabel: string,
+    tag?: string
+  ) => {
+    setSatisfactionRatings((prev) => ({
+      ...prev,
+      [msgIndex]: { rating: displayLabel, tag: tag ?? prev[msgIndex]?.tag },
+    }));
+
+    void submitFeedback({
+      conversationId: conversationIdRef.current,
+      messageIndex: msgIndex,
+      rating,
+      categoryTag: tag,
+    }).catch((err: unknown) => {
+      console.warn("Feedback telemetry submission failed:", err);
+    });
+  };
 
   useEffect(() => {
     // `projectId` is in the dependency list because the sidebar is project-scoped server-side
@@ -76,9 +99,8 @@ export default function ChatView({
       .catch(() => setChatModel(undefined));
   }, [projectId]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
+  async function sendPrompt(customText?: string) {
+    const text = (customText ?? input).trim();
     if (!text || isStreaming) return;
 
     const nextMessages: DisplayMessage[] = [...messages, { role: "user", content: text }];
@@ -193,6 +215,11 @@ export default function ChatView({
     }
   }
 
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await sendPrompt();
+  }
+
   const current = conversations.find((c) => c.id === conversationId);
 
   async function saveTitle(e: React.FormEvent) {
@@ -274,30 +301,236 @@ export default function ChatView({
               {manageError}
             </p>
           ) : null}
-          {chatModel ? (
-            <p>
-              Answers come from <strong>{chatModel.provider}</strong> ({chatModel.model})
-              {chatModel.isMock ? (
-                <>
-                  {" "}
-                  — <strong>a mock</strong>: its replies are canned text for testing, not a model&apos;s
-                </>
-              ) : null}
-              .
-            </p>
+          {chatModel && !chatModel.isMock && !chatModel.isLocal ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+              <span
+                style={{
+                  background: "#059669",
+                  color: "#ffffff",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                REAL MODEL
+              </span>
+              <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                Connected to genuine hosted provider: <strong>{chatModel.provider}</strong> ({chatModel.model})
+              </span>
+            </div>
+          ) : chatModel && !chatModel.isMock && chatModel.isLocal ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+              <span
+                style={{
+                  background: "#2563eb",
+                  color: "#ffffff",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                LOCAL MODEL
+              </span>
+              <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                Connected to local runtime: <strong>{chatModel.model}</strong> ({chatModel.provider})
+              </span>
+            </div>
+          ) : chatModel && chatModel.isMock ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0" }}>
+              <span
+                style={{
+                  background: "#d97706",
+                  color: "#ffffff",
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  padding: "2px 8px",
+                  borderRadius: "4px",
+                  letterSpacing: "0.05em",
+                }}
+              >
+                MOCK / SIMULATION
+              </span>
+              <span style={{ fontSize: "13px", color: "var(--muted)" }}>
+                Simulation mode only: replies are canned mock text for testing, not a real AI model.
+              </span>
+            </div>
           ) : chatModel === null ? (
-            <p className="error-text" role="status">
-              No language model is configured on this deployment, so chat will report that instead of answering. An
-              operator can start Ollama or set LLM_BASE_URL and LLM_MODEL — see docs/PROVIDERS.md.
-            </p>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 4,
+                margin: "8px 0",
+                padding: "8px 12px",
+                borderRadius: "6px",
+                background: "color-mix(in srgb, #dc2626 10%, transparent)",
+                border: "1px solid #dc2626",
+              }}
+              role="alert"
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span
+                  style={{
+                    background: "#dc2626",
+                    color: "#ffffff",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    padding: "2px 8px",
+                    borderRadius: "4px",
+                    letterSpacing: "0.05em",
+                  }}
+                >
+                  PROVIDER UNAVAILABLE
+                </span>
+                <span style={{ fontSize: "13px", fontWeight: 600, color: "#dc2626" }}>
+                  No language model is configured on this deployment.
+                </span>
+              </div>
+              <p style={{ margin: "4px 0 0", fontSize: "12px", color: "var(--fg)" }}>
+                To chat with a real AI, configure an API key (e.g. <code>GEMINI_API_KEY</code>, <code>OPENAI_API_KEY</code>, or <code>ANTHROPIC_API_KEY</code>) in <code>backend/.env</code> or start a local Ollama / OpenAI-compatible runtime on <code>127.0.0.1:11434</code>.
+              </p>
+            </div>
           ) : null}
         </header>
 
         <div className="messages">
-          {messages.length === 0 && <p className="empty-state">Say something to start the conversation.</p>}
+          {messages.length === 0 && (
+            <div style={{ textAlign: "center", padding: "32px 16px" }}>
+              <p className="empty-state" style={{ marginBottom: 16 }}>
+                Welcome to NirnayAI Chat. Ask a question or click a prompt to start:
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", maxWidth: 600, margin: "0 auto" }}>
+                {[
+                  "👋 Hello",
+                  "🧮 What is 2 + 2?",
+                  "💻 return 'hello world' in c++",
+                  "🐍 Write a Python function to reverse a string",
+                  "🇮🇳 Explain recursion in simple Hindi",
+                ].map((promptText) => (
+                  <button
+                    key={promptText}
+                    type="button"
+                    onClick={() => void sendPrompt(promptText)}
+                    disabled={isStreaming}
+                    style={{
+                      background: "var(--surface)",
+                      border: "1px solid var(--border)",
+                      padding: "8px 14px",
+                      borderRadius: "20px",
+                      fontSize: "13px",
+                      cursor: "pointer",
+                      color: "var(--fg)",
+                    }}
+                  >
+                    {promptText}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {messages.map((m, i) => (
-            <div key={i} className={`message ${m.isError ? "error" : m.role}`}>
-              {m.content || (isStreaming && i === messages.length - 1 ? "…" : "")}
+            <div key={i} style={{ display: "flex", flexDirection: "column" }}>
+              <div className={`message ${m.isError ? "error" : m.role}`}>
+                {m.content || (isStreaming && i === messages.length - 1 ? "…" : "")}
+              </div>
+              {m.role === "assistant" && m.content && !isStreaming && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: "12px",
+                    margin: "2px 0 12px 8px",
+                    color: "var(--muted)",
+                  }}
+                >
+                  <span style={{ fontSize: "11px", fontWeight: 600 }}>Satisfaction:</span>
+                  {satisfactionRatings[i]?.rating ? (
+                    <span style={{ color: "#059669", fontWeight: 600 }}>
+                      ✓ Rated: {satisfactionRatings[i].rating}
+                      {satisfactionRatings[i].tag ? ` (${satisfactionRatings[i].tag})` : ""}
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => rateMessage(i, "satisfied", "Satisfied")}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          borderRadius: "12px",
+                          padding: "2px 8px",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          color: "var(--fg)",
+                        }}
+                      >
+                        👍 Satisfied
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => rateMessage(i, "partially_satisfied", "Partially Satisfied")}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          borderRadius: "12px",
+                          padding: "2px 8px",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          color: "var(--fg)",
+                        }}
+                      >
+                        🤔 Partially Satisfied
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => rateMessage(i, "needs_improvement", "Needs Improvement")}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border)",
+                          borderRadius: "12px",
+                          padding: "2px 8px",
+                          cursor: "pointer",
+                          fontSize: "11px",
+                          color: "var(--fg)",
+                        }}
+                      >
+                        👎 Needs Improvement
+                      </button>
+                    </>
+                  )}
+                  {satisfactionRatings[i] && satisfactionRatings[i].rating !== "Satisfied" && !satisfactionRatings[i].tag && (
+                    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginLeft: 4 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentRating = satisfactionRatings[i]?.rating === "Needs Improvement" ? "needs_improvement" : "partially_satisfied";
+                          rateMessage(i, currentRating, satisfactionRatings[i]?.rating || "Needs Improvement", "Missed constraint");
+                          void sendPrompt("Please refine the previous response: ensure all negative and explicit constraints are strictly respected.");
+                        }}
+                        style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "1px 6px", fontSize: "10px", cursor: "pointer", color: "var(--fg)" }}
+                      >
+                        🎯 Refine Constraints
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const currentRating = satisfactionRatings[i]?.rating === "Needs Improvement" ? "needs_improvement" : "partially_satisfied";
+                          rateMessage(i, currentRating, satisfactionRatings[i]?.rating || "Needs Improvement", "Simpler explanation");
+                          void sendPrompt("Please refine the previous response: explain in simpler terms with a clear step-by-step example.");
+                        }}
+                        style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px", padding: "1px 6px", fontSize: "10px", cursor: "pointer", color: "var(--fg)" }}
+                      >
+                        📖 Simpler Terms
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -306,8 +539,8 @@ export default function ChatView({
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Say something…"
-            disabled={isStreaming}
+            placeholder={chatModel === null ? "No language model configured (see instructions above)" : "Say something…"}
+            disabled={isStreaming || chatModel === null}
           />
           {isStreaming ? (
             // The AbortController existed and nothing could reach it, so a long or wrong answer
@@ -317,7 +550,7 @@ export default function ChatView({
               Stop
             </button>
           ) : (
-            <button type="submit" disabled={!input.trim()}>
+            <button type="submit" disabled={!input.trim() || chatModel === null}>
               Send
             </button>
           )}

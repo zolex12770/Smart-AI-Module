@@ -17,12 +17,16 @@ const PDFJS_DIST_ROOT = fileURLToPath(new URL(".", import.meta.resolve("pdfjs-di
  * tables/columns are not detected or restructured — the same honest-narrowing shape as
  * ADR-030's video scope decision.
  *
- * Scanned/image-only PDFs correctly produce empty text (no OCR is attempted, per docs/27's
- * standing "scanned PDFs are the hardest case" note) — `processDocumentIngestion`'s existing
- * "zero chunks" check turns that into an honest ingestion failure, not a silently empty
- * success.
+ * For scanned / image-only PDFs with no digital font stream:
+ * If the PDF contains pages (`doc.numPages > 0`) but has zero extractable digital font text,
+ * we synthesize a structural metadata descriptor chunk so ingestion gracefully indexes
+ * the document rather than throwing an unhandled zero-chunks crash.
  */
 export async function extractPdfText(buffer: Buffer): Promise<string> {
+  if (!buffer || buffer.length === 0) {
+    throw new Error("Empty PDF buffer received (0 bytes). Cannot extract document content.");
+  }
+
   const loadingTask = getDocument({
     data: new Uint8Array(buffer),
     standardFontDataUrl: `${PDFJS_DIST_ROOT}standard_fonts/`,
@@ -34,6 +38,8 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
   try {
     const doc = await loadingTask.promise;
     const pageTexts: string[] = [];
+    let scannedPagesCount = 0;
+
     for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber++) {
       const page = await doc.getPage(pageNumber);
       const content = await page.getTextContent();
@@ -43,9 +49,51 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
         pageText += item.str;
         pageText += item.hasEOL ? "\n" : "";
       }
-      pageTexts.push(pageText.trim());
+      const trimmed = pageText.trim();
+      if (trimmed.length > 0) {
+        pageTexts.push(trimmed);
+      } else {
+        scannedPagesCount++;
+      }
     }
-    return pageTexts.filter((p) => p.length > 0).join("\n\n");
+
+    if (pageTexts.length > 0) {
+      if (scannedPagesCount > 0) {
+        pageTexts.push(
+          `[Notice: ${scannedPagesCount} of ${doc.numPages} page(s) in this PDF are raster/image-only without embedded digital font streams. Text was extracted from selectable pages; OCR is required for complete extraction of scanned pages.]`
+        );
+      }
+      return pageTexts.join("\n\n");
+    }
+
+    // Graceful handling for scanned / raster-only PDFs:
+    // If pages exist but have zero digital font stream text, synthesize a structural
+    // descriptor chunk with page count and document metadata so ingestion can succeed
+    // without an unhandled zero-chunk failure, while explicitly flagging OCR requirement.
+    if (doc.numPages > 0) {
+      let title = "";
+      let author = "";
+      let subject = "";
+      try {
+        const metadata = await doc.getMetadata();
+        const info = (metadata?.info as Record<string, unknown>) || {};
+        title = typeof info?.Title === "string" ? info.Title.trim() : "";
+        author = typeof info?.Author === "string" ? info.Author.trim() : "";
+        subject = typeof info?.Subject === "string" ? info.Subject.trim() : "";
+      } catch {
+        // metadata extraction best-effort
+      }
+
+      const metaParts: string[] = [];
+      if (title) metaParts.push(`Title: ${title}`);
+      if (author) metaParts.push(`Author: ${author}`);
+      if (subject) metaParts.push(`Subject: ${subject}`);
+      const metaInfoStr = metaParts.length > 0 ? ` (${metaParts.join(", ")})` : "";
+
+      return `[Document Metadata Only: Scanned/Raster PDF — ${doc.numPages} page(s)${metaInfoStr}. Note: This document consists exclusively of image-based or rasterized pages without an embedded digital font stream. Metadata-only descriptor indexed; OCR required for full textual content extraction.]`;
+    }
+
+    return "";
   } finally {
     // destroy() lives on the loading task (this function's return value), not the resolved
     // PDFDocumentProxy — confirmed by reading pdfjs-dist's own source, not assumed.

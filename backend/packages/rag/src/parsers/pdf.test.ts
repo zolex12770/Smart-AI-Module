@@ -68,7 +68,31 @@ describe("extractPdfText (real pdfjs-dist parsing)", () => {
     expect(text).toBe("Page one content\n\nPage two content");
   });
 
-  it("throws a real, catchable error for a non-PDF buffer", async () => {
+  it("handles scanned/image-only PDF with zero text by returning structural descriptor", async () => {
+    const scannedPdf = buildMinimalPdf([[]]);
+
+    const text = await extractPdfText(scannedPdf);
+
+    expect(text).toContain("[Document Metadata Only: Scanned/Raster PDF — 1 page(s)");
+    expect(text).toContain("image-based or rasterized pages");
+    expect(text).toContain("OCR required for full textual content extraction");
+  });
+
+  it("handles mixed text and scanned pages by extracting selectable text and noting OCR-required pages", async () => {
+    const mixedPdf = buildMinimalPdf([["Selectable digital text on page 1"], []]);
+
+    const text = await extractPdfText(mixedPdf);
+
+    expect(text).toContain("Selectable digital text on page 1");
+    expect(text).toContain("[Notice: 1 of 2 page(s) in this PDF are raster/image-only");
+    expect(text).toContain("OCR is required for complete extraction of scanned pages");
+  });
+
+  it("throws a descriptive error when an empty PDF buffer (0 bytes) is provided", async () => {
+    await expect(extractPdfText(Buffer.alloc(0))).rejects.toThrow("Empty PDF buffer received");
+  });
+
+  it("throws a real, catchable error for a non-PDF or corrupt buffer", async () => {
     await expect(extractPdfText(Buffer.from("this is not a pdf file"))).rejects.toThrow();
   });
 });

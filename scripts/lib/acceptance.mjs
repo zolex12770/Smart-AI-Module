@@ -231,5 +231,5 @@ export async function requireRunningApi() {
 /** What the platform says it is running, so a report can name the provider that answered. */
 export async function providers(client) {
   const res = await client.call("GET", "/api/v1/providers");
-  return res.status === 200 ? res.body : null;
+  return res.status === 200 ? res.body?.providers ?? res.body : null;
 }

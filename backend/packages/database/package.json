@@ -24,7 +24,7 @@
     "@electric-sql/pglite-pgvector": "^0.0.9",
     "drizzle-orm": "^0.45.2",
     "pg": "^8.23.0",
-    "uuid": "^11.0.4"
+    "uuid": "^14.0.3"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",

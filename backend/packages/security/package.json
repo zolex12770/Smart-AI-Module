@@ -21,7 +21,7 @@
     "@ai-platform/database": "*",
     "@ai-platform/shared": "*",
     "drizzle-orm": "^0.45.2",
-    "uuid": "^11.0.4"
+    "uuid": "^14.0.3"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

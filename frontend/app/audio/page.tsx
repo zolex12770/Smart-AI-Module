@@ -72,6 +72,63 @@ export default function AudioPage() {
         </div>
       </div>
 
+      {/* Honest Capability & Architecture Disclosure */}
+      <div
+        style={{
+          padding: "10px 14px",
+          borderRadius: "6px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          marginBottom: 16,
+          fontSize: "12px",
+          lineHeight: 1.6,
+          color: "var(--muted)",
+        }}
+      >
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          <span>
+            🗣️ <strong>Synthesizer Engine:</strong> Windows SAPI 5.4 / Native Local OS Speech (Offline synthesis)
+          </span>
+          <span>
+            🎙️ <strong>Processing Mode:</strong> Local Deterministic Audio Subsystem (Zero cloud latency or API cost)
+          </span>
+          <span>
+            📦 <strong>Audio Format:</strong> 16-bit PCM Linear RIFF WAV Container
+          </span>
+          <span>
+            ℹ️ <strong>Pacing & Inflection:</strong> Pacing-adjusted for English technical narration; vernacular tokens mapped phonetically
+          </span>
+        </div>
+      </div>
+
+      {/* Quick Voice Presets */}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => setText("Hello from NirnayAI Windows SAPI speech synthesis.")}
+        >
+          🗣️ Sample: NirnayAI Introduction
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => setText("Universal AI Agent autonomous platform is online and operational.")}
+        >
+          🚀 Sample: System Status
+        </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          style={{ fontSize: "12px", padding: "4px 10px" }}
+          onClick={() => setText("Speech synthesis completed successfully on Windows with audio playback.")}
+        >
+          🔊 Sample: Speech Test
+        </button>
+      </div>
+
       <form className="card" onSubmit={handleSubmit}>
         <label>
           Text

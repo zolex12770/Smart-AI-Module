@@ -93,6 +93,52 @@ export default function ImagesPage() {
         </div>
       </div>
 
+      {imageProvider?.available && !imageProvider.isMock && (
+        <div
+          style={{
+            padding: "10px 14px",
+            borderRadius: "6px",
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            marginBottom: 16,
+            fontSize: "12px",
+            lineHeight: 1.6,
+            color: "var(--muted)",
+          }}
+        >
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+            <span>
+              ⚡ <strong>Inference Host:</strong> Remote Cloud Diffusion (Pollinations FLUX.1 on dedicated GPU clusters; not local integrated graphics)
+            </span>
+            <span>
+              🎨 <strong>Synthesis Mode:</strong> Text-to-Image Diffusion Latents
+            </span>
+            <span>
+              🌸 <strong>Watermark Disclosure:</strong> Free-tier output carries upstream <code>pollinations.ai</code> watermark
+            </span>
+          </div>
+        </div>
+      )}
+
+            {/* Provider Configuration Notice */}
+      {unavailable && (
+        <div
+          style={{
+            padding: "12px 16px",
+            borderRadius: "6px",
+            background: "color-mix(in srgb, #2563eb 8%, transparent)",
+            border: "1px solid #2563eb",
+            marginBottom: 16,
+            fontSize: "13px",
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>ℹ️ Image Generation Provider Status:</strong> Image synthesis is not configured on this deployment.
+          To activate real local diffusion, configure <code>IMAGE_SD_CLI_PATH</code> or <code>IMAGE_BASE_URL</code> (docs/MEDIA.md).
+          The application safely blocks execution when no model is attached to prevent silent mock generation.
+        </div>
+      )}
+
       <form className="card" onSubmit={handleSubmit}>
         <div className="form-row">
           <label style={{ flex: 1, minWidth: 240 }}>
@@ -112,6 +158,25 @@ export default function ImagesPage() {
           <button className="btn" type="submit" disabled={submitting || !prompt.trim() || unavailable}>
             {submitting ? "Submitting…" : "Generate"}
           </button>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <span style={{ fontSize: "12px", color: "var(--muted)" }}>Quick Presets:</span>
+          {[
+            { label: "🌅 Golden Hour", text: "a lighthouse on a rocky coast during golden hour sunset" },
+            { label: "🌾 Indian Village", text: "Ek gaon ki realistic photo jisme kisan khet me hai, natural daylight" },
+            { label: "🦋 Blue Butterfly", text: "a vibrant blue butterfly perched on a yellow flower, macro photography" },
+            { label: "🏙️ Cyberpunk City", text: "futuristic cyberpunk city with flying vehicles at night, neon lights" },
+          ].map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className="btn btn-secondary"
+              style={{ fontSize: "11px", padding: "3px 8px" }}
+              onClick={() => setPrompt(preset.text)}
+            >
+              {preset.label}
+            </button>
+          ))}
         </div>
       </form>
 
@@ -136,9 +201,22 @@ export default function ImagesPage() {
             </p>
             <StatusBadge status={g.status} />
             {g.status === "succeeded" && g.resultAssetId ? (
-              <a className="btn" href={assetUrl(g.resultAssetId)} download style={{ marginLeft: 8 }}>
-                Download
-              </a>
+              <>
+                <a className="btn" href={assetUrl(g.resultAssetId)} download style={{ marginLeft: 8 }}>
+                  Download
+                </a>
+                <button
+                  className="btn btn-secondary"
+                  type="button"
+                  style={{ marginLeft: 8 }}
+                  onClick={() => {
+                    setPrompt(`Same image as "${g.prompt.slice(0, 30)}...", but `);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                >
+                  Refine
+                </button>
+              </>
             ) : null}
             {(g.status === "pending" || g.status === "processing") && (
               <button
