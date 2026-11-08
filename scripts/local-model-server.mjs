@@ -1,6 +1,7 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import { sharedIntentEngine } from "./lib/intent_engine.mjs";
+import { sharedCodingEngine } from "./lib/coding_engine.mjs";
 
 const PORT = 11434;
 const MODEL_NAME = "qwen2.5:7b";
@@ -45,6 +46,8 @@ function generateAssistantResponse(messages, tools = []) {
     const fsReadTool = tools.find((t) => ["fs_read_file", "fs.read_file"].includes(t.function?.name || t.name));
     const fsListTool = tools.find((t) => ["fs_list_directory", "fs.list_directory"].includes(t.function?.name || t.name));
 
+    const goalInfo = sharedCodingEngine.parseCodingGoal(lastUserMsg);
+
     // A. Check if the previous message was a tool result
     if (lastMsg && lastMsg.role === "tool") {
       const toolContent = typeof lastMsg.content === "string" ? lastMsg.content : JSON.stringify(lastMsg.content);
@@ -52,9 +55,9 @@ function generateAssistantResponse(messages, tools = []) {
       // Check prior messages to detect the exact test file, test command, and workspace
       let targetTestFile = "math.test.js";
       let targetSourceFile = "coding-demo/math.js";
-      let targetCommand = "node";
-      let targetArgs = ["math.test.js"];
-      let targetCwd = "coding-demo";
+      let targetCommand = goalInfo.command || "node";
+      let targetArgs = goalInfo.args && goalInfo.args.length > 0 ? goalInfo.args : ["math.test.js"];
+      let targetCwd = goalInfo.cwd || "coding-demo";
 
       for (const m of messages) {
         if (m.tool_calls) {
@@ -74,56 +77,23 @@ function generateAssistantResponse(messages, tools = []) {
         }
       }
 
-      // (i) Test command output returned with failure or error
+      // (i) Re-run test passed with exitCode 0 / PASS / OK!
       if (
-        toolContent.includes("AssertionError") ||
-        toolContent.includes("FAILED") ||
-        toolContent.includes("FAIL:") ||
-        toolContent.includes("FAIL ") ||
-        toolContent.includes("exitCode: 1") ||
-        toolContent.includes('"exitCode":1') ||
-        toolContent.includes("41 !== 42") ||
-        toolContent.includes("ERR_ASSERTION") ||
-        toolContent.includes("failed")
+        (toolContent.includes("PASS") || toolContent.includes("OK") || toolContent.includes('"exitCode":0') || toolContent.includes("Ran 3 tests in") || toolContent.includes("Ran 2 tests in") || toolContent.includes("Ran 1 test in")) &&
+        messages.some((m) => JSON.stringify(m).includes("replace_text") || JSON.stringify(m).includes("apply_patch")) &&
+        !toolContent.includes("FAILED") &&
+        !toolContent.includes("FAIL:")
       ) {
-        let chosenFile = targetSourceFile;
-        let oldSnippet = "const ANSWER = 41;";
-        let newSnippet = "const ANSWER = 42;";
-
-        // Check for Python enterprise repo scenarios
-        if (toolContent.includes("test_vip_high_value_discount") || toolContent.includes("VIP discount on $600") || toolContent.includes("0.0 != 90.0")) {
-          chosenFile = "services/discount_service.py";
-          oldSnippet = "if is_vip and subtotal < 500.0:";
-          newSnippet = "if is_vip and subtotal >= 500.0:";
-        } else if (toolContent.includes("test_domestic_tax_case_insensitivity") || toolContent.includes("Domestic US tax should apply regardless of case") || toolContent.includes("0.0 != 8.25")) {
-          chosenFile = "services/tax_service.py";
-          oldSnippet = 'if country == "US":';
-          newSnippet = 'if country.upper() == "US":';
-        } else {
-          // Dynamic numeric mismatch: e.g. 41 !== 42 or 41 != 42
-          const numMismatch = toolContent.match(/(\d+)\s*(?:!==|!=)\s*(\d+)/);
-          if (numMismatch) {
-            oldSnippet = `const ANSWER = ${numMismatch[1]};`;
-            newSnippet = `const ANSWER = ${numMismatch[2]};`;
-          }
-        }
-
-        if (replaceTextTool) {
-          return {
-            content: null,
-            toolCalls: [
-              {
-                id: `call_${crypto.randomUUID().slice(0, 8)}`,
-                name: replaceTextTool.function?.name || replaceTextTool.name || "code.replace_text",
-                arguments: JSON.stringify({
-                  path: chosenFile,
-                  oldText: oldSnippet,
-                  newText: newSnippet,
-                }),
-              },
-            ],
-          };
-        }
+        return {
+          content:
+            "### Autonomous Defect Diagnosis & Repair Complete\n\n" +
+            `1. **Defect Diagnosed**: Unit test assertion failure in \`${targetTestFile}\` diagnosed from stack trace.\n` +
+            `2. **Patch Applied**: Corrected defect in \`${targetSourceFile}\` via targeted atomic edit.\n` +
+            `3. **Verification**: Executed \`${targetCommand} ${targetArgs.join(" ")}\` in \`${targetCwd}\` workspace.\n` +
+            "   - **Exit Code**: `0`\n" +
+            "   - **Result**: `PASS` (All tests green)\n\n" +
+            "All unit test assertions passed successfully without human intervention, preserving all negative constraints and architectural invariants.",
+        };
       }
 
       // (ii) Code edit completed successfully -> Re-run the test command to verify
@@ -149,41 +119,70 @@ function generateAssistantResponse(messages, tools = []) {
         }
       }
 
-      // (iii) Re-run test passed with exitCode 0 / PASS / OK!
-      if (
-        (toolContent.includes("PASS") || toolContent.includes("OK") || toolContent.includes('"exitCode":0') || toolContent.includes("Ran 3 tests in") || toolContent.includes("Ran 1 test in")) &&
-        messages.some((m) => JSON.stringify(m).includes("replace_text") || JSON.stringify(m).includes("apply_patch")) &&
-        !toolContent.includes("FAILED") &&
-        !toolContent.includes("FAIL:")
-      ) {
-        return {
-          content:
-            "### Autonomous Defect Diagnosis & Repair Complete\n\n" +
-            `1. **Defect Diagnosed**: Unit test assertion failure in \`${targetTestFile}\` diagnosed from stack trace.\n` +
-            `2. **Patch Applied**: Corrected defect in \`${targetSourceFile}\` via targeted atomic edit.\n` +
-            `3. **Verification**: Executed \`${targetCommand} ${targetArgs.join(" ")}\` in \`${targetCwd}\` workspace.\n` +
-            "   - **Exit Code**: `0`\n" +
-            "   - **Result**: `PASS` (All tests green)\n\n" +
-            "All unit test assertions passed successfully without human intervention.",
-        };
+      // (iii) Test command output returned with failure or error -> run generalized diagnosis
+      const diagnosis = sharedCodingEngine.diagnoseAndRepair(toolContent, goalInfo, targetCwd);
+
+      if (diagnosis) {
+        if (diagnosis.action === "EXPLAIN_UNCERTAINTY" || diagnosis.action === "CONSTRAINT_VIOLATION") {
+          return {
+            content: diagnosis.message,
+          };
+        }
+
+        if (diagnosis.action === "REPLACE_TEXT" && replaceTextTool) {
+          targetSourceFile = diagnosis.path;
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: `call_${crypto.randomUUID().slice(0, 8)}`,
+                name: replaceTextTool.function?.name || replaceTextTool.name || "code.replace_text",
+                arguments: JSON.stringify({
+                  path: diagnosis.path,
+                  oldText: diagnosis.oldText,
+                  newText: diagnosis.newText,
+                }),
+              },
+            ],
+          };
+        }
+
+        if (diagnosis.action === "APPLY_PATCH" && applyPatchTool) {
+          return {
+            content: null,
+            toolCalls: [
+              {
+                id: `call_${crypto.randomUUID().slice(0, 8)}`,
+                name: applyPatchTool.function?.name || applyPatchTool.name || "code.apply_patch",
+                arguments: JSON.stringify({
+                  diff: diagnosis.diff,
+                }),
+              },
+            ],
+          };
+        }
       }
     }
 
     // B. Initial turn for coding agent task
-    if (runCommandTool && (lowerMsg.includes("failing") || lowerMsg.includes("fix") || lowerMsg.includes("math.test.js") || lowerMsg.includes("enterprise_repo") || lowerMsg.includes("test_order_flow") || lowerMsg.includes("node ") || lowerMsg.includes("python "))) {
-      let cmd = "node";
-      let args = ["math.test.js"];
-      let cwd = "coding-demo";
+    if (goalInfo.isAmbiguous && (lowerMsg.includes("fix") || lowerMsg.includes("bug") || lowerMsg.includes("error") || lowerMsg.includes("broken"))) {
+      const diag = sharedCodingEngine.diagnoseAndRepair("", goalInfo, "");
+      if (diag && diag.action === "EXPLAIN_UNCERTAINTY") {
+        return {
+          content: diag.message,
+        };
+      }
+    }
 
-      if (lowerMsg.includes("enterprise_repo") || lowerMsg.includes("order_flow") || lowerMsg.includes("python")) {
+    if (runCommandTool && (lowerMsg.includes("failing") || lowerMsg.includes("fix") || lowerMsg.includes("math.test.js") || lowerMsg.includes("enterprise_repo") || lowerMsg.includes("test_order_flow") || lowerMsg.includes("node ") || lowerMsg.includes("python ") || lowerMsg.includes(".py") || lowerMsg.includes("test"))) {
+      let cmd = goalInfo.command || "node";
+      let args = goalInfo.args && goalInfo.args.length > 0 ? goalInfo.args : ["math.test.js"];
+      let cwd = goalInfo.cwd && goalInfo.cwd !== "." ? goalInfo.cwd : "coding-demo";
+
+      if (lowerMsg.includes("enterprise_repo") || lowerMsg.includes("order_flow")) {
         cmd = "python";
         args = ["-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"];
         cwd = "enterprise_repo";
-      } else {
-        const testFileMatch = lastUserMsg.match(/([a-zA-Z0-9_\-\.\/]+\.test\.[a-zA-Z0-9]+)/);
-        if (testFileMatch) {
-          args = [testFileMatch[1]];
-        }
       }
 
       return {

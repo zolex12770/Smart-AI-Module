@@ -105,8 +105,9 @@ export default function CodingAgentPage() {
               </p>
             </div>
             <span
+              title="Application-level directory path containment via resolveSandboxedPath. Operating on Windows AppData sandbox workspace without OS/hypervisor jail."
               style={{
-                background: "#2563eb",
+                background: "#1e40af",
                 color: "#ffffff",
                 padding: "4px 10px",
                 borderRadius: "4px",
@@ -115,7 +116,7 @@ export default function CodingAgentPage() {
                 letterSpacing: "0.05em",
               }}
             >
-              SANDBOX JAIL ACTIVE
+              APPLICATION PATH CONTAINMENT (WINDOWS APPDATA ISOLATION)
             </span>
           </div>
         </header>

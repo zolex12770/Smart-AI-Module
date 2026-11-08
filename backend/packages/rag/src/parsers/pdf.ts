@@ -74,7 +74,7 @@ export async function extractPdfText(buffer: Buffer): Promise<string> {
       if (subject) metaParts.push(`Subject: ${subject}`);
       const metaInfoStr = metaParts.length > 0 ? ` (${metaParts.join(", ")})` : "";
 
-      return `[Document: Scanned/Raster PDF — ${doc.numPages} page(s)${metaInfoStr}. Note: This document consists of image-based or rasterized pages without an embedded digital font stream. Indexed via page structure and document metadata.]`;
+      return `[Document: Scanned/Raster PDF — ${doc.numPages} page(s)${metaInfoStr}. Note: This document consists of image-based or rasterized pages without an embedded digital font stream. Metadata-only descriptor indexed; OCR required for full textual extraction.]`;
     }
 
     return "";
