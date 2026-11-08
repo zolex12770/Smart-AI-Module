@@ -45,14 +45,25 @@ async function main() {
     async function sendMessage(turnNum, userText, expectedContentFragment) {
       console.log(`\n--- [Turn ${turnNum}] User Prompt: "${userText}" ---`);
       
-      // Wait for composer to be ready (send button not disabled)
+      // Wait for composer to be ready (input visible and enabled)
       const composerInput = page.locator('form.composer input');
       await composerInput.waitFor({ state: "visible", timeout: 15000 });
+      await page.waitForFunction(() => {
+        const inp = document.querySelector('form.composer input');
+        return inp && !inp.disabled;
+      }, { timeout: 15000 });
+
       await composerInput.fill(userText);
+      await page.waitForTimeout(300);
+
+      // Wait for send button to be enabled
+      await page.waitForFunction(() => {
+        const btn = document.querySelector('form.composer button[type="submit"]');
+        return btn && !btn.disabled;
+      }, { timeout: 15000 });
 
       // Click send button
       const sendBtn = page.locator('form.composer button[type="submit"]');
-      await sendBtn.waitFor({ state: "visible", timeout: 15000 });
       await sendBtn.click();
       console.log(`✓ Turn ${turnNum} submitted.`);
 

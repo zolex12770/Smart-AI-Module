@@ -484,3 +484,30 @@ Autonomous benchmark implemented in [`scripts/benchmark-requirement-satisfaction
   - `node scripts/check-boundary.mjs`: 7/7 architectural boundary checks passing.
   - Verified screenshot: [`browser_chat_multiturn_delta_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_chat_multiturn_delta_verified.png).
 - **Status:** **M-INTENT-03 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.
+
+### 12.15 Milestone M-CHAT-01: Dynamic Conversational Reasoning & Personalization Memory
+- **Dynamic Personal Identity & Context Memory:**
+  - Automated extraction of user profile attributes across English, Hindi, and Hinglish turns (*"My name is Rajesh and I am a software engineer from Pune"*, *"Mera naam Vikram hai..."*).
+  - Stateful memory retention across multi-turn dialogs: accurately recalls user name, city, and professional role on demand across conversational turns.
+- **Bilingual & Vernacular Technical Reasoning:**
+  - Delivers intuitive, fluent Hindi and Hinglish technical explanations with real-world analogies:
+    - Recursion explained via dual opposing mirrors and Russian nesting dolls with base case guarantees.
+    - API architecture explained via client-waiter-kitchen HTTP lifecycle.
+    - Git & GitHub workflow explained with version snapshot analogies.
+- **Deep Software Engineering & Algorithm Explanations:**
+  - Algorithms provide concrete code implementations, loop invariants, edge case handling, and KaTeX mathematical complexity:
+    - Binary Search: $O(\log n)$ time, $O(1)$ space, TypeScript implementation.
+    - LRU Cache: $O(1)$ Hash Map + Doubly-Linked List architecture.
+    - Networking: TCP vs UDP OSI Layer 4 comparison, 3-way handshake, packet loss, congestion control.
+- **Honest Model & Provider Disclosures:**
+  - Real-time provider badges rendered in header: `REAL MODEL` (genuine hosted/local provider), `MOCK / SIMULATION` (canned mock text alert), or `PROVIDER UNAVAILABLE` (missing model alert with key setup instructions).
+- **Empirical Unit, Component & Browser Verification:**
+  - `frontend/app/chat/ChatView.test.tsx`: 13/13 Vitest component tests passing.
+  - `scripts/verify-browser-chat.mjs`: Complete 4-turn browser session verified in live DOM at `http://localhost:3000/chat`:
+    - Turn 1: Introduction and profile registration (Rajesh from Pune).
+    - Turn 2: Bilingual Hindi recursion explanation.
+    - Turn 3: Binary search with complete TypeScript code and $O(\log n)$ complexity.
+    - Turn 4: Context memory recall across 4 turns (recalled Rajesh and Pune).
+  - `node scripts/check-boundary.mjs`: 7/7 architectural boundary checks passing.
+  - Verified screenshot: [`browser_chat_multi_turn_verified.png`](file:///C:/Users/SAURABH%20KUMAR/.gemini/antigravity/brain/ab308118-6248-4511-b0d0-542a264329d5/browser_chat_multi_turn_verified.png).
+- **Status:** **M-CHAT-01 ARTIFACT & BROWSER VERIFIED (100% COMPLETE)**.
